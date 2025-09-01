@@ -1,4 +1,3 @@
-
 #ifndef SYS_DEF
 #define SYS_DEF
 
@@ -73,5 +72,12 @@
 #define COMP_EQUAL 14
 #define INVALID 15
 #define HALT 16
+#define BWISE_OR 17
+#define BWISE_AND 18
+#define BWISE_NOT 19
+#define BWISE_XOR 20
+#define LSHIFT_1  21
+#define RSHIFT_WORD 22  // Right shift by 31 bits - can be modified based on word size
+
 
 #endif
