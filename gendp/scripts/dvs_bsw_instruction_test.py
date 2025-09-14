@@ -1,4 +1,4 @@
-def compute_instruction(op_0, op_1, op_2, in_addr_0, in_addr_1, in_addr_2, in_addr_3, in_addr_4, in_addr_5, out_addr):
+def bswdev_comp():
 
     f.write(compute_instruction(sub, beq, mv, i, qlen, 0, 0, 0, 0, head))        # head = max(0, i-qlen)
     # find start of the band (head)
@@ -94,3 +94,99 @@ def compute_instruction(op_0, op_1, op_2, in_addr_0, in_addr_1, in_addr_2, in_ad
     f.write(compute_instruction(halt, halt, halt, 0, 0, 0, 0, 0, 0, 0))               # halt
     f.write(compute_instruction(halt, halt, halt, 0, 0, 0, 0, 0, 0, 0))               # halt
 
+
+    f.write(compute_instruction(set_PC, halt, beq, max_score_pre, max_score, one, 0, 0, 0, cmp))     # cmp = max_score_pre > max_score ? 1 : 0
+    # finds the best global score using multiple merged bands
+    f.write(compute_instruction(halt, halt, halt, 0, 0, 0, 0, 0, 0, 0))                             # halt
+    f.write(compute_instruction(set_PC, halt, beq, cmp, 0, max_score_pre, max_score, 0, 0, max_score))    # max_score = cmp > 0 ? max_score_pre : max_score
+    # ensures final score is the best
+    f.write(compute_instruction(set_PC, halt, beq, gscore_pre, gscore, max_ie_pre, max_ie, 0, 0, max_ie)) # max_ie = gscore_pre > gscore ? max_ie_pre : max_ie
+    # tracks index for best alignment across bands
+    f.write(compute_instruction(set_PC, halt, beq, gscore_pre, gscore, gscore_pre, gscore, 0, 0, gscore)) # gscore = gscore_pre > gscore ? gscore_pre : gscore
+    # best global score
+    f.write(compute_instruction(set_PC, halt, beq, cmp, 0, qle_pre, qle, 0, 0, qle))                     # qle = cmp > 0 ? qle_pre : qle
+    # tracks the query end index
+    f.write(compute_instruction(set_PC, halt, beq, cmp, 0, tle_pre, tle, 0, 0, tle))                     # tle = cmp > 0 ? tle_pre : tle
+    # tracks target end index
+    f.write(compute_instruction(set_PC, halt, beq, cmp, 0, max_off_pre, max_off, 0, 0, max_off))         # max_off = cmp > 0 ? max_off_pre : max_off
+    # max offset for best alignment
+    f.write(compute_instruction(halt, halt, halt, 0, 0, 0, 0, 0, 0, 0))                                  # halt
+    f.write(compute_instruction(halt, halt, halt, 0, 0, 0, 0, 0, 0, 0))                                  # halt
+
+    f.write(compute_instruction(add, halt, beq, max_ie, one, 0, 0, 0, 0, max_ie))                        # max_ie += 1
+    f.write(compute_instruction(add, halt, beq, qle, one, 0, 0, 0, 0, qle))                              # qle += 1
+    f.write(compute_instruction(add, halt, beq, tle, one, 0, 0, 0, 0, tle))                              # tle += 1
+    # indexing changes for output
+    f.write(compute_instruction(halt, halt, halt, 0, 0, 0, 0, 0, 0, 0))                                  # halt
+    f.write(compute_instruction(halt, halt, halt, 0, 0, 0, 0, 0, 0, 0))                                  # halt
+    f.write(compute_instruction(halt, halt, halt, 0, 0, 0, 0, 0, 0, 0))                                  # halt
+
+
+def bsw_data():
+
+    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 4, 0, si))                                   # gr[1] = pe_group_size
+    # set amount of PEs in the group in the general register 1
+    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si))                                   # gr[2] = 0
+    # used as a counter 
+    f.write(data_movement_instruction(gr, in_buf, 0, 0, 3, 0, 0, 1, 0, 2, mv))                              # gr[3] = input[gr[2]++]
+    # read the first input parameter and increments gr2
+    f.write(data_movement_instruction(gr, in_buf, 0, 0, 4, 0, 0, 1, 0, 2, mv))                              # gr[4] = input[gr[2]++]
+    # loads next value from input buffer
+    f.write(data_movement_instruction(gr, in_buf, 0, 0, 5, 0, 0, 1, 0, 2, mv))                              # gr[5] = input[gr[2]++]
+    # loads next value from input buffer
+    f.write(data_movement_instruction(reg, reg, 0, 0, PE_INIT_CONSTANT_AND_INSTRUCTION, 0, 0, 0, 0, 0, set_PC)) # PE_PC = consts&instr
+    # sets PE program counter to initialization addresses
+    for i in range(8):
+        f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 2, mv))                     # out = input[gr[2]++]
+    # repeats 8 times, outputs values from the input buffer at gr2++ so if gr2 is 5, it outputs data at pos 5,6,7,8 etc.
+    for i in range(BSW_COMPUTE_INSTRUCTION_NUM):
+        f.write(data_movement_instruction(out_port, comp_ib, 0, 0, 0, 0, 0, 0, i, 0, mv))                    # out = instr[i]
+    # sends compute instruction from the buffer to output port. maybe transfers instructions to the PE?
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 1, 0, 2, 3, add))                                   # gr[8] = gr[2] + gr[3]  
+    # QUESTION HERE: WE CAN ADD CONTROL INFO TOGETHER?             
+    f.write(data_movement_instruction(0, 0, 0, 0, 9, 0, 1, 0, 8, 3, add))                                   # gr[9] = gr[8] + gr[3]              
+    f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 1, 0, 9, 4, add))                                  # gr[10] = gr[9] + gr[4]              
+    # f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, 3, 10, addi))                                # gr[10] = gr[10] + 3
+    f.write(data_movement_instruction(gr, 0, 0, 0, 11, 0, 0, 0, 0, 0, si))                                  # gr[11] = 0       
+    f.write(data_movement_instruction(fifo[0], in_buf, 0, 0, 0, 0, 0, 1, 0, 10, mv))                        # FIFO_H = input[gr[10]++]
+    f.write(data_movement_instruction(fifo[1], gr, 0, 0, 0, 0, 0, 0, 0, 0, mv))                             # FIFO_E = gr[0]
+    f.write(data_movement_instruction(0, 0, 0, 0, 11, 0, 0, 0, 1, 11, addi))                                # gr[11]++
+    f.write(data_movement_instruction(0, 0, 0, 0, -3, 0, 1, 0, 11, 4, bne))                                 # bne gr[11] gr[4] -3
+    # used as a loop, iterates until the counter in gr11 = gr4. want to keep processing the FIFO data
+
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 11, 0, 1, 0, 0, 1, add))                                  # gr[11] = gr[1]              
+    f.write(data_movement_instruction(0, 0, 0, 0, 3, 0, 1, 0, 3, 1, add))                                   # gr[3] = gr[3] + gr[1]
+    f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 0, 0, 3, 4, addi))                                  # gr[6] = gr[4] + 3
+    f.write(data_movement_instruction(gr, 0, 0, 0, 15, 0, 0, 0, 0, 0, si))                                  # gr[15] = 0       
+    f.write(data_movement_instruction(0, 0, 0, 0, 96, 0, 1, 0, 11, 3, bge))                                 # bge gr[11] gr[3] 96
+    # branch to instruction 96 if gr11 >= gr3. how does it go to 96? isnt that a reg/imm
+    f.write(data_movement_instruction(gr, 0, 0, 0, 12, 0, 0, 0, -3, 0, si))                                 # gr[12] = 0 - 3
+    f.write(data_movement_instruction(0, 0, 0, 0, 37, 0, 1, 0, 6, 11, bge))                                 # bge gr[6] gr[11] 37
+    # same here, how?
+    f.write(data_movement_instruction(0, 0, 0, 0, 12, 0, 1, 0, 11, 6, sub))                                 # gr[12] = gr[11] - gr[6]
+    f.write(data_movement_instruction(0, 0, 0, 0, 5, 0, 1, 0, 12, 4, bge))                                  # bge gr[12] gr[4] 5
+    f.write(data_movement_instruction(0, 0, 0, 0, 15, 0, 0, 0, 1, 15, addi))                                # gr[15]++
+    f.write(data_movement_instruction(out_port, fifo[0], 0, 0, 0, 0, 0, 0, 0, 0, mv))                       # out = FIFO_H
+    f.write(data_movement_instruction(out_port, fifo[1], 0, 0, 0, 0, 0, 0, 0, 0, mv))                       # out = FIFO_E
+    f.write(data_movement_instruction(0, 0, 0, 0, -3, 0, 1, 0, 12, 15, bne))                                # bne gr[12] gr[15] -3
+    f.write(data_movement_instruction(0, 0, 0, 0, 12, 0, 0, 0, -3, 12, addi))                               # gr[12] = gr[12] - 3
+
+    
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_GROUP, 0, 0, 0, 0, 0, set_PC))                         # PE_PC = pe_group
+    f.write(data_movement_instruction(0, 0, 0, 0, 14, 0, 0, 0, 0, 12, set_8))                               # gr[14] = set_8(gr[12])
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 14, 0, mv))                           # out = gr[14]
+    for i in range(3):
+    f.write(data_movement_instruction(0, 0, 0, 0, 11, 0, 0, 0, -1, 11, addi))                           # gr[11]--
+    f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 1, 0, 2, 11, mv))                   # out = input[gr[2](gr[11])]
+    f.write(data_movement_instruction(0, 0, 0, 0, 7, 0, 0, 0, 0, 11, set_8))                            # gr[7] = set_8(gr[11])
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                        # out = gr[7]
+    f.write(data_movement_instruction(0, 0, 0, 0, 12, 0, 0, 0, 1, 12, addi))                            # gr[12]++
+    f.write(data_movement_instruction(0, 0, 0, 0, 14, 0, 0, 0, 0, 12, set_8))                           # gr[14] = set_8(gr[12])
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 14, 0, mv))                       # out = gr[14]
+    f.write(data_movement_instruction(0, 0, 0, 0, 11, 0, 0, 0, -1, 11, addi))                               # gr[11]--
+    f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 1, 0, 2, 11, mv))                       # out = input[gr[2](gr[11])]
+    f.write(data_movement_instruction(0, 0, 0, 0, 7, 0, 0, 0, 0, 11, set_8))                                # gr[7] = set_8(gr[11])
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                            # out = gr[7]
+    f.write(data_movement_instruction(0, 0, 0, 0, 33, 0, 0, 0, 0, 0, beq))                                  # beq 0 0 33
