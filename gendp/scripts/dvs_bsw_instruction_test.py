@@ -160,7 +160,7 @@ def bsw_data():
     f.write(data_movement_instruction(0, 0, 0, 0, 3, 0, 1, 0, 3, 1, add))                                   # gr[3] = gr[3] + gr[1]
     f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 0, 0, 3, 4, addi))                                  # gr[6] = gr[4] + 3
     f.write(data_movement_instruction(gr, 0, 0, 0, 15, 0, 0, 0, 0, 0, si))                                  # gr[15] = 0       
-    f.write(data_movement_instruction(0, 0, 0, 0, 96, 0, 1, 0, 11, 3, bge))                                 # bge gr[11] gr[3] 96
+    f.write(data_movement_instruction(0, 0, 0, 0, 96, 0, 1, 0, 11, 3, bge))  # look through PE array files        # bge gr[11] gr[3] 96
     # branch to instruction 96 if gr11 >= gr3. how does it go to 96? isnt that a reg/imm
     f.write(data_movement_instruction(gr, 0, 0, 0, 12, 0, 0, 0, -3, 0, si))                                 # gr[12] = 0 - 3
     f.write(data_movement_instruction(0, 0, 0, 0, 37, 0, 1, 0, 6, 11, bge))                                 # bge gr[6] gr[11] 37
@@ -190,3 +190,8 @@ def bsw_data():
     f.write(data_movement_instruction(0, 0, 0, 0, 7, 0, 0, 0, 0, 11, set_8))                                # gr[7] = set_8(gr[11])
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                            # out = gr[7]
     f.write(data_movement_instruction(0, 0, 0, 0, 33, 0, 0, 0, 0, 0, beq))                                  # beq 0 0 33
+
+
+    #pe.cpp has info on halt/none 
+
+    
