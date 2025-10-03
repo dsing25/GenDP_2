@@ -75,26 +75,26 @@ def poa_compute():
     f = open("instructions/poa/compute_instruction.txt", "w")
     
     # 0 ~ 10
-    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 19))        # 0
-    f.write(compute_instruction(9, 15, 9, 18, 0, 0, 0, 0, 0, 23))
-    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 24))        # 1
-    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 22))
-    f.write(compute_instruction(9, 15, 9, 18, 0, 0, 0, 0, 0, 26))       # 2
-    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 27))
-    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 25))        # 3
-    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 28))
-    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 29))        # 4
-    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 30))
-    f.write(compute_instruction(14, 15, 9, 1, 0, 14, 13, 0, 0, 20))     # 5 FIFO / Prev PE upper gap_y
-    f.write(compute_instruction(0, 15, 9, 9, 15, 0, 0, 0, 0, 9))
-    f.write(compute_instruction(14, 15, 9, 1, 17, 0, 20, 0, 0, 20))     # 6 FIFO / Prev PE upper gap_y
-    f.write(compute_instruction(15, 15, 15, 0, 0, 0, 0, 0, 0, 0))
-    f.write(compute_instruction(1, 15, 9, 2, 20, 0, 0, 0, 0, 21))       # 7 FIFO / Prev PE upper score
-    f.write(compute_instruction(15, 15, 15, 0, 0, 0, 0, 0, 0, 0))
-    f.write(compute_instruction(13, 15, 9, 21, 18, 21, 18, 0, 0, 23))   # 8
-    f.write(compute_instruction(13, 15, 9, 21, 18, 15, 0, 0, 0, 24))
-    f.write(compute_instruction(13, 15, 9, 21, 18, 1, 0, 0, 0, 22))     # 9
-    f.write(compute_instruction(15, 15, 15, 0, 0, 0, 0, 0, 0, 0))
+    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 19))        # 0; reg[19] = reg[0]
+    f.write(compute_instruction(9, 15, 9, 18, 0, 0, 0, 0, 0, 23))         # reg[23] = reg[18]
+    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 24))        # 1; reg[24] = reg[0]
+    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 22))          # reg[22] = reg[0]
+    f.write(compute_instruction(9, 15, 9, 18, 0, 0, 0, 0, 0, 26))       # 2; reg[26] = reg[18]
+    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 27))          # reg[27] = reg[0]
+    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 25))        # 3; reg[25] = reg[0]
+    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 28))          # reg[28] = reg[0]
+    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 29))        # 4; reg[29] = reg[0]
+    f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 30))          # reg[30] = reg[0]
+    f.write(compute_instruction(14, 15, 9, 1, 0, 14, 13, 0, 0, 20))     # 5 FIFO / Prev PE upper gap_y; reg[20] = (reg[1] == reg[0]) ? reg[14] : reg[13]
+    f.write(compute_instruction(0, 15, 9, 9, 15, 0, 0, 0, 0, 9))          # reg[9] = reg[9] + reg[15]
+    f.write(compute_instruction(14, 15, 9, 1, 17, 0, 20, 0, 0, 20))     # 6 FIFO / Prev PE upper gap_y; reg[20] = (reg[1] == reg[17]) ? reg[0] : reg[20]
+    f.write(compute_instruction(15, 15, 15, 0, 0, 0, 0, 0, 0, 0))         # No-op
+    f.write(compute_instruction(1, 15, 9, 2, 20, 0, 0, 0, 0, 21))       # 7 FIFO / Prev PE upper score; reg[21] = reg[2] - reg[20]
+    f.write(compute_instruction(15, 15, 15, 0, 0, 0, 0, 0, 0, 0))         # No-op
+    f.write(compute_instruction(13, 15, 9, 21, 18, 21, 18, 0, 0, 23))   # 8; reg[23] = (reg[21] > reg[18]) ? reg[21] : reg[18]
+    f.write(compute_instruction(13, 15, 9, 21, 18, 15, 0, 0, 0, 24))      # reg[24] = (reg[21] > reg[18]) ? reg[15] : reg[0]
+    f.write(compute_instruction(13, 15, 9, 21, 18, 1, 0, 0, 0, 22))     # 9; reg[22] = (reg[21] > reg[18]) ? reg[1] : reg[0]
+    f.write(compute_instruction(15, 15, 15, 0, 0, 0, 0, 0, 0, 0))         # No-op
     
     # 10 ~ 18
     f.write(compute_instruction(0, 15, 9, 19, 15, 0, 0, 0, 0, 19))      # 10 SPM left gap_x
