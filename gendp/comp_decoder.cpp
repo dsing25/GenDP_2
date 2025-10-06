@@ -24,7 +24,9 @@ void comp_decoder::execute(long instruction, int* op, int* in_addr, int* out_add
         op[i] = (op_mask[i] & instruction) >> (7 * REGFILE_ADDR_WIDTH + (2 - i) * COMP_OPCODE_WIDTH);
     }
 
-    if (op[0] < HALT) (*PC)++;
+    // zkn I changed this from op[0] < HALT to op[0] != HALT. I think required cause we now have
+    // opcodes greater than HALT
+    if (op[0] != HALT) (*PC)++;
     else if (op[0] == HALT) (*PC) = (*PC);
     else {
         fprintf(stderr, "compute opcode %d error.\n", op[0]);
