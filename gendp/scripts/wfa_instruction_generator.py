@@ -326,6 +326,26 @@ def bsw_main_instruction():
 def bsw_compute():
     
     f = open("instructions/bsw/compute_instruction.txt", "w")
+    ##############################NEXT STEP#########################################################
+    #Register mapping
+    # |m_r0 |m_r1 |m_r2 | Score -4E Reg 123. cursor in gr0
+    # |-----|-----|-----| 
+    # |     |     |     | Score -3E
+    # |-----|-----|-----|
+    # |     |m_r3 |     | Score -2E cursor in gr1
+    # |-----|-----|-----|
+    # |i_r4 |     |d_r5 | Score -E cursorI in gr2, cursorD in gr3
+    # |-----|-----|-----|
+    # |     |COMP |     | Current Score, m/d/i cursors in gr4, gr5, gr6
+    # gr7 = Tilesize // Tilesize is the tile of the wf this pe processes.
+    # gr8 = blocksize // value of i when we switch blocks
+    # gr9 = i // the current iteration
+
+    # LOOP while (i < tilesize)
+
+
+    #END
+    #JMP END
 
     #NEXT
     #first pair is just data movement. Could be optimized out with unrolling
@@ -348,6 +368,31 @@ def bsw_compute():
 def pe_0_instruction():
     
     f = open("instructions/bsw/pe_0_instruction.txt", "w")
+
+
+    #BLOCK_LOOP
+    #load all the cursors
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 2, 0, 0, 1, 0, 0, mv)) # reg[2] =SPM[gr[0]++]
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 3, 0, 0, 1, 0, 1, mv)) # reg[3] =SPM[gr[1]++]
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 1, 0, 2, mv)) # reg[4] =SPM[gr[2]++]
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 5, 0, 0, 1, 0, 3, mv)) # reg[5] =SPM[gr[3]++]
+    #write the output from compute
+    f.write(data_movement_instruction(SPM, reg, 0, 1, 0, 4, 0, 0, 29, 0, mv)) # SPM[gr[4]++]=reg[29] //M
+    f.write(data_movement_instruction(SPM, reg, 0, 1, 0, 5, 0, 0, 30, 0, mv)) # SPM[gr[5]++]=reg[30] //D
+    f.write(data_movement_instruction(SPM, reg, 0, 1, 0, 6, 0, 0, 31, 0, mv)) # SPM[gr[5]++]=reg[31] //I
+    #update loop counter
+    f.write(data_movement_instruction(0, 0, 1, 0, 9, 0, 0, 0, 1, 9, addi)) # gr[9]++
+    #jump back to tile
+    f.write(data_movement_instruction(0, 0, 0, 0, 12, 0, 1, 0, 9, 8, beq)) # beq gr[9]==gr[8] TILE0
+
+    #TRANSITION BETWEEN TILES
+
+    #REMAINDER_LOOP
+    #TODO copy the tile loop here, but branching will check the tilesize instead of blocksize
+
+
+
+
 
     #Stall one to get everything going at the right time
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
