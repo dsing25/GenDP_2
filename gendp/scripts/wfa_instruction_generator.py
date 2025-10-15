@@ -33,20 +33,13 @@ none = 14
 halt = 15
 shift_r = 16
 shift_l = 17
-min = 18
+MIN = 18
+AND = 19
 # these instruction tags here are for data movement
 # use sys_def.h for compute tags
 
-BSW_COMPUTE_INSTRUCTION_NUM = 32
-
-PE_INIT_CONSTANT_AND_INSTRUCTION = 1
-PE_GROUP = 47+4
-PE_GROUP_1 = 76+4
-PE_INIT = 109+4
-PE_RUN = 113+4
-PE_GSCORE = 121+4
-PE_EARLY_BERAK = 124+4
-PE_END = 130+4
+MEM_BLOCK_SIZE = 1024 # in words
+SPM_BANDWIDTH = 4 # in words
 
 
 
@@ -96,259 +89,40 @@ def bsw_main_instruction():
     # Dump in the instructions
     for i in range(WFA_COMPUTE_INSTRUCTION_NUM):
         f.write(data_movement_instruction(out_port, comp_ib, 0, 0, 0, 0, 0, 0, i, 0, mv)); # out = instr[i]
-    gr[31] = LOCAL_FRAME #magic malloc the stack pointer (gr[31]) #TODO magic local fram malloc
-    #magic malloc each prev wf
-    for i in range(N_PREV_WF):
-        mem[gr[31]+i] = malloc((9-2*i)*3); #9 is the closest. -2 for each layer back, *3 for I, D, M #TODO magic malloc
-    #TODO think this line is wrong f.write(data_movement_instruction(gr, 0, 0, 0, 28, 0, 0, 0, 11, 0, si)) # gr[28] = current wf size
-    f.write(data_movement_instruction(gr, 0, 0, 0, 28, 0, 0, 0, 0, 0, si)) # sets the edit dist=0
 
-    #LOOP_SINGLE_ALIGNMENT
-    '''
-    General Note about which registers are storing what for next step
-        # STORE CURSORS
-        # gr[0] = PE0 i
-        # gr[1] = PE0 d
-        # gr[3] = PE0 m
-        #...
-        # gr[11 = PE3 m
-        # READ CURSORS
-        # gr[12] = PE0 d Score-E
-        # gr[13] = PE0 i Score-E
-        # gr[14] = PE0 m Score-2E
-        # gr[15] = PE1 m Score-4E
-        # ...
-        # gr[27] = PE3 m Score-4E
+    #INIT
+    #reg[0] is edit distance, reg[1-4] are n_iters for pe 0-4
+    f.write(data_movement_instruction(gr, 0, 0, 0, 0, 0, 0, 0, 0, 0, si))
 
-        # gr[28] = ed / 2
-        # gr[29] loop_counter
-        # gr[30] wavefront_len. Divide by 4 for loop end later. 
-        # gr[31] stack ptr (for register spilling). 
-          Stack[0]=e, Stack[1]=2e, stack[2]=3e stack[3]=4e Needed for the wavefront locations
-    '''
-    #================================setup the cursors==============================================
-    #gr[3] = ed << 1;
-    #gr[3] = gr[3] + 1; #wf_len = (ed*2) + 1
-    #gr[2] = gr[0] >> 2; #offset per PE
-    if (wf_len % 2 == 1):
-        #gr[0] = mem[gr[31]+3] #pop the location of score-4E wavefront from stack
-        f.write(data_movement_instruction(gr, mem, 0, 0, 0, 0, 0, 0, 3, 31, mv))
-        #gr[1] = (gr[28])*2+1 #the length of the padded wf score - 4E wavefront = ((ed)*2) + 1
-        f.write(data_movement_instruction(gr, gr, 0, 0, 0, 1, 0, 0, 1, 28, shift_l))
-        f.write(data_movement_instruction(gr, gr, 0, 0, 0, 1, 0, 0, 3, 1, addi))
-        ###### score -4e M
-            #gr[15] = gr[0] + 2*gr[1] # i.e. base of wavefront + 2*(wf_len) gives m
-            f.write(data_movement_instruction(gr, gr, 0, 0, 0, 15, 0, 0, 2, 1, shift_l))
-            f.write(data_movement_instruction(gr, gr, 0, 0, 0, 15, 0, 0, 0, 0, add))
-            #gr[19] = gr[15] + gr[2]+1-1 # 15=PE0 offset. Add gr[2]=n_iters. Add 1 cause gr[19] does 
-            # extra work. Minus 1 to start at last computed cell of previous row
-            f.write(data_movement_instruction(0, 0, 0, 0, 19, 0, 1, 0, 15, 2, add))                                   # gr[9] = gr[8] + gr[3]              
-            #gr[23] = gr[19] + gr[2] # PE2 m is PE0 m + offset
-            #gr[27] = gr[23] + gr[2] # PE3 m is PE0 m + offset
-        ###### score -2e M
-            #gr[14] = gr[0] + 2*gr[1] + 2# i.e. base of wavefront + 2*(wf_len) gives m. +2 counters the padding
-            #gr[18] = gr[14] + gr[2]+1 # PE1 m is PE0 m + offset. Starts 1 after because we have one extra
-            #gr[22] = gr[18] + gr[2] # PE2 m is PE0 m + offset
-            #gr[26] = gr[22] + gr[2] # PE3 m is PE0 m + offset
-        ###### score -e i
-            #gr[13] = gr[0] + 4# i.e. base of wavefront + 0*(wf_len) gives i. +4 for the padding
-            #gr[17] = gr[13] + gr[2]+1 # PE1 m is PE0 m + offset. Starts 1 after because we have one extra
-            #gr[21] = gr[17] + gr[2] # PE2 m is PE0 m + offset
-            #gr[25] = gr[21] + gr[2] # PE3 m is PE0 m + offset
-        ###### score -e d
-            #gr[13] = gr[0] + gr[1] + 4# i.e. base of wavefront + (wf_len) gives d. +4 for the padding
-            #gr[17] = gr[13] + gr[2]+1 # PE1 m is PE0 m + offset. Starts 1 after because we have one extra
-            #gr[21] = gr[17] + gr[2] # PE2 m is PE0 m + offset
-            #gr[25] = gr[21] + gr[2] # PE3 m is PE0 m + offset
-        pass
-    else: #(wf_len % 2 == 3)
-        pass
-    #gr[0] = offset per PE 
-        #gr[0] = mem[gr[31]+3] #pop the location of score-4E wavefront from stack
-        #gr[1] = (gr[28])*2+1 #the length of the padded wf score - 4E wavefront = ((ed)*2) + 1
-        #gr[2] = gr[1] // 4 # the offset per PE
-        #if (wf_len % 2 == 1)
-            #gr[15] = gr[0] + 2*gr[1] # i.e. base of wavefront + 2*(wf_len) gives m
-            #gr[19] = gr[15] + gr[2]+1 # PE1 m is PE0 m + offset. Starts 1 after because we have one extra.
-                                       # PE0 will execute one time extra
-            #gr[23] = gr[19] + gr[2] # PE2 m is PE0 m + offset
-            #gr[27] = gr[23] + gr[2] # PE3 m is PE0 m + offset
-        #else (wf_len %2 == 3)
-            #gr[15] = gr[0]  + 2*gr[1] # i.e. base of wavefront + 2*(wf_len) gives m
-            #gr[19] = gr[15] + gr[2]+1 # PE1 m is PE0 m + offset. Starts 1 after because we have one extra
-            #gr[23] = gr[19] + gr[2]+1 # PE2 m is PE0 m + offset
-            #gr[27] = gr[23] + gr[2]+1 # PE3 m is PE0 m + offset
-    #score - 2e wf
-        #gr[0] = mem[gr[31]+1] #pop the location of score-2E wavefront from stack
-        #gr[1] = (gr[28]+2)*2+1 #the length of the padded wf score - 4E wavefront = ((ed)*2) + 1
-        #if (wf_len % 2 == 1)
-            #gr[14] = gr[0] + 2*gr[1] + 2# i.e. base of wavefront + 2*(wf_len) gives m. +2 counters the padding
-            #gr[18] = gr[14] + gr[2]+1 # PE1 m is PE0 m + offset. Starts 1 after because we have one extra
-            #gr[22] = gr[18] + gr[2] # PE2 m is PE0 m + offset
-            #gr[26] = gr[22] + gr[2] # PE3 m is PE0 m + offset
-        #else (wf_len %2 == 3)
-            #gr[14] = gr[0] + 2*gr[1] + 2# i.e. base of wavefront + 2*(wf_len) gives m. +2 counters the padding
-            #gr[18] = gr[14] + gr[2]+1 # PE1 m is PE0 m + offset. Starts 1 after because we have one extra
-            #gr[22] = gr[18] + gr[2]+1 # PE2 m is PE0 m + offset
-            #gr[26] = gr[22] + gr[2]+1 # PE3 m is PE0 m + offset
-    #score - e wf i
-        #gr[0] = mem[gr[31]] #pop the location of score-2E wavefront from stack
-        #gr[1] = (gr[28]+3)*2+1 #the length of the padded wf score - 4E wavefront = ((ed)*2) + 1
-        #if (wf_len % 2 == 1)
-            #gr[13] = gr[0] + 4# i.e. base of wavefront + 0*(wf_len) gives i. +4 for the padding
-            #gr[17] = gr[13] + gr[2]+1 # PE1 m is PE0 m + offset. Starts 1 after because we have one extra
-            #gr[21] = gr[17] + gr[2] # PE2 m is PE0 m + offset
-            #gr[25] = gr[21] + gr[2] # PE3 m is PE0 m + offset
-        #else (wf_len %2 == 3)
-            #gr[13] = gr[0] + 4# i.e. base of wavefront + 0*(wf_len) gives i. +4 for the padding
-            #gr[17] = gr[13] + gr[2]+1 # PE1 m is PE0 m + offset. Starts 1 after because we have one extra
-            #gr[21] = gr[17] + gr[2]+1 # PE2 m is PE0 m + offset
-            #gr[25] = gr[21] + gr[2]+1 # PE3 m is PE0 m + offset
-    #score - e wf d
-        #gr[0] = mem[gr[31]] #pop the location of score-2E wavefront from stack
-        #gr[1] = (gr[28]+3)*2+1 #the length of the padded wf score - 4E wavefront = ((ed)*2) + 1
-        #if (wf_len % 2 == 1)
-            #gr[13] = gr[0] + gr[1] + 4# i.e. base of wavefront + (wf_len) gives d. +4 for the padding
-            #gr[17] = gr[13] + gr[2]+1 # PE1 m is PE0 m + offset. Starts 1 after because we have one extra
-            #gr[21] = gr[17] + gr[2] # PE2 m is PE0 m + offset
-            #gr[25] = gr[21] + gr[2] # PE3 m is PE0 m + offset
-        #else (wf_len %2 == 3)
-            #gr[13] = gr[0] + gr[1] + 4# i.e. base of wavefront + (wf_len) gives d. +4 for the padding
-            #gr[17] = gr[13] + gr[2]+1 # PE1 m is PE0 m + offset. Starts 1 after because we have one extra
-            #gr[21] = gr[17] + gr[2]+1 # PE2 m is PE0 m + offset
-            #gr[25] = gr[21] + gr[2]+1 # PE3 m is PE0 m + offset
-    #setup cursors for STORE
-    #let gr[30] be the wavefront length for now
-    #gr[29] = gr[30] // 4 # hijack 29 as a tmp
-    # gr[0] = malloc new wavefront + 5 for padding # I
-    # mem[gr[31]+4]] = gr[0] # put this new wavefront on the stack
-    # gr[1] = gr[0] + gr[30] # D
-    # gr[2] = gr[1] + gr[30] # M
-    #if (wf_len % 2 == 1)
-        #gr[3]  = gr[0] + gr[29] + 1
-        #gr[4]  = gr[1] + gr[29] + 1
-        #gr[5]  = gr[2] + gr[29] + 1
-        #gr[6]  = gr[3] + gr[29]
-        #gr[7]  = gr[4] + gr[29]
-        #gr[8]  = gr[5] + gr[29]
-        #gr[9]  = gr[6] + gr[29]
-        #gr[10] = gr[7] + gr[29]
-        #gr[11] = gr[8] + gr[29]
-    #if (wf_len % 2 == 3)
-        #gr[3]  = gr[0] + gr[29] + 1
-        #gr[4]  = gr[1] + gr[29] + 1
-        #gr[5]  = gr[2] + gr[29] + 1
-        #gr[6]  = gr[3] + gr[29] + 1
-        #gr[7]  = gr[4] + gr[29] + 1
-        #gr[8]  = gr[5] + gr[29] + 1
-        #gr[9]  = gr[6] + gr[29] + 1
-        #gr[10] = gr[7] + gr[29] + 1
-        #gr[11] = gr[8] + gr[29] + 1
-    # update the loop counter and loop end
-    #gr[29] = 0
-    #gr[30] = (gr[28]*2+1) // 4
+    #ALIGN_LOOP
+    #TODO implement these instructions
+    f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 1, 0, shift_l))                          # gr[5] = gr[0] * 2 = gr[0] << 1
+    f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 2, 5, shift_r))                          # gr[7] = gr[5] // 4
+    f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0x3, 0, 0, AND))                            # gr[6] = gr[0] % 4 = gr[0] & 0x3
+    f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 0, 6, beq))                               # beq 0 gr[6] 5
+  #if wf_len % 4 == 1:
+    #TODO BROADCAST GO SIGNAL
+    f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 0, 7, mv))                               # out = gr[7]
+    f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 0, 7, mv))                               # out = gr[7]
+    f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 0, 7, mv))                               # out = gr[7]
+    f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 1, 7, addi))                             # out = gr[7] + 1
+    f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 0, 0, 0, 0, beq))                                # beq 0 0 4
+  #else wf_len % 4 == 3:
+    f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 1, 7, addi))                             # out = gr[7] + 1
+    f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 1, 7, addi))                             # out = gr[7] + 1
+    f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 1, 7, addi))                             # out = gr[7] + 1
+    f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 0, 7, mv))                               # out = gr[7]
+  #endif
+    #TODO INVOKE MEMORY LOAD MAGIC
+    #TODO BROADCAST GO SIGNAL
+    #TODO WAIT FOR PE_DONE
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, addi))                           # gr[0]++ (ed++)
+    #JMP ALIGN_LOOP
 
-
-
-    # Do one masked round of computation
-    # if ed is even mask 3 outta four PEs
-    # else ed is odd. mask 1 outta four PEs
-    # if (wf_len % 2 == 1)
-        #STALL WRITE
-        #out_port = mem[gr[12+3*i]++]
-        #STALL WRITE
-        #out_port = mem[gr[12+3*i+1]++]
-        #STALL WRITE
-        #out_port = mem[gr[12+3*i+2]++]
-        #STALL WRITE
-        #out_port = mem[gr[12+3*i+3]++]
-        for i in range(16): # wait a full cycle of compute stalling all
-            #STALL
-        for i in range(4): # start feeding PEs, but still no data back.
-            #STALL WRITE
-            #out_port = mem[gr[12+3*i]++]
-            #STALL WRITE
-            #out_port = mem[gr[12+3*i+1]++]
-            #STALL WRITE
-            #out_port = mem[gr[12+3*i+2]++]
-            #STALL WRITE
-            #out_port = mem[gr[12+3*i+3]++]
-    #else (wf_len % 2 == 3)
-        for i in range(3):
-            #STALL_WRITE
-            #out_port = mem[gr[12+3*i]++]
-            #STALL_WRITE
-            #out_port = mem[gr[12+3*i+1]++]
-            #STALL_WRITE
-            #out_port = mem[gr[12+3*i+2]++]
-            #STALL_WRITE
-            #out_port = mem[gr[12+3*i+3]++]
-        for i in range(4):
-            #STALL everything
-        for i in range(3): #start feeding and process the stalled instrs
-            #mem[gr[3*i]++] = in_port I
-            #out_port = mem[gr[12+3*i]++]
-            #mem[gr[3*i+1]++] = in_port D
-            #out_port = mem[gr[12+3*i+1]++]
-            #mem[gr[3*i+2]++] = in_port M
-            #out_port = mem[gr[12+3*i+2]++]
-            #STALL write. Use this cycle to increment the loop_counter
-            #out_port = mem[gr[12+3*i+3]++]
-        #no write for the last PE
-        #STALL_WRITE
-        #out_port = mem[gr[12+3*i]++]
-        #STALL_WRITE
-        #out_port = mem[gr[12+3*i+1]++]
-        #STALL_WRITE
-        #out_port = mem[gr[12+3*i+2]++]
-        #STALL_WRITE
-        #out_port = mem[gr[12+3*i+3]++]
-
-    # LOOP_WAVEFRONT_NEXT STEADY STATE
-    for i in range(4):
-        #mem[gr[3*i]++] = in_port I
-        #out_port = mem[gr[12+3*i]++]
-        #mem[gr[3*i+1]++] = in_port D
-        #out_port = mem[gr[12+3*i+1]++]
-        #mem[gr[3*i+2]++] = in_port M
-        #out_port = mem[gr[12+3*i+2]++]
-        #STALL write. Use this cycle to increment the loop_counter
-        #out_port = mem[gr[12+3*i+3]++]
-    #bne loop_counter loop_end LOOP
-
-    #TODO setup Extend
-    #TODO extend (in extend check completion)
-
-    #update the loop stack
-    #mem[gr[31]+3] = mem[gr[31]+2]
-    #mem[gr[31]+2] = mem[gr[31]+1]
-    #mem[gr[31]+1] = mem[gr[31]]
-    #mem[gr[31]]   = mem[gr[31]+4]
-    #ed++
-    #jmp
     f.close()
 
 def bsw_compute():
 
-
-    #END
-    #JMP END
-
-    #NEXT
-    #first pair is just data movement. Could be optimized out with unrolling
-    #f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))             #0
-    #f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    #f.write(compute_instruction(COPY, COPY, INVALID, 2, 0, 0, 0, 0, 0, 1))                   #1
-    #f.write(compute_instruction(COPY, COPY, INVALID, 1, 0, 0, 0, 0, 0, 0))
-    #f.write(compute_instruction(ADD_I, MAXIMUM, MAXIMUM, 3, 1, 0, 0, 2, 5, 29))              #2
-    #f.write(compute_instruction(COPY_I, MAXIMUM, ADD_I, 1, 0, 0, 0, 0, 4, 31))
-    #f.write(compute_instruction(INVALID, MAXIMUM, COPY, 0, 0, 0, 0, 2, 5, 30))               #3
-    #f.write(compute_instruction(INVALID, MAXIMUM, COPY, 0, 0, 0, 0, 29, 31, 29))
-    ##stalls 3-12
-    #for i in range(3,13):
-    #    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    
-    
     f = open("instructions/bsw/compute_instruction.txt", "w")
     ##############################NEXT STEP#########################################################
     #Register mapping. We have one tile being loaded while the other is being worked on. If you
@@ -408,19 +182,29 @@ def pe_0_instruction():
     #NOTES
     #The general format is, load SPM, update cursor, stall for a cycle until SPM is ready again
     #initialize the counter
-    #INITIALIZED REGISTERS
-    #at start, gr[1,6] are initialized to cursor positions
-    # gr[0] is initialized to the place to load for m_r0, so 2 off from where gr[0] should be
+    #INITIALIZING REGISTERS
+    #gr[1,6] are initialized to cursor positions. Each block is offset by MEM_BLOCK_SIZE
+    f.write(data_movement_instruction(gr, 0, 0, 0, 0, 0, 0, 0, 0*MEM_BLOCK_SIZE, 0, si)) 
+    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 1*MEM_BLOCK_SIZE, 0, si))
+    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 2*MEM_BLOCK_SIZE, 0, si))
+    f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 3*MEM_BLOCK_SIZE, 0, si))
+    f.write(data_movement_instruction(gr, 0, 0, 0, 4, 0, 0, 0, 4*MEM_BLOCK_SIZE, 0, si))
+    f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 5*MEM_BLOCK_SIZE, 0, si))
+    f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, 6*MEM_BLOCK_SIZE, 0, si))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
     # gr[7] holds the number of iterations for this pe in this step of next
-    # gr[9] is iter_counter
-    f.write(data_movement_instruction(gr, 0, 0, 0, 9, 0, 0, 0, 0, 0, si))                               # gr[10] = 0
+    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                   # out = in
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
+    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                   # out = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
+    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                   # out = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 7, 0, 0, 0, 0, 0, mv))                         # gr[7] = in
+    f.write(data_movement_instruction(gr, 0, 0, 0, 9, 0, 0, 0, 0, 0, si))                               # gr[9] = 0 (loop counter)
     #INITIALIZE FIRST LOADS FROM CURSORS
-    # gr[0] is two behind so we can load the m_r0
-    f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 0, mv))                            # reg[0]=SPM[gr[0]]
-    f.write(data_movement_instruction(reg, reg, 1, 0, 0, 0, 0, 0, 2, 0, addi))                          # gr[0] = gr[0] + SPM_BANDWIDTH
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
+    #gr[0] points directly to m_r1. first m_r0 is implicitly 0
+    for i in range(SPM_BANDWIDTH):
+        f.write(data_movement_instruction(gr, 0, 0, 0, i, 0, 0, 0, 0, 0, si))                           # gr[0-4] = 0
     #COPY FIRST PART OF BLOCK LOOP SKIP WRITE THOUGH
     #Load DELETIONS [0,3]
     f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 0, 0, 0, mv))                            # reg[4]=SPM[gr[0]]
