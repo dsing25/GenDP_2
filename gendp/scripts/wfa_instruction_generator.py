@@ -370,7 +370,7 @@ def bsw_compute():
     # gr9 = i // the current iteration
 
     #BANDWIDTH = 4
-#LOOP NEXT 
+#COMPUTE_LOOP_NEXT
 #COMPUTE H SCORES (note this operates on dummy data first iter)
     for i in range(SPM_BANDWIDTH): #[0,3]
         f.write(compute_instruction(ADD_I, MAXIMUM, MAXIMUM, 8+i, 1, 0, 0, 20+i, 24+i, 28+i))
@@ -412,11 +412,7 @@ def pe_0_instruction():
     #at start, gr[1,6] are initialized to cursor positions
     # gr[0] is initialized to the place to load for m_r0, so 2 off from where gr[0] should be
     # gr[7] holds the number of iterations for this pe in this step of next
-    #REGISTER post initialization
-    # gr[8] is the iteration count at the next block switch
-    # gr[9] is the current iteration counter
-    #TODO gr[8] = gr[8] + MEM_TILESIZE
-    #TODO gr[8] = min(gr[8], gr[7])
+    # gr[9] is iter_counter
     f.write(data_movement_instruction(gr, 0, 0, 0, 9, 0, 0, 0, 0, 0, si))                               # gr[10] = 0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
     #INITIALIZE FIRST LOADS FROM CURSORS
@@ -434,8 +430,7 @@ def pe_0_instruction():
     f.write(data_movement_instruction(reg, SPM, 0, 0, 16, 0, 0, 0, 0, 3, mv))                           # reg[16]=SPM[gr[3]]
     f.write(data_movement_instruction(reg, reg, 1, 0, 3, 0, 0, 0, SPM_BANDWIDTH, 3, addi))              # gr[3] = gr[3] + SPM_BANDWIDTH
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
-    #TODO set the PC of the compute to LOOP_NEXT + SPM_BANDWIDTH
+    f.write(data_movement_instruction(0,0,0,0,COMPUTE_LOOP_NEXT+SPM_BANDWIDTH,0,0,0,0,0,set_PC))        # PE_PC = COMPUTE_LOOP_NEXT + SPM_BANDWIDTH
     #Load INSERTIONS [4,5]
     f.write(data_movement_instruction(reg, SPM, 0, 0, 12, 0, 0, 0, 0, 2, mv))                           # reg[12]=SPM[gr[2]]
     f.write(data_movement_instruction(reg, reg, 1, 0, 2, 0, 0, 0, SPM_BANDWIDTH, 2, addi))              # gr[2] = gr[2] + SPM_BANDWIDTH
@@ -465,7 +460,7 @@ def pe_0_instruction():
     #Load H [6,7]
     f.write(data_movement_instruction(reg, SPM, 0, 0, 8, 0, 0, 0, 0, 2, mv))                            # reg[8]=SPM[gr[1]]
     f.write(data_movement_instruction(reg, reg, 1, 0, 1, 0, 0, 0, SPM_BANDWIDTH, 1, addi))              # gr[1] = gr[1] + SPM_BANDWIDTH
-    #TODO set PC of compute to LOOP_NEXT
+    f.write(data_movement_instruction(0, 0, 0, 0, COMPUTE_LOOP_NEXT, 0, 0, 0, 0, 0, set_PC))            # PE_PC = COMPUTE_LOOP_NEXT
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
     #Write H [8,13]
     f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 4, 0, 0, 20, 0, mv))                           # SPM[gr[4]]=reg[20] //M
@@ -478,17 +473,10 @@ def pe_0_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
     f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 6, 0, 0, 28, 0, mv))                           # SPM[gr[6]]=reg[28] //I
     f.write(data_movement_instruction(reg, reg, 1, 0, 6, 0, 0, 0, SPM_BANDWIDTH, 6, addi))              # gr[6] = gr[6] + SPM_BANDWIDTH
-    #TODO reg[9] < reg[8] jhmp BLOCK_LOOP_NEXT
+    f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 9, 1, blt))                             # blt gr[9] gr[7] -13 #TODO figure out how to autoincrease.
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
 
-    #beware the jaberwock. may need to check the movement instrs in the data trace
-    if counter < pe_wf_len:
-        update cursors
-        next_switch = min(pe_wf_len, next_switch + tile_size)
-        jmp BLOCK_LOOP_NEXT
-    else continue
-    mark done
-    stop
+    #TODO HALT. Figure out what's there. How to add this
     
         
 
