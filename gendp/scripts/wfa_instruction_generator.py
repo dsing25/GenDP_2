@@ -49,6 +49,8 @@ PE_END = 130+4
 
 
 
+
+
 def compute_instruction(op_0, op_1, op_2, in_addr_0, in_addr_1, in_addr_2, in_addr_3, in_addr_4, in_addr_5, out_addr):
     instr = "0" * 14 \
             + "{:0>5b}".format(op_0) \
@@ -65,7 +67,9 @@ def compute_instruction(op_0, op_1, op_2, in_addr_0, in_addr_1, in_addr_2, in_ad
     return hex(value) + "\n"
     
     
-def data_movement_instruction(dest, src, reg_immBar_0, reg_auto_increase_0, imm_0, reg_0, reg_immBar_1, reg_auto_increase_1, imm_1, reg_1, opcode):
+
+def data_movement_instruction(dest, src, reg_immBar_0, reg_auto_increase_0, imm_0, reg_0,
+                              reg_immBar_1, reg_auto_increase_1, imm_1, reg_1, opcode):
     instr = "0" * 20 \
             + "{:0>4b}".format(dest) \
             + "{:0>4b}".format(src) \
@@ -324,24 +328,6 @@ def bsw_main_instruction():
     f.close()
 
 def bsw_compute():
-    
-    f = open("instructions/bsw/compute_instruction.txt", "w")
-    ##############################NEXT STEP#########################################################
-    #Register mapping
-    # |m_r0 |m_r1 |m_r2 | Score -4E Reg 123. cursor in gr0
-    # |-----|-----|-----| 
-    # |     |     |     | Score -3E
-    # |-----|-----|-----|
-    # |     |m_r3 |     | Score -2E cursor in gr1
-    # |-----|-----|-----|
-    # |i_r4 |     |d_r5 | Score -E cursorI in gr2, cursorD in gr3
-    # |-----|-----|-----|
-    # |     |COMP |     | Current Score, m/d/i cursors in gr4, gr5, gr6
-    # gr7 = Tilesize // Tilesize is the tile of the wf this pe processes.
-    # gr8 = blocksize // value of i when we switch blocks
-    # gr9 = i // the current iteration
-
-    # LOOP while (i < tilesize)
 
 
     #END
@@ -349,18 +335,61 @@ def bsw_compute():
 
     #NEXT
     #first pair is just data movement. Could be optimized out with unrolling
-    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))             #0
-    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    f.write(compute_instruction(COPY, COPY, INVALID, 2, 0, 0, 0, 0, 0, 1))                   #1
-    f.write(compute_instruction(COPY, COPY, INVALID, 1, 0, 0, 0, 0, 0, 0))
-    f.write(compute_instruction(ADD_I, MAXIMUM, MAXIMUM, 3, 1, 0, 0, 2, 5, 29))              #2
-    f.write(compute_instruction(COPY_I, MAXIMUM, ADD_I, 1, 0, 0, 0, 0, 4, 31))
-    f.write(compute_instruction(INVALID, MAXIMUM, COPY, 0, 0, 0, 0, 2, 5, 30))               #3
-    f.write(compute_instruction(INVALID, MAXIMUM, COPY, 0, 0, 0, 0, 29, 31, 29))
-    #stalls 3-12
-    for i in range(3,13):
-        f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    #f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))             #0
+    #f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    #f.write(compute_instruction(COPY, COPY, INVALID, 2, 0, 0, 0, 0, 0, 1))                   #1
+    #f.write(compute_instruction(COPY, COPY, INVALID, 1, 0, 0, 0, 0, 0, 0))
+    #f.write(compute_instruction(ADD_I, MAXIMUM, MAXIMUM, 3, 1, 0, 0, 2, 5, 29))              #2
+    #f.write(compute_instruction(COPY_I, MAXIMUM, ADD_I, 1, 0, 0, 0, 0, 4, 31))
+    #f.write(compute_instruction(INVALID, MAXIMUM, COPY, 0, 0, 0, 0, 2, 5, 30))               #3
+    #f.write(compute_instruction(INVALID, MAXIMUM, COPY, 0, 0, 0, 0, 29, 31, 29))
+    ##stalls 3-12
+    #for i in range(3,13):
+    #    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
     
+    
+    f = open("instructions/bsw/compute_instruction.txt", "w")
+    ##############################NEXT STEP#########################################################
+    #Register mapping. We have one tile being loaded while the other is being worked on. If you
+    #add 16, then you'll get the mappings for second tile.
+    #Each val has 4 regs. for example, 
+    # nah make em 0,1,2,3
+    # |m_r0 |     |m_r1 | Score -4E Reg 123. cursor in gr0
+    # |-----|-----|-----| 
+    # |     |     |     | Score -3E
+    # |-----|-----|-----|
+    # |     |m_r2 |     | Score -2E cursor in gr1
+    # |-----|-----|-----|
+    # |i_r3 |     |d_r4 | Score -E cursorI in gr2, cursorD in gr3
+    # |-----|-----|-----|
+    # |     |COMP |     | Current Score, m/d/i cursors in gr4, gr5, gr6
+    #                     start the comps at 16
+    # gr7 = Tilesize // Tilesize is the tile of the wf this pe processes.
+    # gr8 = blocksize // value of i when we switch blocks
+    # gr9 = i // the current iteration
+
+    #LOOP NEXT 
+    for i in range(6): #0, 1, 2, 3
+        f.write(compute_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) #NOP
+    #DO DELETIONS (and move the deletions m's into the insertion reg. Works great for 2)
+    for i in range(SPM_BANDWIDTH): #4,5
+        f.write(compute_instruction(INVALID, MAXIMUM, COPY, 0, 0, 0, 0, 4+i, 16+i, 20+i))
+    #free reg 4+, 16+
+    #DO INSERTIONS
+    #reg[31] = max(reg[0], reg[12]) + 1
+    f.write(compute_instruction(COPY, COPY, INVALID, 4, 0, 0, 0, 0, 0, 2)) #6
+    f.write(compute_instruction(COPY, COPY, INVALID, 5, 0, 0, 0, 0, 0, 3))
+    for i in range(SPM_BANDWIDTH): #7,9
+        f.write(compute_instruction(COPY_I, MAXIMUM, ADD, 1, 0, 0, 0, 0, 12+i, 24+i)) 
+    f.write(compute_instruction(COPY, COPY, INVALID, 6, 0, 0, 0, 0, 0, 0)) #10
+    f.write(compute_instruction(COPY, COPY, INVALID, 7, 0, 0, 0, 0, 0, 1))
+    #f.write(compute_instruction(COPY, COPY, INVALID, 1, 0, 0, 0, 0, 0, 0))
+    #free reg 0+,12+
+    #DO H SCORES
+    for i in range(SPM_BANDWIDTH): #12, 14
+        f.write(compute_instruction(ADD_I, MAXIMUM, MAXIMUM, 8+i, 1, 0, 0, 20+i, 24+i, 28+i))              #2
+    #free reg8,9
+    #free reg 24+,20+,28+
     f.close()
 
 
@@ -368,11 +397,40 @@ def bsw_compute():
 def pe_0_instruction():
     
     f = open("instructions/bsw/pe_0_instruction.txt", "w")
+    #TODO I am assuming that writes to the register file from these must be done to adjacent blocks
+    #of register. We'll at very least need something to tell POA not to write the full block. Will
+    #require instruction update
 
 
     #BLOCK_LOOP
-    #load all the cursors
-    f.write(data_movement_instruction(reg, SPM, 0, 0, 2, 0, 0, 1, 0, 0, mv)) # reg[2] =SPM[gr[0]++]
+    #Write H (cycle 0)
+    f.write(data_movement_instruction(SPM, reg, 0, 1, 0, 4, 0, 0, 20, 0, mv)) # SPM[gr[4]++]=reg[20] //M
+    f.write(data_movement_instruction(SPM, reg, 0, 1, 0, 5, 0, 0, 24, 0, mv)) # SPM[gr[5]++]=reg[24] //D
+    f.write(data_movement_instruction(SPM, reg, 0, 1, 0, 6, 0, 0, 28, 0, mv)) # SPM[gr[5]++]=reg[28] //I
+    #Load DELETIONS (cycle 6)
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 1, 0, 0, mv)) # reg[4]=SPM[gr[0]++]
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 16, 0, 0, 1, 0, 3, mv)) # reg[16]=SPM[gr[3]++]
+    #Load INSERTIONS (cycle 10)
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 12, 0, 0, 1, 0, 2, mv)) # reg[12]=SPM[gr[2]++]
+    #Load H (cycle 12)
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 8, 0, 0, 1, 0, 2, mv)) # reg[8]=SPM[gr[1]++]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     f.write(data_movement_instruction(reg, SPM, 0, 0, 3, 0, 0, 1, 0, 1, mv)) # reg[3] =SPM[gr[1]++]
     f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 1, 0, 2, mv)) # reg[4] =SPM[gr[2]++]
     f.write(data_movement_instruction(reg, SPM, 0, 0, 5, 0, 0, 1, 0, 3, mv)) # reg[5] =SPM[gr[3]++]
