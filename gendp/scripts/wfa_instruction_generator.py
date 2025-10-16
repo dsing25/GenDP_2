@@ -1,42 +1,45 @@
 import sys
 import os
+import ctrl_opcodes
 
-reg = 0
-gr = 1
-SPM = 2
-comp_ib = 3
-ctrl_ib = 4
-in_buf = 5
-out_buf = 6
-in_port = 7
-in_instr = 8
-out_port = 9
-out_instr = 10
-fifo = [11, 12]
-mem = 13 # TODO not implemented yet
+##MEMORY DESTS
+#reg = 0
+#gr = 1
+#SPM = 2
+#comp_ib = 3
+#ctrl_ib = 4
+#in_buf = 5
+#out_buf = 6
+#in_port = 7
+#in_instr = 8
+#out_port = 9
+#out_instr = 10
+#fifo = [11, 12]
+#
+##DATA MOVEMENT OPCODES
+#add = 0
+#sub = 1
+#addi = 2
+#set_8 = 3
+#si = 4
+#mv = 5
+#add_8 = 6
+#addi_8 = 7
+#bne = 8
+#beq = 9
+#bge = 10
+#blt = 11
+#jump = 12
+#set_PC = 13
+#none = 14
+#halt = 15
+#shift_r = 16 #TODO implement
+#shift_l = 17 #TODO implement
+#MIN = 18 #TODO implement
+#AND = 19 #TODO implement
+## these instruction tags here are for data movement
+## use sys_def.h for compute tags
 
-add = 0
-sub = 1
-addi = 2
-set_8 = 3
-si = 4
-mv = 5
-add_8 = 6
-addi_8 = 7
-bne = 8
-beq = 9
-bge = 10
-blt = 11
-jump = 12
-set_PC = 13
-none = 14
-halt = 15
-shift_r = 16
-shift_l = 17
-MIN = 18
-AND = 19
-# these instruction tags here are for data movement
-# use sys_def.h for compute tags
 
 MEM_BLOCK_SIZE = 1024 # in words
 SPM_BANDWIDTH = 4 # in words
@@ -93,12 +96,13 @@ def bsw_main_instruction():
     #INIT
     #reg[0] is edit distance, reg[1-4] are n_iters for pe 0-4
     f.write(data_movement_instruction(gr, 0, 0, 0, 0, 0, 0, 0, 0, 0, si))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
 
     #ALIGN_LOOP
     #TODO implement these instructions
     f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 1, 0, shift_l))                          # gr[5] = gr[0] * 2 = gr[0] << 1
-    f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 2, 5, shift_r))                          # gr[7] = gr[5] // 4
     f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0x3, 0, 0, AND))                            # gr[6] = gr[0] % 4 = gr[0] & 0x3
+    f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 2, 5, shift_r))                          # gr[7] = gr[5] // 4
     f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 0, 6, beq))                               # beq 0 gr[6] 5
   #if wf_len % 4 == 1:
     #TODO BROADCAST GO SIGNAL
@@ -107,6 +111,7 @@ def bsw_main_instruction():
     f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 0, 7, mv))                               # out = gr[7]
     f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 1, 7, addi))                             # out = gr[7] + 1
     f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 0, 0, 0, 0, beq))                                # beq 0 0 4
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
   #else wf_len % 4 == 3:
     f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 1, 7, addi))                             # out = gr[7] + 1
     f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 1, 7, addi))                             # out = gr[7] + 1
