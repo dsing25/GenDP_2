@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 python3 scripts/phmm_instruction_generator.py
 make clean && make -j

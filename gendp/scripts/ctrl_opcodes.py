@@ -27,8 +27,8 @@ jump = 12
 set_PC = 13
 none = 14
 halt = 15
-shift_r = 16
-shift_l = 17
+shifti_r = 16
+shifti_l = 17
 MIN = 18
 AND = 19
 # these instruction tags here are for data movement

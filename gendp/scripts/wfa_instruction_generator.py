@@ -26,8 +26,8 @@ def bsw_main_instruction():
 
     #ALIGN_LOOP
     #TODO implement these instructions
-    f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 1, 0, shift_l))                          # gr[5] = gr[0] * 2 = gr[0] << 1
-    f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 2, 5, shift_r))                          # gr[7] = gr[5] // 4
+    f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 1, 0, shifti_l))                          # gr[5] = gr[0] * 2 = gr[0] << 1
+    f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 2, 5, shifti_r))                          # gr[7] = gr[5] // 4
     f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0x3, 0, 0, AND))                            # gr[6] = gr[0] % 4 = gr[0] & 0x3
     f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 0, 6, beq))                               # beq 0 gr[6] 5
   #if wf_len % 4 == 1:

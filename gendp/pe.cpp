@@ -1,4 +1,6 @@
 #include "pe.h"
+#include "sys_def.h"
+#include <cassert>
 
 pe::pe(int _id) {
 
@@ -491,6 +493,32 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 #ifdef PROFILE
         printf("wait.\t");
 #endif
+    } else if (opcode == CTRL_SHIFTI_R) {      // SHIFT_R
+        //zkn
+        //TODO is addr_regfile_unit the correct place to go?
+        assert(dest == 0);  // only support gr
+        rd = reg_imm_0;
+        rs2 = reg_1;
+        int operand1 = addr_regfile_unit->buffer[rs2];
+        //we want arithmetic shift right as below, but this is compiler dependent. Not in c++ std
+        //int shift_result = operand1 >> reg_imm_1;
+        //so instead of above, we do the following for portability:
+        int shift_result = operand1 / (1<<reg_imm_1);
+        addr_regfile_unit->buffer[rd] = shift_result;
+    } else if (opcode == CTRL_SHIFTI_L) {      // SHIFT_L
+        assert(dest == 0);  // only support gr
+        rd = reg_imm_0;
+        rs2 = reg_1;
+        int operand1 = addr_regfile_unit->buffer[rs2];
+        //we want arithmetic shift right as below, but this is compiler dependent. Not in c++ std
+        //int shift_result = operand1 >> reg_imm_1;
+        //so instead of above, we do the following for portability:
+        int shift_result = operand1 <<reg_imm_1;
+        addr_regfile_unit->buffer[rd] = shift_result;
+    } else if (opcode == CTRL_MIN) {      // MIN
+        TODO
+    } else if (opcode == CTRL_AND) {      // AND
+        TODO
     } else {
         fprintf(stderr, "PE[%d] control instruction opcode error.\n", id);
         exit(-1);

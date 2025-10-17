@@ -81,5 +81,27 @@
 #define ADD_I 23 // Dummy TODO implement
 #define COPY_I 24 // Dummy TODO implement
 
+// CTRL Opcode
+#define CTRL_ADD 0
+#define CTRL_SUB 1
+#define CTRL_ADDI 2
+#define CTRL_SET_8 3
+#define CTRL_SI 4
+#define CTRL_MV 5
+#define CTRL_ADD_8 6
+#define CTRL_ADDI_8 7
+#define CTRL_BNE 8
+#define CTRL_BEQ 9
+#define CTRL_BGE 10
+#define CTRL_BLT 11
+#define CTRL_JUMP 12
+#define CTRL_SET_PC 13
+#define CTRL_NONE 14
+#define CTRL_HALT 15
+#define CTRL_SHIFTI_R 16
+#define CTRL_SHIFTI_L 17
+#define CTRL_MIN 18
+#define CTRL_AND 19
+
 
 #endif
