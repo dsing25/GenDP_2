@@ -47,6 +47,26 @@ int alu_32::execute_8bit(int input_0, int input_1, int op) {
 				output_simd[i] = input_0_simd[i];
 			break;
 		}
+		case BWISE_OR: {
+			for (i = 0; i < SIMD_WIDTH8; i++)
+				output_simd[i] = input_0_simd[i] | input_1_simd[i];
+			break;
+			}
+		case BWISE_AND: {
+			for (i = 0; i < SIMD_WIDTH8; i++)
+				output_simd[i] = input_0_simd[i] & input_1_simd[i];
+			break;
+			}
+		case BWISE_XOR: {
+			for (i = 0; i < SIMD_WIDTH8; i++)
+				output_simd[i] = input_0_simd[i] ^ input_1_simd[i];
+			break;
+			}
+		case BWISE_NOT: {
+			for (i = 0; i < SIMD_WIDTH8; i++)
+				output_simd[i] = ~input_0_simd[i];
+			break;
+			}
 		case INVALID: {
 			for (i=0; i<SIMD_WIDTH8; i++)
 				output_simd[i] = 0;
@@ -101,10 +121,22 @@ int alu_32::execute(int input_0, int input_1, int op) {
 			out = tmp << 16;
 			break;
 		}
+		case LSHIFT_1: { 
+			if (input_0 < 0) tmp = pow(2, 32) + input_0;
+			else tmp = input_0;
+			out = tmp << 1;
+			break;
+		}
 		case RIGHT_SHIFT: {
 			if (input_0 < 0) tmp = pow(2, 32) + input_0;
 			else tmp = input_0;
 			out = tmp >> 16;
+			break;
+		}
+		case RSHIFT_WORD: { // Right shift by 31 bits
+			if (input_0 < 0) tmp = pow(2, 32) + input_0;
+			else tmp = input_0;
+			out = tmp >> 31;
 			break;
 		}
 		case COPY: {
@@ -124,6 +156,22 @@ int alu_32::execute(int input_0, int input_1, int op) {
 			else tmp = log_sum_in % 32;
 			if (tmp >= 16) out = logSumTable[16];
 			else out = logSumTable[tmp];
+			break;
+		}
+		case BWISE_OR: {
+			out = input_0 | input_1;
+			break;
+		}
+		case BWISE_AND: {
+			out = input_0 & input_1;
+			break;
+		}
+		case BWISE_XOR: {
+			out = input_0 ^ input_1;
+			break;
+		}
+		case BWISE_NOT: {
+			out = ~input_0;
 			break;
 		}
         case INVALID: {
@@ -192,6 +240,27 @@ int alu_32::execute_4input_8bit(int input_0, int input_1, int input_2, int input
 				output_simd[i] = (input_0_simd[i] == input_1_simd[i]) ? input_2_simd[i] : input_3_simd[i];
 			break;
 		}
+		case BWISE_OR: {
+			for (i = 0; i < SIMD_WIDTH8; i++)
+				output_simd[i] = input_0_simd[i] | input_1_simd[i];
+			break;
+		}
+		case BWISE_AND: {
+			for (i = 0; i < SIMD_WIDTH8; i++)
+				output_simd[i] = input_0_simd[i] & input_1_simd[i];
+			break;
+		}
+		case BWISE_XOR: {
+			for (i = 0; i < SIMD_WIDTH8; i++)
+				output_simd[i] = input_0_simd[i] ^ input_1_simd[i];
+			break;
+		}
+		case BWISE_NOT: {
+			for (i = 0; i < SIMD_WIDTH8; i++)
+				output_simd[i] = ~input_0_simd[i];
+			break;
+		}
+
 		case INVALID: {
 			for (i=0; i<SIMD_WIDTH8; i++)
 				output_simd[i] = 0;
@@ -244,10 +313,22 @@ int alu_32::execute_4input(int input_0, int input_1, int input_2, int input_3, i
 			out = tmp << 16;
 			break;
 		}
+		case LSHIFT_1: { // << 1 bit
+			if (input_0 < 0) tmp = pow(2, 32) + input_0;
+			else tmp = input_0;
+			out = tmp << 1;
+			break;
+		}
 		case RIGHT_SHIFT: {
 			if (input_0 < 0) tmp = pow(2, 32) + input_0;
 			else tmp = input_0;
 			out = tmp >> 16;
+			break;
+		}
+		case RSHIFT_WORD: { // Right shift by 31 bits
+			if (input_0 < 0) tmp = pow(2, 32) + input_0;
+			else tmp = input_0;
+			out = tmp >> 31;
 			break;
 		}
 		case COPY: {
@@ -277,6 +358,22 @@ int alu_32::execute_4input(int input_0, int input_1, int input_2, int input_3, i
 			out = (input_0 == input_1) ? input_2 : input_3;
 			break;
 		}
+		case BWISE_OR: {
+			out = input_0 | input_1;
+			break;
+		}
+		case BWISE_AND: {
+			out = input_0 & input_1;
+			break;
+		}
+		case BWISE_XOR: {
+			out = input_0 ^ input_1;
+			break;
+		}
+		case BWISE_NOT: {
+			out = ~input_0;
+			break;
+		}		
 		case INVALID: {
 			out = 0;
 			break;

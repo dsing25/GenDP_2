@@ -30,6 +30,8 @@ jump = 12
 set_PC = 13
 none = 14
 halt = 15
+# these instruction tags here are for data movement
+# use sys_def.h for compute tags
 
 BSW_COMPUTE_INSTRUCTION_NUM = 32
 
