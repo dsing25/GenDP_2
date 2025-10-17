@@ -1,4 +1,6 @@
 #include "pe_array.h"
+#include <cassert>
+#include "sys_def.h"
 
 #define NUM_FRACTION_BITS 16
 #define MAX_RANGE NUM_FRACTION_BITS
@@ -491,6 +493,37 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         printf("halt.\n");
 #endif
         return -1;
+    } else if (opcode == CTRL_SHIFTI_R) {      // SHIFT_R
+        //main_addressing_register
+        //TODO is main_addressing_register the correct place to go?
+        assert(dest == 0);  // only support gr
+        rd = reg_imm_0;
+        rs2 = reg_1;
+        int operand1 = main_addressing_register[rs2];
+        //we want arithmetic shift right as below, but this is compiler dependent. Not in c++ std
+        //int shift_result = operand1 >> reg_imm_1;
+        //so instead of above, we do the following for portability:
+        int shift_result = operand1 / (1<<reg_imm_1);
+        main_addressing_register[rd] = shift_result;
+        (*PC)++;
+    } else if (opcode == CTRL_SHIFTI_L) {      // SHIFT_L
+        assert(dest == 0);  // only support gr
+        rd = reg_imm_0;
+        rs2 = reg_1;
+        int operand1 = main_addressing_register[rs2];
+        //we want arithmetic shift right as below, but this is compiler dependent. Not in c++ std
+        //int shift_result = operand1 >> reg_imm_1;
+        //so instead of above, we do the following for portability:
+        int shift_result = operand1 <<reg_imm_1;
+        main_addressing_register[rd] = shift_result;
+        (*PC)++;
+    } else if (opcode == CTRL_ANDI) {      // AND
+        rd = reg_imm_0;
+        rs2 = reg_1;
+        int operand1 = main_addressing_register[rs2];
+        int and_result = operand1 & (1<<reg_imm_1);
+        main_addressing_register[rd] = and_result;
+        (*PC)++;
     } else {
         fprintf(stderr, "main control instruction opcode error.\n");
         exit(-1);
