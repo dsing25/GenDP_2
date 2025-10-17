@@ -1,3 +1,4 @@
+#NOTE if you update anything in this file, you must also update in the sys_def.h
 reg = 0
 gr = 1
 SPM = 2
@@ -29,7 +30,6 @@ none = 14
 halt = 15
 shifti_r = 16
 shifti_l = 17
-MIN = 18
-AND = 19
+AND = 18
 # these instruction tags here are for data movement
 # use sys_def.h for compute tags

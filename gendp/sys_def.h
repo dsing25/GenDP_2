@@ -100,8 +100,7 @@
 #define CTRL_HALT 15
 #define CTRL_SHIFTI_R 16
 #define CTRL_SHIFTI_L 17
-#define CTRL_MIN 18
-#define CTRL_AND 19
+#define CTRL_ANDI 18
 
 
 #endif

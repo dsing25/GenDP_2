@@ -505,6 +505,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         //so instead of above, we do the following for portability:
         int shift_result = operand1 / (1<<reg_imm_1);
         addr_regfile_unit->buffer[rd] = shift_result;
+        (*PC)++;
     } else if (opcode == CTRL_SHIFTI_L) {      // SHIFT_L
         assert(dest == 0);  // only support gr
         rd = reg_imm_0;
@@ -515,10 +516,14 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         //so instead of above, we do the following for portability:
         int shift_result = operand1 <<reg_imm_1;
         addr_regfile_unit->buffer[rd] = shift_result;
-    } else if (opcode == CTRL_MIN) {      // MIN
-        TODO
-    } else if (opcode == CTRL_AND) {      // AND
-        TODO
+        (*PC)++;
+    } else if (opcode == CTRL_ANDI) {      // AND
+        rd = reg_imm_0;
+        rs2 = reg_1;
+        int operand1 = addr_regfile_unit->buffer[rs2];
+        int and_result = operand1 & (1<<reg_imm_1);
+        addr_regfile_unit->buffer[rd] = and_result;
+        (*PC)++;
     } else {
         fprintf(stderr, "PE[%d] control instruction opcode error.\n", id);
         exit(-1);
