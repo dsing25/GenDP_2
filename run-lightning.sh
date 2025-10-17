@@ -1,5 +1,6 @@
 #!/bin/bash
 set -x
+set -e	
 
 rm -f success.txt
 
