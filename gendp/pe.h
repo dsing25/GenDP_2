@@ -29,6 +29,10 @@ class pe {
         // ld/st data
         int load_data, store_data;
         unsigned long store_instruction[COMP_INSTR_BUFFER_GROUP_SIZE], load_instruction[COMP_INSTR_BUFFER_GROUP_SIZE];
+        
+        //synchronization signaling
+        bool ready_in;
+        bool ready_out;
 
     private:
 
@@ -39,6 +43,8 @@ class pe {
         // ld/st addr
         int comp_reg_load_addr, comp_reg_store_addr, addr_reg_load_addr, addr_reg_store_addr, SPM_load_addr, SPM_store_addr;
         int comp_instr_load_addr, comp_instr_store_addr;
+        //synchronization signalling
+        bool wait;
         
         // TODO: Put conponents below to private later
         comp_instr_buffer *comp_instr_buffer_unit = new comp_instr_buffer(COMP_INSTR_BUFFER_GROUP_NUM);
