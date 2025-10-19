@@ -1,5 +1,6 @@
 #!/bin/bash
 set -x
+set -e
 
 rm -f success.txt
 
@@ -18,7 +19,7 @@ make clean
 make -j
 ./ksw-test -i $GenDP_WORK_DIR/gendp-datasets/bsw_147_1m_8bit_input_character.txt -o $GenDP_WORK_DIR/gendp-datasets/bsw_147_1m_8bit_output.txt -x -n 2000
 cd ../../
-bash scripts/bsw_throughput.sh 2000 | tee >(grep verified >> ../success.txt)
+bash scripts/bsw_throughput.sh 2000 | tee >(grep CUPS >> ../success.txt)
 
 ### Chain   >1s
 CHAIN_DATA_FILE="${GenDP_WORK_DIR}/backtest-datasets/chain/in-3.txt"
@@ -29,7 +30,7 @@ make -j print=1
 ./chain -i $CHAIN_DATA_FILE -o $GenDP_WORK_DIR/gendp-datasets/chain_output.txt -s 4 -n 1
 cd ../../
 mkdir -p chain_sim_results
-bash scripts/chain_throughput.sh 1 $CHAIN_DATA_FILE | tee >(grep verified >> ../success.txt)
+bash scripts/chain_throughput.sh 1 $CHAIN_DATA_FILE | tee >(grep CUPS >> ../success.txt)
 
 ### PairHMM   
 INPUT_SIZE_PHMM=64
@@ -40,7 +41,7 @@ make -j
 ./pairhmm $GenDP_WORK_DIR/backtest-datasets/phmm/tiny.in $INPUT_SIZE_PHMM > $GenDP_WORK_DIR/gendp-datasets/phmm_large_output.txt 2> $GenDP_WORK_DIR/gendp-datasets/phmm_large_app.txt
 cd ../../
 mkdir -p phmm_sim_results
-bash scripts/phmm_throughput.sh $INPUT_SIZE_PHMM | tee >(grep verified >> ../success.txt)
+bash scripts/phmm_throughput.sh $INPUT_SIZE_PHMM | tee >(grep CUPS >> ../success.txt)
  
 ### POA     26s
 INPUT_SIZE_POA=1
@@ -52,7 +53,7 @@ make clean
 make -j
 ./run.sh > log.txt 2>&1
 cd ../../
-bash scripts/poa_throughput.sh | tee >(grep verified >> ../success.txt)
+bash scripts/poa_throughput.sh | tee >(grep CUPS >> ../success.txt)
 
 cd $GenDP_WORK_DIR
 cat success.txt
