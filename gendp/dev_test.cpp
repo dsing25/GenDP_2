@@ -151,9 +151,64 @@ void gbv_core_v2() { // does 16 individual instructions
     std::cout << "Mh vector = 0x" << std::hex << Mh << "\n";
 }
 
+void test_popcount() {
+    alu_32 alu;
+    unsigned int test_vals[] = {0x0, 0x1, 0xF, 0xFF, 0x12345678, 0xFFFFFFFF, 0x80000000};
+    int num_tests = sizeof(test_vals) / sizeof(test_vals[0]);
+
+    std::cout << "Testing POPCOUNT:\n";
+    for (int i = 0; i < num_tests; ++i) {
+        int val = test_vals[i];
+        int result = alu.execute_4input(val, 0, 0, 0, POPCOUNT);
+        std::cout << "POPCOUNT(0x" << std::hex << val << ") = " << std::dec << result << "\n";
+    }
+    std::cout << std::endl;
+}
+
+void test_popcount_all() {
+    alu_32 alu;
+
+    // Test values for 32-bit and 8-bit lanes
+    unsigned int test_vals[] = {0x0, 0x1, 0xF, 0xFF, 0x12345678, 0xFFFFFFFF, 0x80000000};
+    int num_tests = sizeof(test_vals) / sizeof(test_vals[0]);
+
+    std::cout << "Testing POPCOUNT (execute):\n";
+    for (int i = 0; i < num_tests; ++i) {
+        unsigned int val = test_vals[i];
+        int result = alu.execute(val, 0, POPCOUNT);
+        std::cout << "POPCOUNT (execute) 0x" << std::hex << val << " = " << std::dec << result << "\n";
+    }
+    std::cout << std::endl;
+
+    std::cout << "Testing POPCOUNT (execute_8bit):\n";
+    for (int i = 0; i < num_tests; ++i) {
+        unsigned int val = test_vals[i];
+        int result = alu.execute_8bit(val, 0, POPCOUNT);
+        std::cout << "POPCOUNT (execute_8bit) 0x" << std::hex << val << " = " << std::dec << result << "\n";
+    }
+    std::cout << std::endl;
+
+    std::cout << "Testing POPCOUNT (execute_4input):\n";
+    for (int i = 0; i < num_tests; ++i) {
+        unsigned int val = test_vals[i];
+        int result = alu.execute_4input(val, 0, 0, 0, POPCOUNT);
+        std::cout << "POPCOUNT (execute_4input) 0x" << std::hex << val << " = " << std::dec << result << "\n";
+    }
+    std::cout << std::endl;
+
+    std::cout << "Testing POPCOUNT (execute_4input_8bit):\n";
+    for (int i = 0; i < num_tests; ++i) {
+        unsigned int val = test_vals[i];
+        int result = alu.execute_4input_8bit(val, val, val, val, POPCOUNT);
+        std::cout << "POPCOUNT (execute_4input_8bit) 0x" << std::hex << val << " = " << std::dec << result << "\n";
+    }
+    std::cout << std::endl;
+}
 int main() {
-    gbv_core_v1();
-    gbv_core_v2();
+    test_popcount_all();
+    //test_popcount();
+   // gbv_core_v1();
+    //gbv_core_v2();
     return 0;
 }
 

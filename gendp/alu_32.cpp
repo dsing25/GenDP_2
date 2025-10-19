@@ -67,6 +67,12 @@ int alu_32::execute_8bit(int input_0, int input_1, int op) {
 				output_simd[i] = ~input_0_simd[i];
 			break;
 			}
+		case POPCOUNT: {
+ // doesnt work will debug later for values larger than 0xFF
+            for (i = 0; i < SIMD_WIDTH8; i++)
+                output_simd[i] = __builtin_popcount(static_cast<unsigned char>(input_0_simd[i]));
+            break;
+        }
 		case INVALID: {
 			for (i=0; i<SIMD_WIDTH8; i++)
 				output_simd[i] = 0;
@@ -178,6 +184,10 @@ int alu_32::execute(int input_0, int input_1, int op) {
 			out = 0;
 			break;
 		}
+		case POPCOUNT: {
+            out = __builtin_popcount(static_cast<unsigned int>(input_0));
+            break;
+        }
 		default: {
 			out = 0;
 			break;
@@ -266,6 +276,16 @@ int alu_32::execute_4input_8bit(int input_0, int input_1, int input_2, int input
 				output_simd[i] = 0;
 			break;
 		}
+
+		case POPCOUNT: {
+// doesnt work, will debug later for values larger than 0xFF
+            for (i = 0; i < SIMD_WIDTH8; i++)
+                output_simd[i] = __builtin_popcount(static_cast<unsigned char>(input_0_simd[i])) +
+                                 __builtin_popcount(static_cast<unsigned char>(input_1_simd[i])) +
+                                 __builtin_popcount(static_cast<unsigned char>(input_2_simd[i])) +
+                                 __builtin_popcount(static_cast<unsigned char>(input_3_simd[i]));
+            break;
+        }
 	}
 	memcpy(&output, output_simd, SIMD_WIDTH8 * sizeof(int8_t));
 	return output;
@@ -372,6 +392,10 @@ int alu_32::execute_4input(int input_0, int input_1, int input_2, int input_3, i
 		}
 		case BWISE_NOT: {
 			out = ~input_0;
+			break;
+		}
+		case POPCOUNT: {
+			out = __builtin_popcount(input_0);
 			break;
 		}		
 		case INVALID: {
