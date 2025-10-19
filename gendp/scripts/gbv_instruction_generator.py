@@ -15,11 +15,16 @@ out_instr = 10
 fifo = [11, 12]
 
 # define register file elsewhere - for reference
-# parents:0, offset:1, scorebefore:2, 
+# parents:0, scorebefore:1, index:2, 
 # Eq:5 , VN:6 , VP:7 , hinN:8, hinP:9, Xh:10, Xv:11, Ph:12, Mh:13, tempMh:14, tempPh:15, scoreEnd:16
-# temp1:17, temp2:18, temp3:19, gr1: 20, gr2: 21, gr3: 22, gr4: 23
-# 
+# temp1:17, temp2:18, temp3:19, temp4:20, child_vn:21, child_vp:22, child_sbefore:23, child_send:24, 
+# temp9:25, temp10:26, temp11:27
 
+
+#PE ARRAY General Registers?
+# gr1 pe group size, gr2 is input buffer index, gr3 is # of parents, gr4 is child index, gr5 is SPM index
+
+# data movement opcodes below
 add = 0
 sub = 1
 addi = 2
@@ -36,12 +41,7 @@ jump = 12
 set_PC = 13
 none = 14
 halt = 15
-BWISE_OR 17
-BWISE_AND 18
-BWISE_NOT 19
-BWISE_XOR 20
-LSHIFT_1  21
-RSHIFT_WORD 22
+
 
 BSW_COMPUTE_INSTRUCTION_NUM = 32
 
@@ -125,31 +125,61 @@ def gbv_compute_v1():
     f.close()
 
 def gbv_compute_v2(): # 16 instruction trace
-    
+    # there's 2 threads to deal with for Comp Unit
+    # OPCODES: add 0, sub 1, mult 2, carry 3, borrow 4, max 5, min 6, lshift 7, rshift 8, copy 9, match_score 10, 
+    # log2_lut 11, log_sum_lut 12, comp_larger 13, comp_equal 14, invalid 15, halt 16, or 17, and 18, not 19, xor 20, lshift_1 21, rshift_word 22, add_i 23, copy_i 24, popcount 25
     f = open("instructions/gbv/compute_instruction_v2.txt", "w")
 
-    f.write(compute_instruction(BWISE_OR, halt, halt, Eq, VN, 0, 0, 0, 0, Xv))  # Xv = Eq | VN
-    f.write(compute_instruction(BWISE_OR, halt, halt, Eq, hinN, 0, 0, 0, 0, Eq))  # Eq = Eq | hinN
-
-    f.write(compute_instruction(BWISE_AND, COPY, ADDITION, Eq, VP, VP, 0, 0, 0, temp2)) # temp2 = ((Eq & VP) copied, then + VP)
-    f.write(compute_instruction(BWISE_XOR, COPY, BWISE_OR, temp2, VP, Eq, 0, 0, 0, Xh))  # Xh = (temp2 ^ VP) copied, then OR with Eq
+    # Cycle 0
+    f.write(compute_instruction(BWISE_OR, INVALID, INVALID, Eq, VN, 0, 0, 0, 0, Xv))  # Xv = Eq | VN
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    f.write(compute_instruction(BWISE_OR, INVALID, INVALID, Eq, hinN, 0, 0, 0, 0, Eq))  # Eq = Eq | hinN
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    f.write(compute_instruction(BWISE_AND, COPY, ADDITION, Eq, VP, VP, 0, 0, 0, temp1)) # temp1 = ((Eq & VP) copied, then + VP)
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    f.write(compute_instruction(BWISE_XOR, COPY, BWISE_OR, temp1, VP, Eq, 0, 0, 0, Xh))  # Xh = (temp1 ^ VP) copied, then OR with Eq
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
     
     f.write(compute_instruction(BWISE_OR, COPY, BWISE_NOT, VP, Xh, 0, 0, 0, 0, temp2)) # temp2 = (~(VP | Xh)) after copy
-    f.write(compute_instruction(BWISE_OR, halt, halt, VN, temp2, 0, 0, 0, 0, Ph))     # Ph = VN | temp2                                    
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    f.write(compute_instruction(BWISE_OR, INVALID, INVALID, VN, temp2, 0, 0, 0, 0, Ph))     # Ph = VN | temp2        
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))                             
     
-    f.write(compute_instruction(BWISE_AND, halt, halt, VP, Xh, 0, 0, 0, 0, Mh))  # Mh = VP & Xh
+    f.write(compute_instruction(BWISE_AND, INVALID, INVALID, VP, Xh, 0, 0, 0, 0, Mh))  # Mh = VP & Xh
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
     f.write(compute_instruction(LSHIFT_1, COPY, BWISE_OR, Mh, 0, hinN, 0, 0, 0, tempMh)) # tempMh = ((Mh << 1) copied, then OR with hinN)
-
-    f.write(compute_instruction(RSHIFT_WORD, halt, halt, Mh, 0, 0, 0, 0, 0, hinN))  # hinN = Mh >> (word)
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    #Cycle 8 below
+    f.write(compute_instruction(RSHIFT_WORD, INVALID, INVALID, Mh, 0, 0, 0, 0, 0, hinN))  # hinN = Mh >> (word)
     f.write(compute_instruction(LSHIFT_1, COPY, BWISE_OR, Ph, 0, hinP, 0, 0, 0, tempPh)) # tempPh = ((Ph << 1) copied, then OR with hinP)
 
-    f.write(compute_instruction(BWISE_OR, COPY, BWISE_NOT, Xv, tempPh, 0, 0, 0, 0, temp3)) # temp3 = (~(Xv | tempPh)) after copy
-    f.write(compute_instruction(BWISE_OR, halt, halt, tempMh, temp3, 0, 0, 0, 0, VP))    # slice.VP = tempMh | temp3
+    f.write(compute_instruction(BWISE_OR, COPY, BWISE_NOT, Xv, tempPh, 0, 0, 0, 0, temp1)) # temp1 = (~(Xv | tempPh)) after copy
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    f.write(compute_instruction(BWISE_OR, INVALID, INVALID, tempMh, temp1, 0, 0, 0, 0, VP))    # slice.VP = tempMh | temp1
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
-    f.write(compute_instruction(RSHIFT_WORD, halt, halt, Ph, 0, 0, 0, 0, 0, hinP))  # hinP = Ph >> (word), 
-    f.write(compute_instruction(BWISE_AND, halt, halt, tempPh, Xv, 0, 0, 0, 0, VN))  # slice.VN = tempPh & Xv
-    f.write(compute_instruction(SUBTRACTION, halt, halt, scoreEnd, hinN, 0, 0, 0, 0, scoreEnd))  # scoreEnd = scoreEnd - hinN
-    f.write(compute_instruction(ADDITION, halt, halt, scoreEnd, hinP, 0, 0, 0, 0, scoreEnd))  # scoreEnd = scoreEnd + hinP
+    f.write(compute_instruction(RSHIFT_WORD, INVALID, INVALID, Ph, 0, 0, 0, 0, 0, hinP))  # hinP = Ph >> (word), 
+    f.write(compute_instruction(BWISE_AND, INVALID, INVALID, tempPh, Xv, 0, 0, 0, 0, VN))  # slice.VN = tempPh & Xv
+
+    f.write(compute_instruction(SUBTRACTION, INVALID, INVALID, scoreEnd, hinN, 0, 0, 0, 0, scoreEnd))  # scoreEnd = scoreEnd - hinN
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    f.write(compute_instruction(ADDITION, INVALID, INVALID, scoreEnd, hinP, 0, 0, 0, 0, scoreEnd))  # scoreEnd = scoreEnd + hinP
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    f.write(compute_instruction(POPCOUNT, POPCOUNT, SUBTRACTION, VP, 0, 0, 0, VN, 0, temp1))  # temp1 = popcount(VP) - popcount(VN)
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    f.write(compute_instruction(ADDITION, INVALID, ADDITION, temp1, scoreBefore, scoreEnd, 0, 0, 0, scoreEnd)) # scoreEnd = (temp1 + scorebefore) + scoreEnd
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) # cycle 15 finished here
+    # another instruction here does a popcount. lets say it takes 2 cycles. probably will take a lot more... unfortunately 
+    # add a copy instruction for vp/vn/
+    f.write(compute_instruction(COPY, INVALID, INVALID, VN, 0, 0, 0, 0, 0, child_vn)) # copy vn into child_vn
+    f.write(compute_instruction(COPY, INVALID, INVALID, VP, 0, 0, 0, 0, 0, child_vp)) # copy vp into child_vp
+    # merge is done here
+    # minimum of 
+
+
+    # added new merge operations
+    # parents come into regular registers, do a compute based on 
+    
 
     f.close()
 
