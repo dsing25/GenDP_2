@@ -524,6 +524,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         int and_result = operand1 & (1<<reg_imm_1);
         main_addressing_register[rd] = and_result;
         (*PC)++;
+    } else if (opcode == CTRL_WAIT) {
+        wait = true;
+    } else if (opcode == CTRL_SEND_READY) {
+        ready_out = true;
     } else {
         fprintf(stderr, "main control instruction opcode error.\n");
         exit(-1);
@@ -772,6 +776,7 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                 printf("PE[%d]\t", i);
 #endif
                 pe_unit[i]->run(simd);
+                //zkn pass through systolic connections
                 if (i < 3) {
                     pe_unit[i+1]->load_data = pe_unit[i]->store_data;
                     pe_unit[i+1]->load_instruction[0] = pe_unit[i]->store_instruction[0];
@@ -779,8 +784,12 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                 } else if (i == 3) {
                     load_data = pe_unit[3]->store_data;
                 }
+                //zkn pass through the synchronization
+                pe_readies_in[i] = pe_unit[i]->ready_out;
+                pe_unit[i]->ready_in = ready_out;
             }
         } else if (setting == PE_64_SETTING) {
+            //TODO note that WAIT/READY is not implemented for 64 setting
             for (j = 0; j < 16; j++) {
                 if (j > 0) {
                     if (from_fifo) pe_unit[j*4]->load_data = store_data;
@@ -806,11 +815,16 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         }
         from_fifo = 0;
         
-        if (main_instruction_setting == MAIN_INSTRUCTION_1)
-            decode_output(main_instruction_buffer[old_PC][1], &old_PC, simd, setting, main_instruction_setting);
-        else if (main_instruction_setting == MAIN_INSTRUCTION_2)
-            decode_output(main_instruction_buffer[old_PC][0], &old_PC, simd, setting, main_instruction_setting);
+        if (wait) {
+            wait = !(pe_readies_in[0] && pe_readies_in[1] && pe_readies_in[2] && pe_readies_in[3]);
+        } else {
+            if (main_instruction_setting == MAIN_INSTRUCTION_1)
+                decode_output(main_instruction_buffer[old_PC][1], &old_PC, simd, setting, main_instruction_setting);
+            else if (main_instruction_setting == MAIN_INSTRUCTION_2)
+                decode_output(main_instruction_buffer[old_PC][0], &old_PC, simd, setting, main_instruction_setting);
+        }
 
+        //zkn TODO I don't know if these should be in the above else or not
         main_addressing_register[13] = pe_unit[0]->get_gr_10() && pe_unit[1]->get_gr_10();
         for (i = 2; i < setting; i++)
             main_addressing_register[13] = main_addressing_register[13] && pe_unit[i]->get_gr_10();
