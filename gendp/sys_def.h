@@ -80,6 +80,7 @@
 #define RSHIFT_WORD 22  // Right shift by 31 bits - can be modified based on word size
 #define ADD_I 23 // Dummy TODO implement
 #define COPY_I 24 // Dummy TODO implement
+#define POPCOUNT 25 
 
 // CTRL Opcode
 #define CTRL_ADD 0
