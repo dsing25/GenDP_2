@@ -118,6 +118,13 @@ bash run-gendp-simulation.sh -1 -1 -1 2>&1 | tee gendp-simulation-log.txt       
 python3 $GenDP_WORK_DIR/profile-gendp-simulation-log.py gendp-simulation-log.txt
 ```
 
+### TESTING OF GENDPV2
+Additional backtesting scripts are included for gendp v2. First the data directory must be fetched
+as in Step 2 of this readme. Then you can run `bash run-lightning.sh` to just run phmm (about 10s).
+Before merging to main branch or creating a merge request, you must run:
+`bash run-backtest.sh` which will run small datasets for all kernels. It will print out "verified"
+if it was successfull.
+
 ### Issues and Acknowledgment
 
 We appreciate any feedback and suggestions from the community. Feel free to raise an issue or submit a pull request on Github. For assistance in using GenDP, please contact: Yufeng Gu (yufenggu AT umich DOT edu).

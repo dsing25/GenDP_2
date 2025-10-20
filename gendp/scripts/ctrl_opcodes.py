@@ -10,7 +10,7 @@ in_port = 7
 in_instr = 8
 out_port = 9
 out_instr = 10
-fifo = [11, 12]
+fifo = [11, 12, 13, 14]
 
 #DATA MOVEMENT OPCODES
 add = 0
@@ -29,9 +29,9 @@ jump = 12
 set_PC = 13
 none = 14
 halt = 15
-shift_r = 16 #TODO implement
-shift_l = 17 #TODO implement
-MIN = 18 #TODO implement
-AND = 19 #TODO implement
+shift_r = 16
+shift_l = 17
+MIN = 18
+AND = 19
 # these instruction tags here are for data movement
 # use sys_def.h for compute tags
