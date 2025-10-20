@@ -1,3 +1,4 @@
+#NOTE if you update anything in this file, you must also update in the sys_def.h
 #MEMORY DESTS
 reg = 0
 gr = 1
@@ -29,9 +30,18 @@ jump = 12
 set_PC = 13
 none = 14
 halt = 15
-shift_r = 16
-shift_l = 17
-MIN = 18
-AND = 19
+shifti_r = 16
+shifti_l = 17
+AND = 18
+'''
+if pe, wait until recieves broadcasted ready from pe_array
+if pe_array, wait until all pes have finished and sent ready
+'''
+wait = 19
+'''
+if a pe, sends a ready bit to the pe_array
+if pe_array, broadcasts ready bit to all pes
+'''
+send_ready = 20
 # these instruction tags here are for data movement
 # use sys_def.h for compute tags
