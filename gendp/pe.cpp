@@ -60,19 +60,42 @@ void pe::run(int simd) {
         printf("\n");
 #endif
         for (i = 0; i < 6; i++) {
-            regfile_unit->read_addr[i] = input_addr[0][i];
+            regfile_unit->read_addr[i] =  input_addr[0][i];
             regfile_unit->read_addr[i+6] = input_addr[1][i];
         }
         regfile_unit->read(regfile_unit->read_addr, regfile_unit->read_data);
         regfile_unit->write_addr[0] = output_addr[0];
         regfile_unit->write_addr[1] = output_addr[1];
 
+        int cu_inputs[2][6];
+        for (i = 0; i < 6; i++){
+            cu_inputs[0][i] = regfile_unit->read_data[i];
+            cu_inputs[1][i] = regfile_unit->read_data[6+i];
+        }
+        //Patch up for immediates
+        if (is_immediate_opcode(op[0][0])){
+            cu_inputs[0][0] = input_addr[0][0];
+            op[0][0] = get_base_opcode(op[0][0]);
+        }
+        if (is_immediate_opcode(op[0][1])){
+            cu_inputs[0][1] = input_addr[0][4];
+            op[0][1] = get_base_opcode(op[0][1]);
+        }
+        if (is_immediate_opcode(op[1][0])){
+            cu_inputs[1][0] = input_addr[1][0];
+            op[1][0] = get_base_opcode(op[1][0]);
+        }
+        if (is_immediate_opcode(op[1][1])){
+            cu_inputs[1][1] = input_addr[1][4];
+            op[1][1] = get_base_opcode(op[1][1]);
+        }
+
         if (simd) {
-            regfile_unit->write_data[0] = cu_32.execute_8bit(op[0], regfile_unit->read_data);
-            regfile_unit->write_data[1] = cu_32.execute_8bit(op[1], regfile_unit->read_data + 6);        
+            regfile_unit->write_data[0] = cu_32.execute_8bit(op[0], cu_inputs[0]);
+            regfile_unit->write_data[1] = cu_32.execute_8bit(op[1], cu_inputs[1]);        
         } else {
-            regfile_unit->write_data[0] = cu_32.execute(op[0], regfile_unit->read_data);
-            regfile_unit->write_data[1] = cu_32.execute(op[1], regfile_unit->read_data + 6);   
+            regfile_unit->write_data[0] = cu_32.execute(op[0], cu_inputs[0]);
+            regfile_unit->write_data[1] = cu_32.execute(op[1], cu_inputs[1]);   
         }
 
 

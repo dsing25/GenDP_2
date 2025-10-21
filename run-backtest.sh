@@ -4,7 +4,7 @@ set -e
 
 rm -f success.txt
 
-#export GenDP_WORK_DIR=`pwd`
+export GenDP_WORK_DIR=`pwd`
 
 
 INPUT_SIZE_CHAIN=$1
@@ -21,39 +21,39 @@ make -j
 cd ../../
 bash scripts/bsw_throughput.sh 2000 | tee >(grep CUPS >> ../success.txt)
 
-### Chain   >1s
-CHAIN_DATA_FILE="${GenDP_WORK_DIR}/backtest-datasets/chain/in-3.txt"
-cd $GenDP_WORK_DIR/gendp
-cd kernel/chain
-make clean
-make -j print=1
-./chain -i $CHAIN_DATA_FILE -o $GenDP_WORK_DIR/gendp-datasets/chain_output.txt -s 4 -n 1
-cd ../../
-mkdir -p chain_sim_results
-bash scripts/chain_throughput.sh 1 $CHAIN_DATA_FILE | tee >(grep CUPS >> ../success.txt)
-
-### PairHMM   
-#INPUT_SIZE_PHMM=64
+#### Chain   >1s
+#CHAIN_DATA_FILE="${GenDP_WORK_DIR}/backtest-datasets/chain/in-3.txt"
 #cd $GenDP_WORK_DIR/gendp
-#cd kernel/PairHMM
+#cd kernel/chain
+#make clean
+#make -j print=1
+#./chain -i $CHAIN_DATA_FILE -o $GenDP_WORK_DIR/gendp-datasets/chain_output.txt -s 4 -n 1
+#cd ../../
+#mkdir -p chain_sim_results
+#bash scripts/chain_throughput.sh 1 $CHAIN_DATA_FILE | tee >(grep CUPS >> ../success.txt)
+#
+#### PairHMM   
+##INPUT_SIZE_PHMM=64
+##cd $GenDP_WORK_DIR/gendp
+##cd kernel/PairHMM
+##make clean
+##make -j
+##./pairhmm $GenDP_WORK_DIR/backtest-datasets/phmm/tiny.in $INPUT_SIZE_PHMM > $GenDP_WORK_DIR/gendp-datasets/phmm_large_output.txt 2> $GenDP_WORK_DIR/gendp-datasets/phmm_large_app.txt
+##cd ../../
+##mkdir -p phmm_sim_results
+##bash scripts/phmm_throughput.sh $INPUT_SIZE_PHMM | tee >(grep CUPS >> ../success.txt)
+# 
+#### POA     26s
+#INPUT_SIZE_POA=1
+#cd $GenDP_WORK_DIR/gendp
+#python3 scripts/poa_generate_script.py scripts/poa_throughput.sh kernel/poaV2/run.sh $INPUT_SIZE_POA 1
+#python3 scripts/preprocess_poa_datasets.py $GenDP_WORK_DIR/backtest-datasets/poa_input.fasta $GenDP_WORK_DIR/backtest-datasets/poa/
+#cd kernel/poaV2
 #make clean
 #make -j
-#./pairhmm $GenDP_WORK_DIR/backtest-datasets/phmm/tiny.in $INPUT_SIZE_PHMM > $GenDP_WORK_DIR/gendp-datasets/phmm_large_output.txt 2> $GenDP_WORK_DIR/gendp-datasets/phmm_large_app.txt
+#./run.sh > log.txt 2>&1
 #cd ../../
-#mkdir -p phmm_sim_results
-#bash scripts/phmm_throughput.sh $INPUT_SIZE_PHMM | tee >(grep CUPS >> ../success.txt)
- 
-### POA     26s
-INPUT_SIZE_POA=1
-cd $GenDP_WORK_DIR/gendp
-python3 scripts/poa_generate_script.py scripts/poa_throughput.sh kernel/poaV2/run.sh $INPUT_SIZE_POA 1
-python3 scripts/preprocess_poa_datasets.py $GenDP_WORK_DIR/backtest-datasets/poa_input.fasta $GenDP_WORK_DIR/backtest-datasets/poa/
-cd kernel/poaV2
-make clean
-make -j
-./run.sh > log.txt 2>&1
-cd ../../
-bash scripts/poa_throughput.sh | tee >(grep CUPS >> ../success.txt)
+#bash scripts/poa_throughput.sh | tee >(grep CUPS >> ../success.txt)
 
 cd $GenDP_WORK_DIR
 cat success.txt

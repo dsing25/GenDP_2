@@ -1,4 +1,8 @@
 def compute_instruction(op_0, op_1, op_2, in_addr_0, in_addr_1, in_addr_2, in_addr_3, in_addr_4, in_addr_5, out_addr):
+    '''
+    in_addr_0 can be immediate
+    in_addr_4 can be immediate
+    '''
     instr = "0" * 14 \
             + "{:0>5b}".format(op_0) \
             + "{:0>5b}".format(op_1) \

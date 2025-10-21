@@ -82,6 +82,16 @@
 #define COPY_I 24 // Dummy TODO implement
 #define POPCOUNT 25 
 
+inline bool is_immediate_opcode(int opcode) {
+    return (opcode == ADD_I || opcode == COPY_I);
+}
+
+inline int get_base_opcode(int opcode) {
+    if (opcode == ADD_I) return ADDITION;
+    if (opcode == COPY_I) return COPY;
+    return opcode;
+}
+
 // CTRL Opcode
 #define CTRL_ADD 0
 #define CTRL_SUB 1
