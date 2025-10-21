@@ -1,3 +1,5 @@
+#ifndef PE_ARRAY_H
+#define PE_ARRAY_H
 #include "pe.h"
 #include "FIFO.h"
 
@@ -56,3 +58,5 @@ class pe_array {
         bool wait;
 
 };
+
+#endif // PE_ARRAY_H

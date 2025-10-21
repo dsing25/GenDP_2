@@ -11,7 +11,7 @@ HEADER  =
 LIBS    = libsimulator.a 
 LINKFLAGS = -fsanitize=address
 
-OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o
+OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o utils.o
 
 ifeq ($(debug),1)
 CXXFLAGS+= -DDEBUG
