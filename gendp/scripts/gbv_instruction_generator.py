@@ -215,12 +215,79 @@ def gbv_compute_v2(): # 16 instruction trace
     f.close()
 
 def pe_0_instruction():
-    
+    # dest, src, reg_immBar_0, reg_auto_increase_0, imm_0, reg_0, reg_immBar_1, reg_auto_increase_1, imm_1, reg_1, opcode
     f = open("instructions/gbv/pe_0_instruction.txt", "w")
 
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 3, 0, 0, 0, 0, 0, mv))                             # gr[3] = in
 
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 3, mv))                                # reg[0] = SPM[gr[3]]
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 3, 0, mv))                            # out = gr[3]
+
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 4, 0, mv))                            # out = gr[4]
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 4, 0, 0, 0, 0, 0, mv))                             # gr[4] = in
+
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 1, 0, 0, 1, 0, 4, mv))                                # reg[1] = SPM[gr[4]++]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 2, 0, 0, 1, 0, 4, mv))                                # reg[2] = SPM[gr[4]++]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 3, 0, 0, 1, 0, 4, mv))                                # reg[3] = SPM[gr[4]++]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 1, 0, 4, mv))                                # reg[4] = SPM[gr[4]++]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 11, 0, 0, 1, 0, 4, mv))                                # reg[11] = SPM[gr[4]++]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+
+    f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 12, 0, mv))                            # out = reg[12]
+    f.write(data_movement_instruction(reg, in_port, 0, 0, 11, 0, 0, 0, 0, 0, mv))                             # reg[11] = in
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 1, 0, 0, 0, 230, 21, bge))                                 # bge (line 230?) reg[21] 2
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+
+
+    f.write(data_movement_instruction(SPM, gr, 0, 0, 7, 0, 0, 1, 0, 4, mv))                                 # gr[7] = SPM[gr[4]++]
+
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 3, 0, 0, 0, 272, 8, mv))                              # reg[3] = SPM[gr[3]]
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 7, 0, 0, 1, 0, 4, mv))                                 # gr[7] = SPM[gr[4]++]
+
+
+    f.write(data_movement_instruction(SPM, in_port, 0, 1, 0, 3, 0, 0, 0, 0, mv))                            # SPM[gr[3]++] = in
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                             # gr[1] = in
+    f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 5, 0, mv))                           # out = reg[5]
+    f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, 0, 0, 0, 0, 0, 0, mv))                       # ir[0] = in
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 5, 0, mv))                            # out = gr[1]                   
 
     f.close()
+
+
+
+def pe_1_instruction():
+
+f = open("instructions/gbv/pe_1_instruction.txt", "w")
+
+
+
+f.close()
+
+
+
+def pe_2_instruction():
+
+f = open("instructions/gbv/pe_2_instruction.txt", "w")
+
+
+
+f.close()
+
+
+
+def pe_3_instruction():
+
+f = open("instructions/gbv/pe_3_instruction.txt", "w")
+
+
+
+f.close()
 
 if not os.path.exists("instructions/gbv"):
     os.makedirs("instructions/gbv")
