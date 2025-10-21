@@ -17,6 +17,19 @@ def compute_instruction(op_0, op_1, op_2, in_addr_0, in_addr_1, in_addr_2, in_ad
 
 def data_movement_instruction(dest, src, reg_immBar_0, reg_auto_increase_0, imm_0, reg_0,
                               reg_immBar_1, reg_auto_increase_1, imm_1, reg_1, opcode):
+    '''
+    0 dest
+    1 src
+    2 reg_immBar_0
+    3 reg_auto_increase_0
+    4 imm_0
+    5 reg_0
+    6 reg_immBar_1
+    7 reg_auto_increase_1
+    8 imm_1
+    9 reg_1
+   10 opcode
+    '''
     instr = "0" * 18 \
             + "{:0>4b}".format(dest) \
             + "{:0>4b}".format(src) \
