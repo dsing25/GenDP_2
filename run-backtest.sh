@@ -4,7 +4,7 @@ set -e
 
 rm -f success.txt
 
-GenDP_WORK_DIR=$(pwd)
+#export GenDP_WORK_DIR=`pwd`
 
 
 INPUT_SIZE_CHAIN=$1
@@ -33,15 +33,15 @@ mkdir -p chain_sim_results
 bash scripts/chain_throughput.sh 1 $CHAIN_DATA_FILE | tee >(grep CUPS >> ../success.txt)
 
 ### PairHMM   
-INPUT_SIZE_PHMM=64
-cd $GenDP_WORK_DIR/gendp
-cd kernel/PairHMM
-make clean
-make -j
-./pairhmm $GenDP_WORK_DIR/backtest-datasets/phmm/tiny.in $INPUT_SIZE_PHMM > $GenDP_WORK_DIR/gendp-datasets/phmm_large_output.txt 2> $GenDP_WORK_DIR/gendp-datasets/phmm_large_app.txt
-cd ../../
-mkdir -p phmm_sim_results
-bash scripts/phmm_throughput.sh $INPUT_SIZE_PHMM | tee >(grep CUPS >> ../success.txt)
+#INPUT_SIZE_PHMM=64
+#cd $GenDP_WORK_DIR/gendp
+#cd kernel/PairHMM
+#make clean
+#make -j
+#./pairhmm $GenDP_WORK_DIR/backtest-datasets/phmm/tiny.in $INPUT_SIZE_PHMM > $GenDP_WORK_DIR/gendp-datasets/phmm_large_output.txt 2> $GenDP_WORK_DIR/gendp-datasets/phmm_large_app.txt
+#cd ../../
+#mkdir -p phmm_sim_results
+#bash scripts/phmm_throughput.sh $INPUT_SIZE_PHMM | tee >(grep CUPS >> ../success.txt)
  
 ### POA     26s
 INPUT_SIZE_POA=1

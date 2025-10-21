@@ -4,7 +4,7 @@ set -e
 
 rm -f success.txt
 
-GenDP_WORK_DIR=$(pwd)
+export GenDP_WORK_DIR=`pwd`
 
 
 INPUT_SIZE_CHAIN=$1
