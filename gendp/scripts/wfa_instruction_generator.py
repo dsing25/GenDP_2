@@ -5,6 +5,7 @@ from ctrl_opcodes import *
 
 MEM_BLOCK_SIZE = 1024 # in words
 SPM_BANDWIDTH = 4 # in words
+PE_LOOP_WF = 0
 
 
 
@@ -26,32 +27,35 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
 
     #ALIGN_LOOP
-    #TODO implement these instructions
     f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 1, 0, shift_l))                          # gr[5] = gr[0] * 2 = gr[0] << 1
     f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0x3, 0, 0, AND))                            # gr[6] = gr[0] % 4 = gr[0] & 0x3
     f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 2, 5, shift_r))                          # gr[7] = gr[5] // 4
     f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 0, 6, beq))                               # beq 0 gr[6] 5
+
   #if wf_len % 4 == 1:
-    #TODO BROADCAST GO SIGNAL
+    #sync until all PEs done, then set their PC back
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                               # bne 1 gr[13] 0
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_LOOP_WF, 0, 0, 0, 0, 0, set_PC))                    # PE_PC = PE_LOOP_WF
     f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 0, 7, mv))                               # out = gr[7]
     f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 0, 7, mv))                               # out = gr[7]
     f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 0, 7, mv))                               # out = gr[7]
     f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 1, 7, addi))                             # out = gr[7] + 1
     f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 0, 0, 0, 0, beq))                                # beq 0 0 4
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                               # No-op
   #else wf_len % 4 == 3:
+    #sync until all PEs done, then set their PC back
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                               # bne 1 gr[13] 0
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_LOOP_WF, 0, 0, 0, 0, 0, set_PC))                    # PE_PC = PE_LOOP_WF
     f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 1, 7, addi))                             # out = gr[7] + 1
     f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 1, 7, addi))                             # out = gr[7] + 1
     f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 1, 7, addi))                             # out = gr[7] + 1
     f.write(data_movement_instruction(out, 0, 0, 0, 0, 0, 0, 0, 0, 7, mv))                               # out = gr[7]
   #endif
     #TODO INVOKE MEMORY LOAD MAGIC
-    #TODO BROADCAST GO SIGNAL and wait for PE DONE
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, sendReady))
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, wait))
 
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, addi))                           # gr[0]++ (ed++)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, addi))                               # gr[0]++ (ed++)
     #JMP ALIGN_LOOP
+    f.write(data_movement_instruction(0, 0, 0, 0, -19, 0, 0, 0, 0, 0, beq))                              # beq 0 0 -57
 
     f.close()
 
@@ -107,13 +111,10 @@ def wfa_compute():
 def pe_instruction(i):
     
     f = open("instructions/wfa/pe_{}_instruction.txt".format(i), "w")
-    #TODO I am assuming that writes to the register file from these must be done to adjacent blocks
-    #of register. We'll at very least need something to tell POA not to write the full block. Will
-    #require instruction update
-
 
 #INITIALIZATION NEXT
     #NOTES
+    #I assume write to reg file can be done in adjacent blocks. #TODO we need to implement this
     #The general format is, load SPM, update cursor, stall for a cycle until SPM is ready again
     #initialize the counter
     #INITIALIZING REGISTERS
@@ -125,6 +126,10 @@ def pe_instruction(i):
     f.write(data_movement_instruction(gr, 0, 0, 0, 4, 0, 0, 0, 4*MEM_BLOCK_SIZE, 0, si))
     f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 5*MEM_BLOCK_SIZE, 0, si))
     f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, 6*MEM_BLOCK_SIZE, 0, si))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
+
+    #HALT. We're about to recieve input. Wait until controller is ready
+    f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))                                       # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
     # gr[7] holds the number of iterations for this pe in this step of next
     f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                   # out = in
@@ -194,8 +199,10 @@ def pe_instruction(i):
     f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 9, 1, blt))                             # blt gr[9] gr[7] -13 #TODO figure out how to autoincrease.
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
 
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, sendReady))
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, wait))
+    #write reg[10] because this is used for synchronization. 
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                              # gr[10] = 1
+    #jump all the way to top
+    f.write(data_movement_instruction(0, 0, 0, 0, -34, 0, 0, 0, 0, 0, beq))                             # beq 0 0 -57 
 
 
     f.close()

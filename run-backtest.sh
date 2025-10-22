@@ -1,5 +1,4 @@
 #!/bin/bash
-set -x
 set -e
 
 rm -f success.txt
@@ -56,4 +55,11 @@ cd ../../
 bash scripts/poa_throughput.sh | tee >(grep CUPS >> ../success.txt)
 
 cd $GenDP_WORK_DIR
+echo "Results"
 cat success.txt
+echo "True"
+echo "BSW Throughput: 47036245.456 MCUPS/mm2"
+echo "Chain Throughput: 3612.677 MCUPS/mm2"
+echo "POA Throughput: 3742.828 MCUPS/mm2"
+
+

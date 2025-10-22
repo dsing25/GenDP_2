@@ -112,8 +112,6 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_SHIFTI_R 16
 #define CTRL_SHIFTI_L 17
 #define CTRL_ANDI 18
-#define CTRL_WAIT 19
-#define CTRL_SEND_READY 20
 
 
 #endif

@@ -52,11 +52,6 @@ class pe_array {
         FIFO fifo_unit[FIFO_GROUP_NUM][FIFO_GROUP_SIZE];
         pe *pe_unit[PE_NUM];
 
-    private:
-        bool pe_readies_in[4];
-        bool ready_out;
-        bool wait;
-
 };
 
 #endif // PE_ARRAY_H

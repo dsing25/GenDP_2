@@ -41,84 +41,78 @@ void pe::reset() {
 }
 
 void pe::run(int simd) {
-    if (wait){
-        if (ready_in){
-            wait = false;
-        }
+    int i, op[2][3], input_addr[2][6], output_addr[2], ctrl_op[2];
+
+    // Compute
+    instruction[0] = comp_instr_buffer_unit->buffer[comp_PC][0];
+    instruction[1] = comp_instr_buffer_unit->buffer[comp_PC][1];
+#ifdef PROFILE
+    printf("comp_PC = %d\t", comp_PC);
+#endif
+    comp_decoder_unit.execute(instruction[0], op[0], input_addr[0], &output_addr[0], &comp_PC);
+    comp_decoder_unit.execute(instruction[1], op[1], input_addr[1], &output_addr[1], &i);
+#ifdef PROFILE
+    printf("\n");
+#endif
+    for (i = 0; i < 6; i++) {
+        regfile_unit->read_addr[i] =  input_addr[0][i];
+        regfile_unit->read_addr[i+6] = input_addr[1][i];
+    }
+    regfile_unit->read(regfile_unit->read_addr, regfile_unit->read_data);
+    regfile_unit->write_addr[0] = output_addr[0];
+    regfile_unit->write_addr[1] = output_addr[1];
+
+    int cu_inputs[2][6];
+    for (i = 0; i < 6; i++){
+        cu_inputs[0][i] = regfile_unit->read_data[i];
+        cu_inputs[1][i] = regfile_unit->read_data[6+i];
+    }
+    //Patch up for immediates
+    if (is_immediate_opcode(op[0][0])){
+        cu_inputs[0][0] = input_addr[0][0];
+        op[0][0] = get_base_opcode(op[0][0]);
+    }
+    if (is_immediate_opcode(op[0][1])){
+        cu_inputs[0][1] = input_addr[0][4];
+        op[0][1] = get_base_opcode(op[0][1]);
+    }
+    if (is_immediate_opcode(op[1][0])){
+        cu_inputs[1][0] = input_addr[1][0];
+        op[1][0] = get_base_opcode(op[1][0]);
+    }
+    if (is_immediate_opcode(op[1][1])){
+        cu_inputs[1][1] = input_addr[1][4];
+        op[1][1] = get_base_opcode(op[1][1]);
+    }
+
+    if (simd) {
+        regfile_unit->write_data[0] = cu_32.execute_8bit(op[0], cu_inputs[0]);
+        regfile_unit->write_data[1] = cu_32.execute_8bit(op[1], cu_inputs[1]);        
     } else {
-        int i, op[2][3], input_addr[2][6], output_addr[2], ctrl_op[2];
+        regfile_unit->write_data[0] = cu_32.execute(op[0], cu_inputs[0]);
+        regfile_unit->write_data[1] = cu_32.execute(op[1], cu_inputs[1]);   
+    }
 
-        // Compute
-        instruction[0] = comp_instr_buffer_unit->buffer[comp_PC][0];
-        instruction[1] = comp_instr_buffer_unit->buffer[comp_PC][1];
+
+    regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 0);
+    regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 1);
 #ifdef PROFILE
-        printf("comp_PC = %d\t", comp_PC);
-#endif
-        comp_decoder_unit.execute(instruction[0], op[0], input_addr[0], &output_addr[0], &comp_PC);
-        comp_decoder_unit.execute(instruction[1], op[1], input_addr[1], &output_addr[1], &i);
-#ifdef PROFILE
-        printf("\n");
-#endif
-        for (i = 0; i < 6; i++) {
-            regfile_unit->read_addr[i] =  input_addr[0][i];
-            regfile_unit->read_addr[i+6] = input_addr[1][i];
-        }
-        regfile_unit->read(regfile_unit->read_addr, regfile_unit->read_data);
-        regfile_unit->write_addr[0] = output_addr[0];
-        regfile_unit->write_addr[1] = output_addr[1];
-
-        int cu_inputs[2][6];
-        for (i = 0; i < 6; i++){
-            cu_inputs[0][i] = regfile_unit->read_data[i];
-            cu_inputs[1][i] = regfile_unit->read_data[6+i];
-        }
-        //Patch up for immediates
-        if (is_immediate_opcode(op[0][0])){
-            cu_inputs[0][0] = input_addr[0][0];
-            op[0][0] = get_base_opcode(op[0][0]);
-        }
-        if (is_immediate_opcode(op[0][1])){
-            cu_inputs[0][1] = input_addr[0][4];
-            op[0][1] = get_base_opcode(op[0][1]);
-        }
-        if (is_immediate_opcode(op[1][0])){
-            cu_inputs[1][0] = input_addr[1][0];
-            op[1][0] = get_base_opcode(op[1][0]);
-        }
-        if (is_immediate_opcode(op[1][1])){
-            cu_inputs[1][1] = input_addr[1][4];
-            op[1][1] = get_base_opcode(op[1][1]);
-        }
-
-        if (simd) {
-            regfile_unit->write_data[0] = cu_32.execute_8bit(op[0], cu_inputs[0]);
-            regfile_unit->write_data[1] = cu_32.execute_8bit(op[1], cu_inputs[1]);        
-        } else {
-            regfile_unit->write_data[0] = cu_32.execute(op[0], cu_inputs[0]);
-            regfile_unit->write_data[1] = cu_32.execute(op[1], cu_inputs[1]);   
-        }
-
-
-        regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 0);
-        regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 1);
-#ifdef PROFILE
-        printf("\nPE[%d]\t", id);
+    printf("\nPE[%d]\t", id);
 #endif
 
-        // Control
-        decode(ctrl_instr_buffer_unit->buffer[PC[1]][1], &PC[1], src_dest[1], &ctrl_op[1], simd);
-        decode(ctrl_instr_buffer_unit->buffer[PC[0]][0], &PC[0], src_dest[0], &ctrl_op[0], simd);
+    // Control
+    decode(ctrl_instr_buffer_unit->buffer[PC[1]][1], &PC[1], src_dest[1], &ctrl_op[1], simd);
+    decode(ctrl_instr_buffer_unit->buffer[PC[0]][0], &PC[0], src_dest[0], &ctrl_op[0], simd);
 #ifdef PROFILE
-        printf("\n");
+    printf("\n");
 #endif
 
-        if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][0] == src_dest[1][0]) {
-            fprintf(stderr, "PE[%d] PC[%d %d] source position confliction.\n", id, PC[0], PC[1]);
-            exit(-1);
-        } else if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][1] == src_dest[1][1]) {
-            fprintf(stderr, "PE[%d] PC[%d %d] dest position confliction.\n", id, PC[0], PC[1]);
-            exit(-1);
-        }
+    if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][0] == src_dest[1][0]) {
+        fprintf(stderr, "PE[%d] PC[%d %d] source position confliction.\n", id, PC[0], PC[1]);
+        exit(-1);
+    } else if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][1] == src_dest[1][1]) {
+        fprintf(stderr, "PE[%d] PC[%d %d] dest position confliction.\n", id, PC[0], PC[1]);
+        exit(-1);
     }
 }
 
@@ -553,10 +547,6 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         int and_result = operand1 & (1<<reg_imm_1);
         addr_regfile_unit->buffer[rd] = and_result;
         (*PC)++;
-    } else if (opcode == CTRL_WAIT) {
-        wait = true;
-    } else if (opcode == CTRL_SEND_READY) {
-        ready_out = true;
     } else {
         fprintf(stderr, "PE[%d] control instruction opcode error.\n", id);
         exit(-1);
