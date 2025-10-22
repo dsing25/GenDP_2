@@ -2,7 +2,6 @@
 #include "pe_array.h"
 #include "bsw.h"
 #include <string>
-#include "utils.h"
 
 void loadPairs(char *pairFileName, FILE *pairFile, SeqPair *seqPairArray, int8_t *seqBufRef, int8_t* seqBufQer, int seq_offset, int numPairs, long long *dram_load_size, long long *dram_store_size)
 {
@@ -269,7 +268,6 @@ void bsw_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
 
     fclose(pairFile);
 
-    load_instructions("bsw", BSW_COMPUTE_INSTRUCTION_NUM, BSW_PE_GROUP_SIZE, pe_array_unit);
     //BEGIN LOADING INSTRUCTIONS wasn't able to make a function easily due to prior coding style
     size_t n_comp_instructions = BSW_COMPUTE_INSTRUCTION_NUM;
     size_t pe_group_size = BSW_PE_GROUP_SIZE;
