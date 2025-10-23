@@ -8,12 +8,30 @@
 #include <emmintrin.h>
 #include <sys/time.h>
 #include <getopt.h>
+#include <tuple>
 #include "omp.h"
-#include "ksw.h"
-#include "compute_unit_32.h"
-#include "comp_decoder.h"
+#include "../../compute_unit_32.h"
+#include "../../comp_decoder.h"
 
+typedef uint32_t Word;
 
+class WordSlice
+{
+public:
+    WordSlice() :
+        VP(0),
+        VN(0),
+        scoreEnd(0)
+    {}
+    WordSlice(Word VP, Word VN, int scoreEnd) :
+        VP(VP),
+        VN(VN),
+        scoreEnd(scoreEnd)
+    {}
+    Word VP;
+    Word VN;
+    int scoreEnd;
+};
 
 static inline std::tuple<WordSlice, Word, Word> getNextSlice(Word Eq, WordSlice slice, Word hinP, Word hinN)
 {
@@ -26,10 +44,10 @@ static inline std::tuple<WordSlice, Word, Word> getNextSlice(Word Eq, WordSlice 
     Word Ph = slice.VN | ~(Xh | slice.VP); //line 9
     Word Mh = slice.VP & Xh; //line 10
     Word tempMh = (Mh << 1) | hinN; //line 16 + between lines 16-17
-    hinN = Mh >> (WordConfiguration<Word>::WordSize-1); //line 11
+    hinN = Mh >> (31); //line 11
     Word tempPh = (Ph << 1) | hinP; //line 15 + between lines 16-17
     slice.VP = tempMh | ~(Xv | tempPh); //line 17
-    hinP = Ph >> (WordConfiguration<Word>::WordSize-1); //line 13
+    hinP = Ph >> (31); //line 13
     slice.VN = tempPh & Xv; //line 18
     slice.scoreEnd -= hinN; //line 12
     slice.scoreEnd += hinP; //line 14
@@ -37,13 +55,61 @@ static inline std::tuple<WordSlice, Word, Word> getNextSlice(Word Eq, WordSlice 
     return std::make_tuple(slice, Ph, Mh);
 }
 
-
-void accelerator_compute(Word Eq, WordSlice &slice, Word hinP, Word hinN)
+static inline std::tuple<WordSlice, Word, Word> getNextSlice_debug(Word Eq, WordSlice slice, Word hinP, Word hinN)
 {
-	int Xh = 0, Xv = 0, Ph = 0, Mh = 0, tempMh = 0, tempPh = 0, scoreBefore = 0, scoreEnd = 0;
-	int temp1 = 0, temp2 = 0, temp3 = 0;
+    std::cout << "Initial: Eq=0x" << std::hex << Eq << " VN=0x" << slice.VN << " VP=0x" << slice.VP
+              << " hinP=" << std::dec << hinP << " hinN=" << hinN << " scoreEnd=" << slice.scoreEnd << std::endl;
 
-	int regfile[32];
+    Word Xv = Eq | slice.VN; //line 7
+    std::cout << "Xv = Eq | VN: 0x" << std::hex << Xv << std::endl;
+
+    Eq |= hinN; //between lines 7-8
+    std::cout << "Eq |= hinN: 0x" << std::hex << Eq << std::endl;
+
+    Word Xh = (((Eq & slice.VP) + slice.VP) ^ slice.VP) | Eq; //line 8
+    std::cout << "Xh = (((Eq & VP) + VP) ^ VP) | Eq: 0x" << std::hex << Xh << std::endl;
+
+    Word Ph = slice.VN | ~(Xh | slice.VP); //line 9
+    std::cout << "Ph = VN | ~(Xh | VP): 0x" << std::hex << Ph << std::endl;
+
+    Word Mh = slice.VP & Xh; //line 10
+    std::cout << "Mh = VP & Xh: 0x" << std::hex << Mh << std::endl;
+
+    Word tempMh = (Mh << 1) | hinN; //line 16 + between lines 16-17
+    std::cout << "tempMh = (Mh << 1) | hinN: 0x" << std::hex << tempMh << std::endl;
+
+    hinN = Mh >> (31); //line 11
+    std::cout << "hinN = Mh >> 31: " << std::dec << hinN << std::endl;
+
+    Word tempPh = (Ph << 1) | hinP; //line 15 + between lines 16-17
+    std::cout << "tempPh = (Ph << 1) | hinP: 0x" << std::hex << tempPh << std::endl;
+
+    slice.VP = tempMh | ~(Xv | tempPh); //line 17
+    std::cout << "VP = tempMh | ~(Xv | tempPh): 0x" << std::hex << slice.VP << std::endl;
+
+    hinP = Ph >> (31); //line 13
+    std::cout << "hinP = Ph >> 31: " << std::dec << hinP << std::endl;
+	std::cout << "scoreEnd -= hinN: " << std::dec << slice.scoreEnd << std::endl;
+
+    slice.VN = tempPh & Xv; //line 18
+    std::cout << "VN = tempPh & Xv: 0x" << std::hex << slice.VN << std::endl;
+
+    slice.scoreEnd -= hinN; //line 12
+    std::cout << "scoreEnd -= hinN: " << std::dec << slice.scoreEnd << std::endl;
+
+    slice.scoreEnd += hinP; //line 14
+    std::cout << "scoreEnd += hinP: " << std::dec << slice.scoreEnd << std::endl;
+
+    return std::make_tuple(slice, Ph, Mh);
+}
+
+
+void accelerator_compute(Word Eq, WordSlice &slice, Word hinP, Word hinN, Word &Ph, Word &Mh)
+{
+	Word Xh = 0, Xv = 0, tempMh = 0, tempPh = 0, scoreBefore = 0, scoreEnd = 0;
+	Word temp1 = 0, temp2 = 0, temp3 = 0;
+
+	Word regfile[32];
 
 	regfile[0]  = Eq;
 	regfile[1]  = slice.VN;
@@ -57,7 +123,7 @@ void accelerator_compute(Word Eq, WordSlice &slice, Word hinP, Word hinN)
 	regfile[9]  = tempMh;
 	regfile[10] = tempPh;
 	regfile[11] = scoreBefore;
-	regfile[12] = scoreEnd;
+	regfile[12] = slice.scoreEnd;
 	// regfile[13] = child_vn;
 	// regfile[14] = child_vp;
 	// regfile[15] = child_sbefore;
@@ -113,143 +179,158 @@ void accelerator_compute(Word Eq, WordSlice &slice, Word hinP, Word hinN)
 	slice.VN = regfile[1];
 	slice.VP = regfile[2];
 	slice.scoreEnd = regfile[12];
-	Word Ph = regfile[7];
-	Word Mh = regfile[8];
+	Ph = regfile[7];
+	Mh = regfile[8];
 
 }
 
-void accelerator_register(const uint8_t *target, const uint8_t *query, int match, int mismatch, int tlen, 
-    int qlen, int *begin_origin, int *ending_origin, int *begin_align, int *ending_align, int *H_init, eh_t *eh, 
-    int gap_o, int gap_e, int *max, int *max_i, int *max_j, int *max_ie, int *gscore, int *max_off, int64_t* numCellsComputed, int print_score) {
-	// printf("accelerator_register\n");
-	int tmp, max_H = 0, m_j = 0;
-	int H_diag = 0, H_left = 0, E_up = 0, F_left = 0, E, F, H = 0;
-	int i = 0, j = 0, beg, end;
+void accelerator_compute_debug(Word Eq, WordSlice &slice, Word hinP, Word hinN, Word &Ph, Word &Mh)
+{
+	Word Xh = 0, Xv = 0, tempMh = 0, tempPh = 0, scoreBefore = 0, scoreEnd = 0;
+	Word temp1 = 0, temp2 = 0, temp3 = 0;
 
-	int regfile[32];
+	Word regfile[32];
 
-	regfile[0] = 0;							// constant
-	regfile[1] = match;						// constant	
-	regfile[2] = mismatch;					// constant	64
-	regfile[3] = -gap_o;					// constant
-	regfile[4] = -gap_e;					// constant
-	regfile[5] = 1;							// constant
+	regfile[0]  = Eq;
+	regfile[1]  = slice.VN;
+	regfile[2]  = slice.VP;
+	regfile[3]  = hinN;
+	regfile[4]  = hinP;
+	regfile[5]  = Xh;
+	regfile[6]  = Xv;
+	regfile[7]  = Ph;
+	regfile[8]  = Mh;
+	regfile[9]  = tempMh;
+	regfile[10] = tempPh;
+	regfile[11] = scoreBefore;
+	regfile[12] = slice.scoreEnd;
+	// regfile[13] = child_vn;
+	// regfile[14] = child_vp;
+	// regfile[15] = child_sbefore;
+	// regfile[16] = child_send;
+	// regfile[17] = merged_vn;
+	// regfile[18] = merged_vp;
+	// regfile[19] = merged_sbef;
+	// regfile[20] = merged_send;
+	// regfile[21] = parents;
+	// regfile[22] = Eq_index;
+	regfile[23] = temp1;
+	regfile[24] = temp2;
+	regfile[25] = temp3;
+	// regfile[26] = temp4;
+	// regfile[27] = temp5;
+	// regfile[28] = temp6;
+	// regfile[29] = temp7;
+	// regfile[30] = temp8;
+	// regfile[31] = temp9;
 
-	regfile[6] = target[i];					// row initializaiton
-	regfile[7] = i;							// row initialization
-	regfile[8] = j;							// row initialization and update in the cell
-	regfile[9] = max_H;						// row initialization and update in the cell
-	regfile[10] = m_j;						// row initialization and update in the cell	
+	// main compute starts here
+	std::cout << "\n" << std::endl;
+	std::cout << "\n" << std::endl;
 
-	regfile[11] = query[j];					// from prev pe
-	regfile[12] = H_diag;					// from prev pe / fifo
-	regfile[13] = E_up;						// from prev pe / fifo
-	regfile[14] = H_left;					// update in the cell
-	regfile[15] = F_left;					// update in the cell
-	regfile[16] = H;						// update in the cell
-	// regfile[17];				tmp
-	// regfile[18];				tmp
-	// regfile[19];				tmp
-	// regfile[20];				tmp
+	std::cout << "Initial: Eq=0x" << std::hex << regfile[0]
+			<< " VN=0x" << regfile[1]
+			<< " VP=0x" << regfile[2]
+			<< " hinP=" << std::dec << regfile[4]
+			<< " hinN=" << regfile[3]
+			<< " scoreEnd=" << regfile[12] << std::endl;
 
-	// regfile[21];	qlen
-	// regfile[22]; tlen
-	// regfile[23]; mlen		tmp
-	// regfile[24]; max			output
-	// regfile[25]; exit0
-	// regfile[26]; gscore		output
-	// regfile[27]; max_ie		output
-	// regfile[28]; qle			output
-	// regfile[29]; tle			output
-	// regfile[30]; max_off		output
+    regfile[6] = regfile[0] | regfile[1]; // Xv
+    std::cout << "Xv = Eq | VN: 0x" << std::hex << regfile[6] << std::endl;
 
-	for (i = 0; i < tlen; ++i) {
-		F_left = 0; max_H = 0; m_j = 0;
-		beg = begin_align[i]; end = ending_align[i]; 
+    regfile[0] = regfile[0] | regfile[3]; // Eq |= hinN
+    std::cout << "Eq |= hinN: 0x" << std::hex << regfile[0] << std::endl;
 
-		regfile[7] = i;
-		regfile[8] = beg-1;
-		regfile[9] = regfile[0];												// max_H = 0
-		regfile[10] = regfile[0];												// m_j = 0
-		regfile[15] = regfile[0];												// F_left = 0
-		regfile[14] = H_init[i];												// H_left = H_init[i]
+    regfile[23] = regfile[0] & regfile[2]; // temp1
+    regfile[24] = regfile[23] + regfile[2]; // temp2
+    regfile[25] = regfile[24] ^ regfile[2]; // temp3
+    regfile[5]  = regfile[25] | regfile[0]; // Xh
+    std::cout << "Xh = (((Eq & VP) + VP) ^ VP) | Eq: 0x" << std::hex << regfile[5] << std::endl;
 
-		// beg = begin_origin[i]; end = ending_origin[i]; 
-		H_left = H_init[i];
-		int qlen_origin = ending_origin[i] - begin_origin[i];
-		if (qlen_origin >= 0) (*numCellsComputed) += qlen_origin;
+    regfile[23] = regfile[2] | regfile[5]; // temp1
+    regfile[24] = ~regfile[23]; // temp2
+    regfile[7]  = regfile[1] | regfile[24]; // Ph
+    std::cout << "Ph = VN | ~(Xh | VP): 0x" << std::hex << regfile[7] << std::endl;
 
-		// printf("%d %d\n", beg, end);
-		for (j = beg; j < end; j++) {
-		// for (j = begin_origin[i]; j < ending_origin[i]; j++) {
-		// 	(*numCellsComputed)++;
-			eh_t *p = &eh[j];
+    regfile[8] = regfile[2] & regfile[5]; // Mh
+    std::cout << "Mh = VP & Xh: 0x" << std::hex << regfile[8] << std::endl;
 
-			// comp_mux
+    regfile[23] = regfile[8] << 1; // temp1
+    regfile[9]  = regfile[23] | regfile[3]; // tempMh
+    std::cout << "tempMh = (Mh << 1) | hinN: 0x" << std::hex << regfile[9] << std::endl;
 
-			H_diag = p->h;					// H(i-1,j-1)
-			E_up = p->e;					// E(i-1,j)
+    regfile[3]  = regfile[8] >> 31; // hinN
+    std::cout << "hinN = Mh >> 31: " << std::dec << regfile[3] << std::endl;
 
-			regfile[12] = p->h;														// H_diag
-			regfile[13] = p->e;														// E_up
+    regfile[23] = regfile[7] << 1; // temp1
+    regfile[10] = regfile[23] | regfile[4]; // tempPh
+    std::cout << "tempPh = (Ph << 1) | hinP: 0x" << std::hex << regfile[10] << std::endl;
 
-			regfile[17] = comp_mux(target[i], query[j], match, mismatch);			// S = match_score(query, ref)
-			regfile[17] = regfile[12] + regfile[17];								// H_diag_S = H_diag + S
-			regfile[8] = regfile[8] + regfile[5];									// j++;
+    regfile[24] = regfile[6] | regfile[10]; // temp2
+    regfile[25] = ~regfile[24]; // temp3
+    regfile[2]  = regfile[9] | regfile[25]; // VP
+    std::cout << "VP = tempMh | ~(Xv | tempPh): 0x" << std::hex << regfile[2] << std::endl;
 
-			regfile[12] = regfile[12] > regfile[0] ? regfile[17] : regfile[0];		// H_diag = H_diag > 0 ? H_diag_S : 0
-			regfile[18] = regfile[12] + (regfile[3] + regfile[4]);					// tmp = H_diag - (gap_o + gap_e)
+    regfile[4]  = regfile[7] >> 31; // hinP
+    std::cout << "hinP = Ph >> 31: " << std::dec << regfile[4] << std::endl;
 
-			regfile[12] = regfile[12] > regfile[0] ? regfile[17] : regfile[0];		// H_diag = H_diag > 0 ? H_diag_S : 0
-			regfile[16] = regfile[15] > regfile[13] ? regfile[15] : regfile[13];	// H = F_left > E_up ? F_left : E_up
-			regfile[16] = regfile[16] > regfile[12] ? regfile[16] : regfile[12];	// H = H > H_diag ? H : H_diag;
+    regfile[1]  = regfile[10] & regfile[6]; // VN
+    std::cout << "VN = tempPh & Xv: 0x" << std::hex << regfile[1] << std::endl;
 
-			regfile[10] = regfile[9] > regfile[16] ? regfile[10] : regfile[8];		// m_j = max_H > H? m_j : j
-			regfile[9] = regfile[9] > regfile[16] ? regfile[9] : regfile[16];		// max_H = max_H > H? max_H : H
+    regfile[12] = regfile[12] - regfile[3]; // scoreEnd -= hinN
+    std::cout << "scoreEnd -= hinN: " << std::dec << regfile[12] << std::endl;
 
-			regfile[20] = regfile[13] + regfile[4];									// E_up -= gap_e
-			regfile[13] = regfile[18] > regfile[0]? regfile[18] : regfile[0];		// tmp = tmp > 0? tmp : 0
-			regfile[13] = regfile[13] > regfile[20] ? regfile[13] : regfile[20];	// E = E_up > tmp? E_up : tmp
-			
-			regfile[19] = regfile[15] + regfile[4];									// F_left -= gap_e
-			regfile[15] = regfile[18] > regfile[0]? regfile[18] : regfile[0];		// tmp = tmp > 0? tmp : 0
-			regfile[15] = regfile[15] > regfile[19] ? regfile[15] : regfile[19];	// F = F_left > tmp? F_left : tmp
+    regfile[12] = regfile[12] + regfile[4]; // scoreEnd += hinP
+    std::cout << "scoreEnd += hinP: " << std::dec << regfile[12] << std::endl;
 
-			p->h = regfile[14];
-			regfile[14] = regfile[16];
-			p->e = regfile[13];
+    slice.VN = regfile[1];
+    slice.VP = regfile[2];
+    slice.scoreEnd = regfile[12];
+    Ph = regfile[7];
+    Mh = regfile[8];
 
-			// p->h = H_left;          		// save H(i,j-1) for the next row
-			// H_left = H;						// save H(i,j) to H_left for the next column (no need for HW)
-			// p->e = E;						// save E(i+1,j) for the next row (no need for HW)
-			// F_left = F;
+}
 
-			max_H = regfile[9];
-			m_j = regfile[10];
-			H_left = regfile[14];
 
-		}
-		eh[end].h = H_left; eh[end].e = 0;
+int main() {
+    // Example input values
+    Word Eq = 0xF0F0F0F0;
+    WordSlice slice_ref(0xAAAAAAAA, 0x55555555, 0);
+    WordSlice slice_acc = slice_ref; 
+    Word hinP = 1;
+    Word hinN = 0;
 
-		if (end == qlen) {					// software
-			*max_ie = *gscore > H_left? *max_ie : i;
-			*gscore = *gscore > H_left? *gscore : H_left;
-		}
-		if (max_H == 0) {
-			// printf("break\n");
-			break;
-		}
-		if (max_H > *max) {
-			*max = max_H, *max_i = i, *max_j = m_j;
-			*max_off = *max_off > abs(m_j - i)? *max_off : abs(m_j - i);
-		}
+    // Run reference implementation
+    auto result_tuple = getNextSlice(Eq, slice_ref, hinP, hinN);
+    WordSlice slice_ref_out = std::get<0>(result_tuple);
+    Word Ph_ref = std::get<1>(result_tuple);
+    Word Mh_ref = std::get<2>(result_tuple);
 
-		// update beg and end for the next round
-		for (j = beg; j < end && eh[j].h == 0 && eh[j].e == 0; ++j);
-		beg = j;
-		for (j = end; j >= beg && eh[j].h == 0 && eh[j].e == 0; --j);
-		end = j + 2 < qlen? j + 2 : qlen;
-		beg = 0; end = qlen; // uncomment this line for debugging
-	}
-	// printf("%ld\n", (*numCellsComputed));
+    // Run accelerator implementation
+	Word Ph_acc, Mh_acc;
+	accelerator_compute(Eq, slice_acc, hinP, hinN, Ph_acc, Mh_acc);
+
+    // Print results
+    std::cout << "getNextSlice results:" << std::endl;
+    std::cout << "  VP:       0x" << std::hex << slice_ref_out.VP << std::endl;
+    std::cout << "  VN:       0x" << std::hex << slice_ref_out.VN << std::endl;
+    std::cout << "  scoreEnd: " << std::dec << slice_ref_out.scoreEnd << std::endl;
+    std::cout << "  Ph:       0x" << std::hex << Ph_ref << std::endl;
+    std::cout << "  Mh:       0x" << std::hex << Mh_ref << std::endl;
+
+    std::cout << "\naccelerator_compute results:" << std::endl;
+    std::cout << "  VP:       0x" << std::hex << slice_acc.VP << std::endl;
+    std::cout << "  VN:       0x" << std::hex << slice_acc.VN << std::endl;
+    std::cout << "  scoreEnd: " << std::dec << slice_acc.scoreEnd << std::endl;
+    std::cout << "  Ph:       0x" << std::hex << Ph_acc << std::endl;
+    std::cout << "  Mh:       0x" << std::hex << Mh_acc << std::endl;
+
+    // Compare results
+    bool match = (slice_ref_out.VP == slice_acc.VP) &&
+                 (slice_ref_out.VN == slice_acc.VN) &&
+                 (slice_ref_out.scoreEnd == slice_acc.scoreEnd);
+
+    std::cout << "\nComparison: " << (match ? "PASS" : "FAIL") << std::endl;
+
+    return 0;
 }
