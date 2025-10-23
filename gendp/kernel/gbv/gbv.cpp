@@ -15,6 +15,109 @@
 
 
 
+static inline std::tuple<WordSlice, Word, Word> getNextSlice(Word Eq, WordSlice slice, Word hinP, Word hinN)
+{
+    //http://www.gersteinlab.org/courses/452/09-spring/pdf/Myers.pdf
+    //pages 405 and 408
+
+    Word Xv = Eq | slice.VN; //line 7
+    Eq |= hinN; //between lines 7-8
+    Word Xh = (((Eq & slice.VP) + slice.VP) ^ slice.VP) | Eq; //line 8
+    Word Ph = slice.VN | ~(Xh | slice.VP); //line 9
+    Word Mh = slice.VP & Xh; //line 10
+    Word tempMh = (Mh << 1) | hinN; //line 16 + between lines 16-17
+    hinN = Mh >> (WordConfiguration<Word>::WordSize-1); //line 11
+    Word tempPh = (Ph << 1) | hinP; //line 15 + between lines 16-17
+    slice.VP = tempMh | ~(Xv | tempPh); //line 17
+    hinP = Ph >> (WordConfiguration<Word>::WordSize-1); //line 13
+    slice.VN = tempPh & Xv; //line 18
+    slice.scoreEnd -= hinN; //line 12
+    slice.scoreEnd += hinP; //line 14
+
+    return std::make_tuple(slice, Ph, Mh);
+}
+
+
+void accelerator_compute(Word Eq, WordSlice &slice, Word hinP, Word hinN)
+{
+	int Xh = 0, Xv = 0, Ph = 0, Mh = 0, tempMh = 0, tempPh = 0, scoreBefore = 0, scoreEnd = 0;
+	int temp1 = 0, temp2 = 0, temp3 = 0;
+
+	int regfile[32];
+
+	regfile[0]  = Eq;
+	regfile[1]  = slice.VN;
+	regfile[2]  = slice.VP;
+	regfile[3]  = hinN;
+	regfile[4]  = hinP;
+	regfile[5]  = Xh;
+	regfile[6]  = Xv;
+	regfile[7]  = Ph;
+	regfile[8]  = Mh;
+	regfile[9]  = tempMh;
+	regfile[10] = tempPh;
+	regfile[11] = scoreBefore;
+	regfile[12] = scoreEnd;
+	// regfile[13] = child_vn;
+	// regfile[14] = child_vp;
+	// regfile[15] = child_sbefore;
+	// regfile[16] = child_send;
+	// regfile[17] = merged_vn;
+	// regfile[18] = merged_vp;
+	// regfile[19] = merged_sbef;
+	// regfile[20] = merged_send;
+	// regfile[21] = parents;
+	// regfile[22] = Eq_index;
+	regfile[23] = temp1;
+	regfile[24] = temp2;
+	regfile[25] = temp3;
+	// regfile[26] = temp4;
+	// regfile[27] = temp5;
+	// regfile[28] = temp6;
+	// regfile[29] = temp7;
+	// regfile[30] = temp8;
+	// regfile[31] = temp9;
+
+	// main compute starts here
+
+	regfile[6] = regfile[0] | regfile[1]; 									// Xv = Eq | VN
+	regfile[0] = regfile[0] | regfile[3];             						// Eq |= hinN
+
+	regfile[23] = regfile[0] & regfile[2];      							// temp1 = Eq & VP
+	regfile[24] = regfile[23] + regfile[2];     							// temp2 = temp1 + VP
+	regfile[25] = regfile[24] ^ regfile[2];     							// temp3 = temp2 ^ VP
+	regfile[5]  = regfile[25] | regfile[0];     							// Xh = temp3 | Eq
+
+	regfile[23] = regfile[2] | regfile[5];      							// temp1 = VP | Xh
+	regfile[24] = ~regfile[23];                 							// temp2 = ~temp1
+	regfile[7]  = regfile[1] | regfile[24];     							// Ph = VN | temp2
+
+	regfile[8] = regfile[2] & regfile[5]; 									// Mh =  VP & Xh
+	regfile[23] = regfile[8] << 1;         									// temp1 = Mh << 1
+	regfile[9]  = regfile[23] | regfile[3]; 								// tempMh = temp1 | hinN
+
+	regfile[3]  = regfile[8] >> 31; 										// hinN = Mh >> (word)
+	regfile[23] = regfile[7] << 1;                                       	// temp1 = Ph << 1
+	regfile[10] = regfile[23] | regfile[4];                              	// tempPh = temp1 | hinP
+
+	regfile[24] = regfile[6] | regfile[10];      							// temp2 = Xv | tempPh
+	regfile[25] = ~regfile[24];                  							// temp3 = ~temp2
+	regfile[2]  = regfile[9] | regfile[25];      							// VP = tempMh | temp3
+
+	regfile[4]  = regfile[7] >> 31;        									// hinP = Ph >> (word)
+	regfile[1]  = regfile[10] & regfile[6];									// VN = tempPh & Xv
+
+	regfile[12] = regfile[12] - regfile[3]; 								// scoreEnd -= hinN
+	regfile[12] = regfile[12] + regfile[4]; 								// scoreEnd += hinP
+
+	slice.VN = regfile[1];
+	slice.VP = regfile[2];
+	slice.scoreEnd = regfile[12];
+	Word Ph = regfile[7];
+	Word Mh = regfile[8];
+
+}
+
 void accelerator_register(const uint8_t *target, const uint8_t *query, int match, int mismatch, int tlen, 
     int qlen, int *begin_origin, int *ending_origin, int *begin_align, int *ending_align, int *H_init, eh_t *eh, 
     int gap_o, int gap_e, int *max, int *max_i, int *max_j, int *max_ie, int *gscore, int *max_off, int64_t* numCellsComputed, int print_score) {
