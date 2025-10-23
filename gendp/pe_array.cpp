@@ -204,8 +204,6 @@ void pe_array::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, int da
 }
 
 int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting) {
-    printf("PE main decode instruction: %lx\n", instruction);
-
 #ifdef PROFILE
     // printf("main j=%d\t", main_addressing_register[12]);
     // printf("main j=%d\t", main_addressing_register[4]);
