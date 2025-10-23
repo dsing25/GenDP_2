@@ -147,7 +147,7 @@ int pe_array::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int si
     }
 #endif
     } else {
-        fprintf(stderr, "source_pos error.\n");
+        fprintf(stderr, "source_pos error. source_pos = %d\n",source_pos);
         exit(-1);
     }
     return data;
@@ -204,6 +204,7 @@ void pe_array::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, int da
 }
 
 int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting) {
+    printf("PE main decode instruction: %lx\n", instruction);
 
 #ifdef PROFILE
     // printf("main j=%d\t", main_addressing_register[12]);
@@ -224,6 +225,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
     // 10 - Out data port
     // 11 - imm
     // 12 - none
+    volatile unsigned long tmp = instruction;
 
     int i, rd, rs1, rs2, imm, data, comp_0 = 0, comp_1 = 0, sum = 0, add_a = 0, add_b = 0;
 
@@ -291,7 +293,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         add_a = main_addressing_register[rs1];
         add_b = main_addressing_register[rs2];
         sum = add_a + add_b;
-        main_addressing_register[rd] = sum;
+        *get_output_dest(dest, rd) = sum;
 #ifdef PROFILE
         printf("add gr[%d] gr[%d] gr[%d] (%d %d %d)\n", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -303,7 +305,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         add_a = main_addressing_register[rs1];
         add_b = main_addressing_register[rs2];
         sum = add_a - add_b;
-        main_addressing_register[rd] = sum;
+        *get_output_dest(dest,rd) = sum;
 #ifdef PROFILE
         printf("sub gr[%d] gr[%d] gr[%d] (%d %d %d)\n", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -315,7 +317,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         add_a = imm;
         add_b = main_addressing_register[rs2];
         sum = add_a + add_b;
-        main_addressing_register[rd] = sum;
+        *get_output_dest(dest,rd) = sum;
 #ifdef PROFILE
         printf("addi gr[%d] %d gr[%d] (%d %d %d)\n", rd, imm, rs2, sum, add_a, add_b);
 #endif
@@ -328,12 +330,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         for (i = 0; i < 4; i++) {
             rs[i] = main_addressing_register[rs2] & 0xFF;
         }
-        memcpy(&main_addressing_register[rd], rs, 4*sizeof(int8_t));
+        memcpy(get_output_dest(dest,rd), rs, 4*sizeof(int8_t));
 #ifdef PROFILE
         printf("set_8 gr[%d] gr[%d] (%d %lx)\n", rd, rs2, main_addressing_register[rs2], main_addressing_register[rd]);
 #endif
         (*PC)++;
-    } else if (opcode == 4) {       // li dest imm/reg(reg(++))
+    } else if (opcode == 4) {       // si dest imm/reg(reg(++))
 #ifdef PROFILE
     if (simd)
         printf("Store %lx to ", sext_imm_1);
@@ -496,7 +498,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
     } else if (opcode == CTRL_SHIFTI_R) {      // SHIFT_R
         //main_addressing_register
         //TODO is main_addressing_register the correct place to go?
-        assert(dest == 0);  // only support gr
+        assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = main_addressing_register[rs2];
@@ -504,10 +506,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
         int shift_result = operand1 / (1<<reg_imm_1);
-        main_addressing_register[rd] = shift_result;
+        *get_output_dest(dest,rd) = shift_result;
         (*PC)++;
     } else if (opcode == CTRL_SHIFTI_L) {      // SHIFT_L
-        assert(dest == 0);  // only support gr
+        assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = main_addressing_register[rs2];
@@ -515,20 +517,33 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
         int shift_result = operand1 <<reg_imm_1;
-        main_addressing_register[rd] = shift_result;
+        *get_output_dest(dest,rd) = shift_result;
         (*PC)++;
     } else if (opcode == CTRL_ANDI) {      // AND
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = main_addressing_register[rs2];
         int and_result = operand1 & (1<<reg_imm_1);
-        main_addressing_register[rd] = and_result;
+        *get_output_dest(dest,rd) = and_result;
         (*PC)++;
     } else {
-        fprintf(stderr, "main control instruction opcode error.\n");
+        fprintf(stderr, "main control instruction opcode error. opcode = %d\n", opcode);
         exit(-1);
     }
     return 0;
+}
+
+int* pe_array::get_output_dest(int dest, int rd){
+    // write out only supported for GR or out buffer
+    if (dest == CTRL_GR){
+        return &main_addressing_register[rd];
+    } else if (dest == CTRL_OUT_BUF){
+        return &output_buffer[rd];
+    } else {
+        fprintf(stderr, 
+                "Only dest CTRL_GR and CTRL_OUT_BUF are supported for PE_ARRAY, non MV CTRL instr. dest = %d\n", dest);
+        exit(-1);
+    }
 }
 
 int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting) {

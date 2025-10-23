@@ -201,7 +201,7 @@ int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
         printf("%lx %lx from input comp instruction port to ", instruction[0], instruction[1]);
 #endif
     } else {
-        fprintf(stderr, "source_pos error.\n");
+        fprintf(stderr, "source_pos error. source_pos=%d\n",source_pos);
         exit(-1);
     }
     return data;
@@ -340,7 +340,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         add_a = addr_regfile_unit->buffer[rs1];
         add_b = addr_regfile_unit->buffer[rs2];
         sum = add_a + add_b;
-        addr_regfile_unit->buffer[rd] = sum;
+        *get_output_dest(dest, rd) = sum;
 #ifdef PROFILE
         printf("add gr[%d] gr[%d] gr[%d] (%d %d %d)\t", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -352,7 +352,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         add_a = addr_regfile_unit->buffer[rs1];
         add_b = addr_regfile_unit->buffer[rs2];
         sum = add_a - add_b;
-        addr_regfile_unit->buffer[rd] = sum;
+        *get_output_dest(dest, rd) = sum;
 #ifdef PROFILE
         printf("sub gr[%d] gr[%d] gr[%d] (%d %d %d)\t", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -364,7 +364,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         add_a = imm;
         add_b = addr_regfile_unit->buffer[rs2];
         sum = add_a + add_b;
-        addr_regfile_unit->buffer[rd] = sum;
+        *get_output_dest(dest, rd) = sum;
 #ifdef PROFILE
         printf("addi gr[%d] %d gr[%d] (%d %d %d)\t", rd, imm, rs2, sum, add_a, add_b);
 #endif
@@ -517,9 +517,6 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         printf("wait.\t");
 #endif
     } else if (opcode == CTRL_SHIFTI_R) {      // SHIFT_R
-        //zkn
-        //TODO is addr_regfile_unit the correct place to go?
-        assert(dest == 0);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = addr_regfile_unit->buffer[rs2];
@@ -527,10 +524,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
         int shift_result = operand1 / (1<<reg_imm_1);
-        addr_regfile_unit->buffer[rd] = shift_result;
+        *get_output_dest(dest, rd) = shift_result;
         (*PC)++;
     } else if (opcode == CTRL_SHIFTI_L) {      // SHIFT_L
-        assert(dest == 0);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = addr_regfile_unit->buffer[rs2];
@@ -538,20 +534,33 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
         int shift_result = operand1 <<reg_imm_1;
-        addr_regfile_unit->buffer[rd] = shift_result;
+        *get_output_dest(dest, rd) = shift_result;
         (*PC)++;
     } else if (opcode == CTRL_ANDI) {      // AND
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = addr_regfile_unit->buffer[rs2];
         int and_result = operand1 & (1<<reg_imm_1);
-        addr_regfile_unit->buffer[rd] = and_result;
+        *get_output_dest(dest, rd) = and_result;
         (*PC)++;
     } else {
         fprintf(stderr, "PE[%d] control instruction opcode error.\n", id);
         exit(-1);
     }
     return 0;
+}
+
+int* pe::get_output_dest(int dest, int rd){
+    // write out only supported for GR or out buffer
+    if (dest == CTRL_GR){
+        return &(addr_regfile_unit->buffer[rd]);
+    } else if (dest == CTRL_OUT_BUF){
+        return &store_data;
+    } else {
+        fprintf(stderr, 
+                "Only dest CTRL_GR and CTRL_OUT_BUF are supported for PE_ARRAY, non MV CTRL instr. dest = %d\n", dest);
+        exit(-1);
+    }
 }
 
 int pe::get_gr_10() {

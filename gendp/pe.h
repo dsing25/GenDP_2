@@ -31,6 +31,8 @@ class pe {
         unsigned long store_instruction[COMP_INSTR_BUFFER_GROUP_SIZE], load_instruction[COMP_INSTR_BUFFER_GROUP_SIZE];
         
     private:
+        //helper
+        int* get_output_dest(int dest, int rd);
 
         unsigned long instruction[2];
         // ld/st control signal

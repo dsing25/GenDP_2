@@ -52,6 +52,10 @@ class pe_array {
         FIFO fifo_unit[FIFO_GROUP_NUM][FIFO_GROUP_SIZE];
         pe *pe_unit[PE_NUM];
 
+    private:
+        //helper
+        int* get_output_dest(int dest, int rd);
+
 };
 
 #endif // PE_ARRAY_H

@@ -113,5 +113,18 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_SHIFTI_L 17
 #define CTRL_ANDI 18
 
+// DEST/SRCS
+#define CTRL_REG 0
+#define CTRL_GR 1
+#define CTRL_SPM 2
+#define CTRL_COMP_IB 3
+#define CTRL_CTRL_IB 4
+#define CTRL_IN_BUF 5
+#define CTRL_OUT_BUF 6
+#define CTRL_IN_PORT 7
+#define CTRL_IN_INSTR 8
+#define CTRL_OUT_PORT 9
+#define CTRL_OUT_INSTR 10
+//FIFO [11, 12, 13, 14]
 
 #endif
