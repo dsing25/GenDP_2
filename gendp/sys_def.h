@@ -82,6 +82,16 @@
 #define COPY_I 24 // Dummy TODO implement
 #define POPCOUNT 25 
 
+inline bool is_immediate_opcode(int opcode) {
+    return (opcode == ADD_I || opcode == COPY_I);
+}
+
+inline int get_base_opcode(int opcode) {
+    if (opcode == ADD_I) return ADDITION;
+    if (opcode == COPY_I) return COPY;
+    return opcode;
+}
+
 // CTRL Opcode
 #define CTRL_ADD 0
 #define CTRL_SUB 1
@@ -102,8 +112,19 @@
 #define CTRL_SHIFTI_R 16
 #define CTRL_SHIFTI_L 17
 #define CTRL_ANDI 18
-#define CTRL_WAIT 19
-#define CTRL_SEND_READY 20
 
+// DEST/SRCS
+#define CTRL_REG 0
+#define CTRL_GR 1
+#define CTRL_SPM 2
+#define CTRL_COMP_IB 3
+#define CTRL_CTRL_IB 4
+#define CTRL_IN_BUF 5
+#define CTRL_OUT_BUF 6
+#define CTRL_IN_PORT 7
+#define CTRL_IN_INSTR 8
+#define CTRL_OUT_PORT 9
+#define CTRL_OUT_INSTR 10
+//FIFO [11, 12, 13, 14]
 
 #endif

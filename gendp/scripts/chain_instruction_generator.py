@@ -1,7 +1,7 @@
 import sys
 import os
 from utils import *
-from ctrl_opcodes import *
+from opcodes import *
 
 
 CHAIN_COMPUTE_INSTRUCTION_NUM = 12
@@ -12,7 +12,7 @@ PE_RUN = 105
     
 def chain_compute():
     
-    f = open("instructions/chain/compute_instruction.txt", "w")
+    f = InstructionWriter("instructions/chain/compute_instruction.txt");
     
     f.write(compute_instruction(1, 15, 9, 11, 13, 0, 0, 0, 0, 7))       # 0 ri-11 qi-12 rj-13 qj-14
     f.write(compute_instruction(1, 15, 9, 12, 14, 0, 0, 0, 0, 8))
@@ -56,7 +56,7 @@ def chain_compute():
 # dest, src, flag_0, flag_1, imm/reg_0, reg_0(++), flag_2, flag_3, imm/reg_1, reg_1(++), opcode
 def chain_main_instruction():
     
-    f = open("instructions/chain/main_instruction.txt", "w")
+    f = InstructionWriter("instructions/chain/main_instruction.txt");
     
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 64, 0, si))                                  # gr[1] = pe_group_size
@@ -79,9 +79,9 @@ def chain_main_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, PE_INIT, 0, 0, 0, 0, 0, set_PC))                          # PE_PC = init
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
-    f.write(data_movement_instruction(0, 0, 1, 0, 3, 0, 1, 0, 3, 1, add))                                   # gr[3] = gr[3] + gr[1]
+    f.write(data_movement_instruction(gr, gr, 1, 0, 3, 0, 1, 0, 3, 1, add))                                   # gr[3] = gr[3] + gr[1]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
-    f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 0, 0, 1, 4, addi))                                  # gr[4]++
+    f.write(data_movement_instruction(gr, gr, 0, 0, 4, 0, 0, 0, 1, 4, addi))                                  # gr[4]++
     for i in range(3):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
         f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 2, mv))                    # PE[0] = input[gr[2]++]
@@ -134,7 +134,7 @@ def chain_main_instruction():
 
 def pe_instruction(i):
     
-    f = open("instructions/chain/pe_{}_instruction.txt".format(i), "w")
+    f = InstructionWriter("instructions/chain/pe_{}_instruction.txt".format(i));
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
@@ -183,7 +183,7 @@ def pe_instruction(i):
     f.write(data_movement_instruction(reg, 0, 0, 0, 16, 0, 0, 0, -1, 0, si))                                # reg[16] = -1
     f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, -64, 0, si))                                 # gr[1] = -64
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
-    f.write(data_movement_instruction(0, 0, 0, 0, 1, 0, 0, 0, 1, 1, addi))                                  # gr[1]++
+    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 1, 1, addi))                                  # gr[1]++
 
     f.write(data_movement_instruction(reg, in_port, 0, 0, 11, 0, 0, 0, 0, 0, mv))                           # reg[11] = in
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 11, 0, mv))                          # out = reg[11]
@@ -260,7 +260,7 @@ def pe_instruction(i):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
         f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 15, 0, mv))                      # out = reg[15]
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
-        f.write(data_movement_instruction(0, 0, 0, 0, 1, 0, 0, 0, 1, 1, addi))                              # gr[1]++
+        f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 1, 1, addi))                              # gr[1]++
         f.write(data_movement_instruction(reg, in_port, 0, 0, 13, 0, 0, 0, 0, 0, mv))                       # reg[13] = in
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
         f.write(data_movement_instruction(reg, in_port, 0, 0, 14, 0, 0, 0, 0, 0, mv))                       # reg[14] = in
@@ -357,7 +357,7 @@ def pe_instruction(i):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
         f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 0, mv))                        # out = gr[1]
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
-        f.write(data_movement_instruction(0, 0, 0, 0, 1, 0, 0, 0, 1, 1, addi))                              # gr[1]++
+        f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 1, 1, addi))                              # gr[1]++
         for j in range(2):
             f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # No-op
         f.write(data_movement_instruction(reg, in_port, 0, 0, 20, 0, 0, 0, 0, 0, mv))                       # reg[20] = in

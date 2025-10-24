@@ -6,12 +6,22 @@ AR      = @echo generating static library $@ && ar rc
 # CXX     = g++
 # AR      = ar rc
 
-CXXFLAGS   = -g -Wall -Wno-format -Wno-unused-variable -Wno-unused-but-set-parameter -Wno-unused-result -fPIC -std=c++11 -O3 -lpthread -fsanitize=address -fno-omit-frame-pointer -static-libasan
+#BASE CXXFLAGS
+#CXXFLAGS   = -g -Wall -Wno-format -Wno-unused-variable -Wno-unused-but-set-parameter -Wno-unused-result -fPIC -std=c++11 -O0 -g3 -fno-inline -fno-omit-frame-pointer -fno-lto -fvar-tracking -fvar-tracking-assignments -lpthread 
+CXXFLAGS   = -g -g3 -ggdb -O0 -Wall -Wextra -Wpedantic -std=c++11
 HEADER  = 
 LIBS    = libsimulator.a 
-LINKFLAGS = -fsanitize=address
+LINKFLAGS = 
 
-OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o
+# Default: ADDRESS_SANITIZER is not enabled
+ADDRESS_SANITIZER ?= 1
+ifeq ($(ADDRESS_SANITIZER),1)
+    CXXFLAGS += -fsanitize=address -fno-omit-frame-pointer -static-libasan
+    LINKFLAGS += -fsanitize=address
+endif
+
+
+OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o simGlobals.o
 
 ifeq ($(debug),1)
 CXXFLAGS+= -DDEBUG

@@ -1,6 +1,7 @@
 #include "pe.h"
 #include "sys_def.h"
 #include <cassert>
+#include "simGlobals.h"
 
 pe::pe(int _id) {
 
@@ -41,61 +42,78 @@ void pe::reset() {
 }
 
 void pe::run(int simd) {
-    if (wait){
-        if (ready_in){
-            wait = false;
-        }
+    int i, op[2][3], input_addr[2][6], output_addr[2], ctrl_op[2];
+
+    // Compute
+    instruction[0] = comp_instr_buffer_unit->buffer[comp_PC][0];
+    instruction[1] = comp_instr_buffer_unit->buffer[comp_PC][1];
+#ifdef PROFILE
+    printf("comp_PC = %d\t", comp_PC);
+#endif
+    comp_decoder_unit.execute(instruction[0], op[0], input_addr[0], &output_addr[0], &comp_PC);
+    comp_decoder_unit.execute(instruction[1], op[1], input_addr[1], &output_addr[1], &i);
+#ifdef PROFILE
+    printf("\n");
+#endif
+    for (i = 0; i < 6; i++) {
+        regfile_unit->read_addr[i] =  input_addr[0][i];
+        regfile_unit->read_addr[i+6] = input_addr[1][i];
+    }
+    regfile_unit->read(regfile_unit->read_addr, regfile_unit->read_data);
+    regfile_unit->write_addr[0] = output_addr[0];
+    regfile_unit->write_addr[1] = output_addr[1];
+
+    int cu_inputs[2][6];
+    for (i = 0; i < 6; i++){
+        cu_inputs[0][i] = regfile_unit->read_data[i];
+        cu_inputs[1][i] = regfile_unit->read_data[6+i];
+    }
+    //Patch up for immediates
+    if (is_immediate_opcode(op[0][0])){
+        cu_inputs[0][0] = input_addr[0][0];
+        op[0][0] = get_base_opcode(op[0][0]);
+    }
+    if (is_immediate_opcode(op[0][1])){
+        cu_inputs[0][1] = input_addr[0][4];
+        op[0][1] = get_base_opcode(op[0][1]);
+    }
+    if (is_immediate_opcode(op[1][0])){
+        cu_inputs[1][0] = input_addr[1][0];
+        op[1][0] = get_base_opcode(op[1][0]);
+    }
+    if (is_immediate_opcode(op[1][1])){
+        cu_inputs[1][1] = input_addr[1][4];
+        op[1][1] = get_base_opcode(op[1][1]);
+    }
+
+    if (simd) {
+        regfile_unit->write_data[0] = cu_32.execute_8bit(op[0], cu_inputs[0]);
+        regfile_unit->write_data[1] = cu_32.execute_8bit(op[1], cu_inputs[1]);        
     } else {
-        int i, op[2][3], input_addr[2][6], output_addr[2], ctrl_op[2];
+        regfile_unit->write_data[0] = cu_32.execute(op[0], cu_inputs[0]);
+        regfile_unit->write_data[1] = cu_32.execute(op[1], cu_inputs[1]);   
+    }
 
-        // Compute
-        instruction[0] = comp_instr_buffer_unit->buffer[comp_PC][0];
-        instruction[1] = comp_instr_buffer_unit->buffer[comp_PC][1];
+
+    regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 0);
+    regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 1);
 #ifdef PROFILE
-        printf("comp_PC = %d\t", comp_PC);
-#endif
-        comp_decoder_unit.execute(instruction[0], op[0], input_addr[0], &output_addr[0], &comp_PC);
-        comp_decoder_unit.execute(instruction[1], op[1], input_addr[1], &output_addr[1], &i);
-#ifdef PROFILE
-        printf("\n");
-#endif
-        for (i = 0; i < 6; i++) {
-            regfile_unit->read_addr[i] = input_addr[0][i];
-            regfile_unit->read_addr[i+6] = input_addr[1][i];
-        }
-        regfile_unit->read(regfile_unit->read_addr, regfile_unit->read_data);
-        regfile_unit->write_addr[0] = output_addr[0];
-        regfile_unit->write_addr[1] = output_addr[1];
-
-        if (simd) {
-            regfile_unit->write_data[0] = cu_32.execute_8bit(op[0], regfile_unit->read_data);
-            regfile_unit->write_data[1] = cu_32.execute_8bit(op[1], regfile_unit->read_data + 6);        
-        } else {
-            regfile_unit->write_data[0] = cu_32.execute(op[0], regfile_unit->read_data);
-            regfile_unit->write_data[1] = cu_32.execute(op[1], regfile_unit->read_data + 6);   
-        }
-
-
-        regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 0);
-        regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 1);
-#ifdef PROFILE
-        printf("\nPE[%d]\t", id);
+    printf("\nPE[%d]\t", id);
 #endif
 
-        // Control
-        decode(ctrl_instr_buffer_unit->buffer[PC[1]][1], &PC[1], src_dest[1], &ctrl_op[1], simd);
-        decode(ctrl_instr_buffer_unit->buffer[PC[0]][0], &PC[0], src_dest[0], &ctrl_op[0], simd);
+    // Control
+    decode(ctrl_instr_buffer_unit->buffer[PC[1]][1], &PC[1], src_dest[1], &ctrl_op[1], simd);
+    decode(ctrl_instr_buffer_unit->buffer[PC[0]][0], &PC[0], src_dest[0], &ctrl_op[0], simd);
 #ifdef PROFILE
-        printf("\n");
+    printf("\n");
 #endif
 
-        if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][0] == src_dest[1][0]) {
-            fprintf(stderr, "PE[%d] PC[%d %d] source position confliction.\n", id, PC[0], PC[1]);
-            exit(-1);
-        } else if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][1] == src_dest[1][1]) {
-            fprintf(stderr, "PE[%d] PC[%d %d] dest position confliction.\n", id, PC[0], PC[1]);
-            exit(-1);
-        }
+    if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][0] == src_dest[1][0]) {
+        fprintf(stderr, "PE[%d] PC[%d %d] source position confliction.\n", id, PC[0], PC[1]);
+        exit(-1);
+    } else if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][1] == src_dest[1][1]) {
+        fprintf(stderr, "PE[%d] PC[%d %d] dest position confliction.\n", id, PC[0], PC[1]);
+        exit(-1);
     }
 }
 
@@ -184,7 +202,7 @@ int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
         printf("%lx %lx from input comp instruction port to ", instruction[0], instruction[1]);
 #endif
     } else {
-        fprintf(stderr, "source_pos error.\n");
+        fprintf(stderr, "source_pos error. source_pos=%d\n",source_pos);
         exit(-1);
     }
     return data;
@@ -257,6 +275,9 @@ void pe::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, int data, in
 }
 
 int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int simd) {
+    if (instruction == 0x20f7800000000) {
+        fprintf(stderr, "WARNING: PE[%d] PC=%d cycle=%d executing uninitialized instruction.\n", id, *PC, cycle);
+    }
 
     // pe position:   
     // src - 0/1/2/9
@@ -323,7 +344,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         add_a = addr_regfile_unit->buffer[rs1];
         add_b = addr_regfile_unit->buffer[rs2];
         sum = add_a + add_b;
-        addr_regfile_unit->buffer[rd] = sum;
+        *get_output_dest(dest, rd) = sum;
 #ifdef PROFILE
         printf("add gr[%d] gr[%d] gr[%d] (%d %d %d)\t", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -335,7 +356,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         add_a = addr_regfile_unit->buffer[rs1];
         add_b = addr_regfile_unit->buffer[rs2];
         sum = add_a - add_b;
-        addr_regfile_unit->buffer[rd] = sum;
+        *get_output_dest(dest, rd) = sum;
 #ifdef PROFILE
         printf("sub gr[%d] gr[%d] gr[%d] (%d %d %d)\t", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -347,7 +368,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         add_a = imm;
         add_b = addr_regfile_unit->buffer[rs2];
         sum = add_a + add_b;
-        addr_regfile_unit->buffer[rd] = sum;
+        *get_output_dest(dest, rd) = sum;
 #ifdef PROFILE
         printf("addi gr[%d] %d gr[%d] (%d %d %d)\t", rd, imm, rs2, sum, add_a, add_b);
 #endif
@@ -500,9 +521,6 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         printf("wait.\t");
 #endif
     } else if (opcode == CTRL_SHIFTI_R) {      // SHIFT_R
-        //zkn
-        //TODO is addr_regfile_unit the correct place to go?
-        assert(dest == 0);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = addr_regfile_unit->buffer[rs2];
@@ -510,10 +528,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
         int shift_result = operand1 / (1<<reg_imm_1);
-        addr_regfile_unit->buffer[rd] = shift_result;
+        *get_output_dest(dest, rd) = shift_result;
         (*PC)++;
     } else if (opcode == CTRL_SHIFTI_L) {      // SHIFT_L
-        assert(dest == 0);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = addr_regfile_unit->buffer[rs2];
@@ -521,24 +538,33 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
         int shift_result = operand1 <<reg_imm_1;
-        addr_regfile_unit->buffer[rd] = shift_result;
+        *get_output_dest(dest, rd) = shift_result;
         (*PC)++;
     } else if (opcode == CTRL_ANDI) {      // AND
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = addr_regfile_unit->buffer[rs2];
         int and_result = operand1 & (1<<reg_imm_1);
-        addr_regfile_unit->buffer[rd] = and_result;
+        *get_output_dest(dest, rd) = and_result;
         (*PC)++;
-    } else if (opcode == CTRL_WAIT) {
-        wait = true;
-    } else if (opcode == CTRL_SEND_READY) {
-        ready_out = true;
     } else {
         fprintf(stderr, "PE[%d] control instruction opcode error.\n", id);
         exit(-1);
     }
     return 0;
+}
+
+int* pe::get_output_dest(int dest, int rd){
+    // write out only supported for GR or out buffer
+    if (dest == CTRL_GR){
+        return &(addr_regfile_unit->buffer[rd]);
+    } else if (dest == CTRL_OUT_PORT){
+        return &store_data;
+    } else {
+        fprintf(stderr, 
+                "Only dest CTRL_GR and CTRL_OUT_BUF are supported for pe, non MV CTRL instr. dest = %d; PC = %d; cycle = %d\n", dest, *PC, cycle);
+        exit(-1);
+    }
 }
 
 int pe::get_gr_10() {

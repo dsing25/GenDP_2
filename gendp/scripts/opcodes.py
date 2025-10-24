@@ -33,15 +33,33 @@ halt = 15
 shifti_r = 16
 shifti_l = 17
 AND = 18
-'''
-if pe, wait until recieves broadcasted ready from pe_array
-if pe_array, wait until all pes have finished and sent ready
-'''
-wait = 19
-'''
-if a pe, sends a ready bit to the pe_array
-if pe_array, broadcasts ready bit to all pes
-'''
-send_ready = 20
 # these instruction tags here are for data movement
 # use sys_def.h for compute tags
+
+#COMPUTE OPCODES
+ADD = 0
+SUBTRACTION = 1
+MULTIPLICATION = 2
+CARRY = 3
+BORROW = 4
+MAXIMUM = 5
+MINIMUM = 6
+LEFT_SHIFT = 7
+RIGHT_SHIFT = 8
+COPY = 9
+MATCH_SCORE = 10
+LOG2_LUT = 11
+LOG_SUM_LUT = 12
+COMP_LARGER = 13
+COMP_EQUAL = 14
+INVALID = 15
+HALT = 16
+BWISE_OR = 17
+BWISE_AND = 18
+BWISE_NOT = 19
+BWISE_XOR = 20
+LSHIFT_1 =  21
+RSHIFT_WORD = 22
+ADD_I = 23
+COPY_I = 24
+POPCOUNT = 25 

@@ -16,3 +16,6 @@
 [submodule "cpu-baselines/poa/racon"]
 	path = cpu-baselines/poa/racon
 	url = https://github.com/Yufeng98/racon.git
+[submodule "WFA-kernel"]
+	path = gendp/kernel/WFA-kernel
+	url = https://github.com/kaplannp/WFA-kernel.git

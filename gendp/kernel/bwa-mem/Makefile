@@ -46,4 +46,4 @@ power:$(PROG)
 	sudo setcap cap_sys_rawio+ep /tmp/$(PROG)
 
 clean:
-		rm $(PROG) $(LIBOBJECTS) $(OBJECTS)
+		rm -f $(PROG) $(LIBOBJECTS) $(OBJECTS)

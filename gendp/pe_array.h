@@ -1,3 +1,5 @@
+#ifndef PE_ARRAY_H
+#define PE_ARRAY_H
 #include "pe.h"
 #include "FIFO.h"
 
@@ -51,8 +53,9 @@ class pe_array {
         pe *pe_unit[PE_NUM];
 
     private:
-        bool pe_readies_in[4];
-        bool ready_out;
-        bool wait;
+        //helper
+        int* get_output_dest(int dest, int rd);
 
 };
+
+#endif // PE_ARRAY_H

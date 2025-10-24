@@ -1,6 +1,7 @@
 #include "pe_array.h"
 #include <cassert>
 #include "sys_def.h"
+#include "simGlobals.h"
 
 #define NUM_FRACTION_BITS 16
 #define MAX_RANGE NUM_FRACTION_BITS
@@ -147,7 +148,7 @@ int pe_array::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int si
     }
 #endif
     } else {
-        fprintf(stderr, "source_pos error.\n");
+        fprintf(stderr, "source_pos error. source_pos = %d\n",source_pos);
         exit(-1);
     }
     return data;
@@ -204,7 +205,6 @@ void pe_array::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, int da
 }
 
 int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting) {
-
 #ifdef PROFILE
     // printf("main j=%d\t", main_addressing_register[12]);
     // printf("main j=%d\t", main_addressing_register[4]);
@@ -224,6 +224,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
     // 10 - Out data port
     // 11 - imm
     // 12 - none
+    if (instruction == 0x20f7800000000) {
+        fprintf(stderr, "WARNING: PE_ARRAY PC=%d cycle=%d executing uninitialized instruction.\n", *PC, cycle);
+    }
 
     int i, rd, rs1, rs2, imm, data, comp_0 = 0, comp_1 = 0, sum = 0, add_a = 0, add_b = 0;
 
@@ -291,7 +294,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         add_a = main_addressing_register[rs1];
         add_b = main_addressing_register[rs2];
         sum = add_a + add_b;
-        main_addressing_register[rd] = sum;
+        *get_output_dest(dest, rd) = sum;
 #ifdef PROFILE
         printf("add gr[%d] gr[%d] gr[%d] (%d %d %d)\n", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -303,7 +306,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         add_a = main_addressing_register[rs1];
         add_b = main_addressing_register[rs2];
         sum = add_a - add_b;
-        main_addressing_register[rd] = sum;
+        *get_output_dest(dest,rd) = sum;
 #ifdef PROFILE
         printf("sub gr[%d] gr[%d] gr[%d] (%d %d %d)\n", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -315,7 +318,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         add_a = imm;
         add_b = main_addressing_register[rs2];
         sum = add_a + add_b;
-        main_addressing_register[rd] = sum;
+        *get_output_dest(dest,rd) = sum;
 #ifdef PROFILE
         printf("addi gr[%d] %d gr[%d] (%d %d %d)\n", rd, imm, rs2, sum, add_a, add_b);
 #endif
@@ -328,12 +331,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         for (i = 0; i < 4; i++) {
             rs[i] = main_addressing_register[rs2] & 0xFF;
         }
-        memcpy(&main_addressing_register[rd], rs, 4*sizeof(int8_t));
+        memcpy(get_output_dest(dest,rd), rs, 4*sizeof(int8_t));
 #ifdef PROFILE
         printf("set_8 gr[%d] gr[%d] (%d %lx)\n", rd, rs2, main_addressing_register[rs2], main_addressing_register[rd]);
 #endif
         (*PC)++;
-    } else if (opcode == 4) {       // li dest imm/reg(reg(++))
+    } else if (opcode == 4) {       // si dest imm/reg(reg(++))
 #ifdef PROFILE
     if (simd)
         printf("Store %lx to ", sext_imm_1);
@@ -496,7 +499,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
     } else if (opcode == CTRL_SHIFTI_R) {      // SHIFT_R
         //main_addressing_register
         //TODO is main_addressing_register the correct place to go?
-        assert(dest == 0);  // only support gr
+        assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = main_addressing_register[rs2];
@@ -504,10 +507,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
         int shift_result = operand1 / (1<<reg_imm_1);
-        main_addressing_register[rd] = shift_result;
+        *get_output_dest(dest,rd) = shift_result;
         (*PC)++;
     } else if (opcode == CTRL_SHIFTI_L) {      // SHIFT_L
-        assert(dest == 0);  // only support gr
+        assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = main_addressing_register[rs2];
@@ -515,24 +518,35 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
         int shift_result = operand1 <<reg_imm_1;
-        main_addressing_register[rd] = shift_result;
+        *get_output_dest(dest,rd) = shift_result;
         (*PC)++;
     } else if (opcode == CTRL_ANDI) {      // AND
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = main_addressing_register[rs2];
         int and_result = operand1 & (1<<reg_imm_1);
-        main_addressing_register[rd] = and_result;
+        *get_output_dest(dest,rd) = and_result;
         (*PC)++;
-    } else if (opcode == CTRL_WAIT) {
-        wait = true;
-    } else if (opcode == CTRL_SEND_READY) {
-        ready_out = true;
     } else {
-        fprintf(stderr, "main control instruction opcode error.\n");
+        fprintf(stderr, "main control instruction opcode error. opcode = %d\n", opcode);
         exit(-1);
     }
     return 0;
+}
+
+int* pe_array::get_output_dest(int dest, int rd){
+    // write out only supported for GR or out buffer
+    if (dest == CTRL_GR){
+        return &main_addressing_register[rd];
+    } else if (dest == CTRL_OUT_BUF){
+        return &output_buffer[rd];
+    } else if (dest == CTRL_OUT_PORT){
+        return &store_data;
+    } else {
+        fprintf(stderr, 
+                "Only dest CTRL_GR and CTRL_OUT_BUF are supported for pe_array, non MV CTRL instr. dest = %d. PC = %d\n", dest, main_PC);
+        exit(-1);
+    }
 }
 
 int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting) {
@@ -760,7 +774,8 @@ void pe_array::poa_show_output_buffer(int len_y, int len_x, FILE* fp) {
 
 
 void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_setting) {
-    int i, j, cycle = 0, flag, old_PC;
+    int i, j, flag, old_PC;
+    cycle = 0;
 
     while (1) {
         cycle++;
@@ -784,9 +799,6 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                 } else if (i == 3) {
                     load_data = pe_unit[3]->store_data;
                 }
-                //zkn pass through the synchronization
-                pe_readies_in[i] = pe_unit[i]->ready_out;
-                pe_unit[i]->ready_in = ready_out;
             }
         } else if (setting == PE_64_SETTING) {
             //TODO note that WAIT/READY is not implemented for 64 setting
@@ -815,14 +827,10 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         }
         from_fifo = 0;
         
-        if (wait) {
-            wait = !(pe_readies_in[0] && pe_readies_in[1] && pe_readies_in[2] && pe_readies_in[3]);
-        } else {
-            if (main_instruction_setting == MAIN_INSTRUCTION_1)
-                decode_output(main_instruction_buffer[old_PC][1], &old_PC, simd, setting, main_instruction_setting);
-            else if (main_instruction_setting == MAIN_INSTRUCTION_2)
-                decode_output(main_instruction_buffer[old_PC][0], &old_PC, simd, setting, main_instruction_setting);
-        }
+        if (main_instruction_setting == MAIN_INSTRUCTION_1)
+            decode_output(main_instruction_buffer[old_PC][1], &old_PC, simd, setting, main_instruction_setting);
+        else if (main_instruction_setting == MAIN_INSTRUCTION_2)
+            decode_output(main_instruction_buffer[old_PC][0], &old_PC, simd, setting, main_instruction_setting);
 
         //zkn TODO I don't know if these should be in the above else or not
         main_addressing_register[13] = pe_unit[0]->get_gr_10() && pe_unit[1]->get_gr_10();

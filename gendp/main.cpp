@@ -1,6 +1,7 @@
 #include "pe_array.h"
 #include "sys_def.h"
 #include "bsw.h"
+#include "wfa.h"
 #include "phmm.h"
 #include "poa.h"
 #include "chain.h"
@@ -20,6 +21,7 @@ void help() {
         "            2 - phmm\n"
         "            3 - poa\n"
         "            4 - chain\n"
+        "            5 - wfa\n"
         "        -i <input file>\n"
         "            default: NULL\n"
         "        -o <output file>\n"
@@ -57,6 +59,7 @@ int main(int argc, char *argv[]) {
     else if (kernel == 2) phmm_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
     else if (kernel == 3) poa_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
     else if (kernel == 4) chain_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
+    else if (kernel == 5) wfa_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
 
     timenow = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::cout << "End Simulation: " << ctime(&timenow) << std::endl;

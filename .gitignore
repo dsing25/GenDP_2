@@ -14,3 +14,6 @@ tmp
 gendp/kernel/poaV2/run.sh
 gendp/scripts/poa_throughput.sh
 backtest-datasets
+*/instructions
+success.txt
+__pycache__/
