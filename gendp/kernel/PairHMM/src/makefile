@@ -25,4 +25,4 @@ testcase_iterator.o: testcase_iterator.cpp testcase_iterator.h testcase.h \
 	$(CXX) $(CXXFLAGS) $(INCLUDE) $(INCLUDES) -c $< -o $@
 
 clean:
-	rm *.o ../pairhmm 
+	rm -f *.o ../pairhmm 
