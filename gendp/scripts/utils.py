@@ -1,3 +1,6 @@
+import inspect
+import os
+
 def compute_instruction(op_0, op_1, op_2, in_addr_0, in_addr_1, in_addr_2, in_addr_3, in_addr_4, in_addr_5, out_addr):
     '''
     in_addr_0 can be immediate
@@ -48,3 +51,29 @@ def data_movement_instruction(dest, src, reg_immBar_0, reg_auto_increase_0, imm_
             + "{:0>6b}".format(opcode)
     value = int(instr, 2)
     return hex(value) + "\n"
+
+class InstructionWriter:
+    '''
+    Instruction writer class. Creates two files: one with raw instructions and another 
+    human-readable file with the source instruction "assembly" alongside hex instruction
+    '''
+    def __init__(self, filepath):
+        self.filepath = filepath
+        self.file = open(self.filepath, 'w')
+
+        root, ext = os.path.splitext(self.filepath)
+        self.hr_path = f"{root}_HR{ext}"
+        self.hr_file = open(self.hr_path, 'w')
+
+    def write(self, value):
+        self.file.write(value)
+        frame = inspect.currentframe().f_back
+        line = inspect.getframeinfo(frame).code_context[0].strip()
+        expr_text = line[line.find('(')+1:]  # crude extraction
+        self.hr_file.write(f"{value[:-1].ljust(18)} {expr_text}\n")
+
+    def close(self):
+        self.file.close()
+
+
+

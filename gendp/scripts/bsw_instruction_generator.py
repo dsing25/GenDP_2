@@ -18,7 +18,7 @@ PE_END = 130+4
 
 def bsw_compute():
     
-    f = open("instructions/bsw/compute_instruction.txt", "w")
+    f = InstructionWriter("instructions/bsw/compute_instruction.txt");
     
     f.write(compute_instruction(1, 9, 5, 7, 21, 0, 0, 0, 0, 20))        # head = max(0, i-qlen)                 0
     f.write(compute_instruction(0, 9, 6, 21, 21, 0, 0, 22, 0, 23))      # mlen = min(qlen+qlen, tlen)
@@ -111,7 +111,7 @@ def bsw_compute():
 # dest, src, flag_0, flag_1, imm/reg_0, reg_0(++), flag_2, flag_3, imm/reg_1, reg_1(++), opcode
 def bsw_main_instruction():
     
-    f = open("instructions/bsw/main_instruction.txt", "w")
+    f = InstructionWriter("instructions/bsw/main_instruction.txt");
     
     f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 4, 0, si))                                   # gr[1] = pe_group_size
     f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si))                                   # gr[2] = 0
@@ -225,7 +225,7 @@ def bsw_main_instruction():
     
 def pe_0_instruction():
     
-    f = open("instructions/bsw/pe_0_instruction.txt", "w")
+    f = InstructionWriter("instructions/bsw/pe_0_instruction.txt");
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt              0
@@ -429,7 +429,7 @@ def pe_0_instruction():
 
 def pe_1_instruction():
     
-    f = open("instructions/bsw/pe_1_instruction.txt", "w")
+    f = InstructionWriter("instructions/bsw/pe_1_instruction.txt");
     
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt              0
@@ -638,7 +638,7 @@ def pe_1_instruction():
     
 def pe_2_instruction():
     
-    f = open("instructions/bsw/pe_2_instruction.txt", "w")
+    f = InstructionWriter("instructions/bsw/pe_2_instruction.txt");
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt              0
@@ -818,7 +818,7 @@ def pe_2_instruction():
     
 def pe_3_instruction():
     
-    f = open("instructions/bsw/pe_3_instruction.txt", "w")
+    f = InstructionWriter("instructions/bsw/pe_3_instruction.txt");
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt              0

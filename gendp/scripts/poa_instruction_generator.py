@@ -14,7 +14,7 @@ PE_OUTPUT = 105
     
 def poa_compute():
     
-    f = open("instructions/poa/compute_instruction.txt", "w")
+    f = InstructionWriter("instructions/poa/compute_instruction.txt");
     
     # 0 ~ 10
     f.write(compute_instruction(9, 15, 9, 0, 0, 0, 0, 0, 0, 19))        # 0; reg[19] = reg[0]
@@ -86,7 +86,7 @@ def poa_compute():
 # dest, src, flag_0, flag_1, imm/reg_0, reg_0(++), flag_2, flag_3, imm/reg_1, reg_1(++), opcode
 def poa_main_instruction():
     
-    f = open("instructions/poa/main_instruction.txt", "w")
+    f = InstructionWriter("instructions/poa/main_instruction.txt");
     
     f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 4, 0, si))                                   # gr[1] = pe_group_size
     f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si))                                   # gr[2] = 0
@@ -171,7 +171,7 @@ def poa_main_instruction():
     
 def pe_0_instruction():
     
-    f = open("instructions/poa/pe_0_instruction.txt", "w")
+    f = InstructionWriter("instructions/poa/pe_0_instruction.txt");
     
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt              0
@@ -350,7 +350,7 @@ def pe_0_instruction():
 
 def pe_1_instruction():
     
-    f = open("instructions/poa/pe_1_instruction.txt", "w")
+    f = InstructionWriter("instructions/poa/pe_1_instruction.txt");
     
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
@@ -528,7 +528,7 @@ def pe_1_instruction():
     
 def pe_2_instruction():
     
-    f = open("instructions/poa/pe_2_instruction.txt", "w")
+    f = InstructionWriter("instructions/poa/pe_2_instruction.txt");
     
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
@@ -707,7 +707,7 @@ def pe_2_instruction():
     
 def pe_3_instruction():
     
-    f = open("instructions/poa/pe_3_instruction.txt", "w")
+    f = InstructionWriter("instructions/poa/pe_3_instruction.txt");
     
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
