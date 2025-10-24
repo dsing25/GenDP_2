@@ -31,16 +31,16 @@ cd ../../
 mkdir -p chain_sim_results
 bash scripts/chain_throughput.sh 1 $CHAIN_DATA_FILE | tee >(grep CUPS >> ../success.txt)
 
-### PairHMM   
-#INPUT_SIZE_PHMM=64
-#cd $GenDP_WORK_DIR/gendp
-#cd kernel/PairHMM
-#make clean
-#make -j
-#./pairhmm $GenDP_WORK_DIR/backtest-datasets/phmm/tiny.in $INPUT_SIZE_PHMM > $GenDP_WORK_DIR/gendp-datasets/phmm_large_output.txt 2> $GenDP_WORK_DIR/gendp-datasets/phmm_large_app.txt
-#cd ../../
-#mkdir -p phmm_sim_results
-#bash scripts/phmm_throughput.sh $INPUT_SIZE_PHMM | tee >(grep CUPS >> ../success.txt)
+## PairHMM   
+INPUT_SIZE_PHMM=64
+cd $GenDP_WORK_DIR/gendp
+cd kernel/PairHMM
+make clean
+make -j
+./pairhmm $GenDP_WORK_DIR/backtest-datasets/phmm/tiny.in $INPUT_SIZE_PHMM > $GenDP_WORK_DIR/gendp-datasets/phmm_large_output.txt 2> $GenDP_WORK_DIR/gendp-datasets/phmm_large_app.txt
+cd ../../
+mkdir -p phmm_sim_results
+bash scripts/phmm_throughput.sh $INPUT_SIZE_PHMM | tee >(grep CUPS >> ../success.txt)
  
 ### POA     26s
 INPUT_SIZE_POA=1
@@ -54,12 +54,22 @@ make -j
 cd ../../
 bash scripts/poa_throughput.sh | tee >(grep CUPS >> ../success.txt)
 
+### WFA
+#cd $GenDP_WORK_DIR/gendp
+##TODO we'll add this later for verifcation
+##cd kernel/bwa-mem
+##make clean
+##make -j
+##./ksw-test -i $GenDP_WORK_DIR/gendp-datasets/bsw_147_1m_8bit_input_character.txt -o $GenDP_WORK_DIR/gendp-datasets/bsw_147_1m_8bit_output.txt -x -n 2000
+##cd ../../
+#bash scripts/wfa_throughput.sh
+
 cd $GenDP_WORK_DIR
-echo "Results"
-cat success.txt
-echo "True"
+echo "======================================REFERENCE========================================"
 echo "BSW Throughput: 47036245.456 MCUPS/mm2"
 echo "Chain Throughput: 3612.677 MCUPS/mm2"
+echo "PairHMM Throughput: 15142.282 MCUPS/mm2"
 echo "POA Throughput: 3742.828 MCUPS/mm2"
-
+echo "=======================================RESULTS========================================="
+cat success.txt
 
