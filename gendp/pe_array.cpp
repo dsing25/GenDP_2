@@ -1,6 +1,7 @@
 #include "pe_array.h"
 #include <cassert>
 #include "sys_def.h"
+#include "simGlobals.h"
 
 #define NUM_FRACTION_BITS 16
 #define MAX_RANGE NUM_FRACTION_BITS
@@ -223,7 +224,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
     // 10 - Out data port
     // 11 - imm
     // 12 - none
-    volatile unsigned long tmp = instruction;
+    if (instruction == 0x20f7800000000) {
+        fprintf(stderr, "WARNING: PE_ARRAY PC=%d cycle=%d executing uninitialized instruction.\n", *PC, cycle);
+    }
 
     int i, rd, rs1, rs2, imm, data, comp_0 = 0, comp_1 = 0, sum = 0, add_a = 0, add_b = 0;
 
@@ -537,9 +540,11 @@ int* pe_array::get_output_dest(int dest, int rd){
         return &main_addressing_register[rd];
     } else if (dest == CTRL_OUT_BUF){
         return &output_buffer[rd];
+    } else if (dest == CTRL_OUT_PORT){
+        return &store_data;
     } else {
         fprintf(stderr, 
-                "Only dest CTRL_GR and CTRL_OUT_BUF are supported for PE_ARRAY, non MV CTRL instr. dest = %d\n", dest);
+                "Only dest CTRL_GR and CTRL_OUT_BUF are supported for pe_array, non MV CTRL instr. dest = %d. PC = %d\n", dest, main_PC);
         exit(-1);
     }
 }
@@ -769,7 +774,8 @@ void pe_array::poa_show_output_buffer(int len_y, int len_x, FILE* fp) {
 
 
 void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_setting) {
-    int i, j, cycle = 0, flag, old_PC;
+    int i, j, flag, old_PC;
+    cycle = 0;
 
     while (1) {
         cycle++;

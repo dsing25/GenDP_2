@@ -1,6 +1,7 @@
 #include "pe.h"
 #include "sys_def.h"
 #include <cassert>
+#include "simGlobals.h"
 
 pe::pe(int _id) {
 
@@ -274,6 +275,9 @@ void pe::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, int data, in
 }
 
 int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int simd) {
+    if (instruction == 0x20f7800000000) {
+        fprintf(stderr, "WARNING: PE[%d] PC=%d cycle=%d executing uninitialized instruction.\n", id, *PC, cycle);
+    }
 
     // pe position:   
     // src - 0/1/2/9
@@ -554,11 +558,11 @@ int* pe::get_output_dest(int dest, int rd){
     // write out only supported for GR or out buffer
     if (dest == CTRL_GR){
         return &(addr_regfile_unit->buffer[rd]);
-    } else if (dest == CTRL_OUT_BUF){
+    } else if (dest == CTRL_OUT_PORT){
         return &store_data;
     } else {
         fprintf(stderr, 
-                "Only dest CTRL_GR and CTRL_OUT_BUF are supported for PE_ARRAY, non MV CTRL instr. dest = %d\n", dest);
+                "Only dest CTRL_GR and CTRL_OUT_BUF are supported for pe, non MV CTRL instr. dest = %d; PC = %d; cycle = %d\n", dest, *PC, cycle);
         exit(-1);
     }
 }

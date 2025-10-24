@@ -21,7 +21,7 @@ ifeq ($(ADDRESS_SANITIZER),1)
 endif
 
 
-OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o 
+OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o simGlobals.o
 
 ifeq ($(debug),1)
 CXXFLAGS+= -DDEBUG
