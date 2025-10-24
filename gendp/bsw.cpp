@@ -269,8 +269,8 @@ void bsw_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
     fclose(pairFile);
 
     //BEGIN LOADING INSTRUCTIONS wasn't able to make a function easily due to prior coding style
-    size_t n_comp_instructions = BSW_COMPUTE_INSTRUCTION_NUM;
-    size_t pe_group_size = BSW_PE_GROUP_SIZE;
+    int n_comp_instructions = BSW_COMPUTE_INSTRUCTION_NUM;
+    int pe_group_size = BSW_PE_GROUP_SIZE;
     std::string kernel_name = "bsw";
 //void load_instructions(std::string kernel_name, size_t n_comp_instructions, size_t pe_group_size, pe_array *pe_array_unit) {
     unsigned long compute_instruction[n_comp_instructions][COMP_INSTR_BUFFER_GROUP_SIZE];
