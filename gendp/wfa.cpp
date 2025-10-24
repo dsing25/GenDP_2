@@ -57,12 +57,10 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
 
     pe_array *pe_array_unit = new pe_array(1024, 1024);
 
-    fprintf(stderr, "read input %s\n", inputFileName);
-    FILE *pairFile = fopen(inputFileName, "r");
     
     //BEGIN LOADING INSTRUCTIONS wasn't able to make a function easily due to prior coding style
-    size_t n_comp_instructions = WFA_COMPUTE_INSTRUCTION_NUM;
-    size_t pe_group_size = WFA_PE_GROUP_SIZE;
+    int n_comp_instructions = WFA_COMPUTE_INSTRUCTION_NUM;
+    int pe_group_size = WFA_PE_GROUP_SIZE;
     std::string kernel_name = "wfa";
 //void load_instructions(std::string kernel_name, size_t n_comp_instructions, size_t pe_group_size, pe_array *pe_array_unit) {
     unsigned long compute_instruction[n_comp_instructions][COMP_INSTR_BUFFER_GROUP_SIZE];
@@ -75,7 +73,7 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
         }
     }
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {
-        main_instruction[i] = -1;
+        main_instruction[i] = 0x20f7800000000;
     }
 
     std::string compute_instruction_file = "instructions/"+kernel_name+"/compute_instruction.txt";
@@ -139,7 +137,7 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
     // Load main & pe instructions into pe_array instruction buffer
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {
         unsigned long tmp[CTRL_INSTR_BUFFER_GROUP_SIZE];
-        tmp[0] = 0xe;
+        tmp[0] = 0x20f7800000000;
         tmp[1] = main_instruction[i];
         pe_array_unit->main_instruction_buffer_write_from_ddr(i, tmp);
         for (int j = 0; j < pe_group_size; j++)
@@ -149,8 +147,14 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
 
     std::vector<int> wfa_output;
 
+    fprintf(stderr, "read input %s\n", inputFileName);
+    FILE *input_file = fopen(inputFileName, "r");
+    if (input_file == nullptr) {
+        fprintf(stderr, "Error opening file '%s': %s\n", inputFileName, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+
     //At this point we are looping through input file processing each pair
-    FILE *input_file = NULL;
     char *line1 = NULL, *line2 = NULL;
     int line1_length=0, line2_length=0;
     size_t line1_allocated=0, line2_allocated=0;
