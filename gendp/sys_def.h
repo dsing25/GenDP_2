@@ -81,7 +81,7 @@
 #define ADD_I 23 // Dummy TODO implement
 #define COPY_I 24 // Dummy TODO implement
 #define POPCOUNT 25 // partial dummy TODO
-#define CMP_2INP // dummy TODO
+#define CMP_2INP 26 // dummy TODO
 
 // CTRL Opcode
 #define CTRL_ADD 0
