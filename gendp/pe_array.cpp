@@ -299,6 +299,32 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
     if (is_magic) {
         //Used to wreak simulator havoc. Put whatever you want here
         printf("Magic!!!!! payload = %d\n", magic_payload);
+        static int score = 0;
+        constexpr int MEM_BLOCK_SIZE = 64;
+        for (int i = 0; i < PE_NUM; i++) {
+            printf("SPM of PE[%d] at score %d:\n", i, score);
+            SPM_units[i]->show_data(i*SPM_ADDR_NUM, SPM_ADDR_NUM + MEM_BLOCK_SIZE*7);
+        }
+        int open_score = std::max(score - 8, 0);
+        int match_score= std::max(score - 4, 0);
+        int d_i_score  = std::max(score - 2, 0);
+        for (int i = 0; i < PE_NUM; i++) {
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set open
+                SPM_units[i]->buffer[i*SPM_ADDR_NUM + j] = open_score;
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set match
+                SPM_units[i]->buffer[i*SPM_ADDR_NUM + 1 * MEM_BLOCK_SIZE + j] = match_score;
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set i
+                SPM_units[i]->buffer[i*SPM_ADDR_NUM + 2 * MEM_BLOCK_SIZE + j] = d_i_score;
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set d
+                SPM_units[i]->buffer[i*SPM_ADDR_NUM + 3 * MEM_BLOCK_SIZE + j] = d_i_score;
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set m write
+                SPM_units[i]->buffer[i*SPM_ADDR_NUM + 4 * MEM_BLOCK_SIZE + j] = 0;
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set d write
+                SPM_units[i]->buffer[i*SPM_ADDR_NUM + 5 * MEM_BLOCK_SIZE + j] = 0;
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set i write
+                SPM_units[i]->buffer[i*SPM_ADDR_NUM + 6 * MEM_BLOCK_SIZE + j] = 0;
+        }
+        score += 2;
         (*PC)++;
     } else if (opcode == 0) {              // add rd rs1 rs2
         rd = reg_imm_0;

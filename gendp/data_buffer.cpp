@@ -1,4 +1,5 @@
 #include "data_buffer.h"
+#include <iomanip>
 
 // template <typename T>
 // data_buffer<T>::data_buffer(int size) {
@@ -63,6 +64,7 @@ void addr_regfile::show_data(int addr) {
     } else fprintf(stderr, "addr_regfile show data addr error.\n");
 }
 
+
 SPM::SPM(int size) {
     buffer = (int*)malloc(size * sizeof(int));
     buffer_size = size;
@@ -82,6 +84,19 @@ void SPM::reset() {
 void SPM::show_data(int addr) {
     if (addr >= 0 && addr < buffer_size) {
         printf("SPM[%d] = %d\n", addr, buffer[addr]);
+    } else fprintf(stderr, "SPM show data addr error.\n");
+}
+
+void SPM::show_data(int start_addr, int end_addr) {
+    int i;
+    if (start_addr >= 0 && end_addr < buffer_size && start_addr <= end_addr) {
+        // print aligned SPM in rows of 64 ints each
+        int width = 5;
+        for (i = start_addr; i <= end_addr; i++) {
+            std::cout << std::setw(width) << buffer[i];
+            if ((i - start_addr) % 64 == 0)
+                std::cout << std::endl;
+        }
     } else fprintf(stderr, "SPM show data addr error.\n");
 }
 

@@ -3,7 +3,7 @@ import os
 from utils import *
 from opcodes import *
 
-MEM_BLOCK_SIZE = 1024 # in words
+MEM_BLOCK_SIZE = 64 # in words
 SPM_BANDWIDTH = 4 # in words
 PE_LOOP_WF = 0
 WFA_COMPUTE_INSTRUCTION_NUM = 28
@@ -75,7 +75,7 @@ def wfa_compute():
     #add 16, then you'll get the mappings for second tile.
     #Each val has 4 regs. for example, 
     # nah make em 0,1,2,3
-    # |m_r0 |     |m_r1 | Score -4E Reg 123. cursor in gr0
+    # |m_r0 |     |m_r1 | Score -4E Reg 123. cursor in gr11
     # |-----|-----|-----| 
     # |     |     |     | Score -3E
     # |-----|-----|-----|
@@ -150,13 +150,13 @@ def pe_instruction(pe_id):
     #initialize the counter
     #INITIALIZING REGISTERS
     #gr[1,6] are initialized to cursor positions. Each block is offset by MEM_BLOCK_SIZE
-    f.write(data_movement_instruction(gr, 0, 0, 0, 0, 0, 0, 0, 0*MEM_BLOCK_SIZE, 0, si)) 
-    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 1*MEM_BLOCK_SIZE, 0, si))
-    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 2*MEM_BLOCK_SIZE, 0, si))
-    f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 3*MEM_BLOCK_SIZE, 0, si))
-    f.write(data_movement_instruction(gr, 0, 0, 0, 4, 0, 0, 0, 4*MEM_BLOCK_SIZE, 0, si))
-    f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 5*MEM_BLOCK_SIZE, 0, si))
-    f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, 6*MEM_BLOCK_SIZE, 0, si))
+    f.write(data_movement_instruction(gr, 0, 0, 0, 11, 0, 0, 0, 0*MEM_BLOCK_SIZE, 0, si))               # gr[11] open
+    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 1*MEM_BLOCK_SIZE, 0, si))                # gr[1] match          
+    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 2*MEM_BLOCK_SIZE, 0, si))                # gr[2] i
+    f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 3*MEM_BLOCK_SIZE, 0, si))                # gr[3] d
+    f.write(data_movement_instruction(gr, 0, 0, 0, 4, 0, 0, 0, 4*MEM_BLOCK_SIZE, 0, si))                # gr[4] m write
+    f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 5*MEM_BLOCK_SIZE, 0, si))                # gr[5] d write
+    f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, 6*MEM_BLOCK_SIZE, 0, si))                # gr[6] i write
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
 
     #HALT. We're about to recieve input. Wait until controller is ready
