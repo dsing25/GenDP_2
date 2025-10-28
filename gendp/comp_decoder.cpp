@@ -3,9 +3,20 @@
 comp_decoder::comp_decoder() {}
 comp_decoder::~comp_decoder() {}
 
-void comp_decoder::execute(long instruction, int* op, int* in_addr, int* out_addr, int* PC) {
+void comp_decoder::execute(unsigned long instruction, int* op, int* in_addr, int* out_addr, int* PC) {
 
     // instruction: op[0] op[1] op[2] in_addr[0] in_addr[1] in_addr[2] in_addr[3] in_addr[4] in_addr[5] out_addr
+
+    printf("instruction = %lx\n", instruction);
+    unsigned long magic_mask = (unsigned long)((1ul << (63)));
+    unsigned long magic_payload_mask = (unsigned long)(0xFFFFFFFF);
+    bool is_magic = (instruction & magic_mask);
+    int  magic_payload = instruction & magic_payload_mask;
+    if (is_magic) {
+        //Used as a hook
+        printf("Magic!!!!! payload = %d\n", magic_payload);
+        instruction = COMP_NOP_INSTRUCTION; //don't crash rest of simulator
+    }
 
     int i;
     unsigned long out_addr_mask, in_addr_mask[6], op_mask[3];

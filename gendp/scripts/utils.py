@@ -52,6 +52,14 @@ def data_movement_instruction(dest, src, reg_immBar_0, reg_auto_increase_0, imm_
     value = int(instr, 2)
     return hex(value) + "\n"
 
+def write_magic(magic_number):
+    '''
+    Write instruction with first bit 1 as "magic" instruction. Payload of 32 bits at the end.
+    '''
+    instr = "1" + "0" * 31 + "{:0>32b}".format(magic_number)
+    value = int(instr, 2)
+    return hex(value) + "\n"
+
 class InstructionWriter:
     '''
     Instruction writer class. Creates two files: one with raw instructions and another 
