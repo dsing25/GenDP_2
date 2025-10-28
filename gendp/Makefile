@@ -8,7 +8,8 @@ AR      = @echo generating static library $@ && ar rc
 
 #BASE CXXFLAGS
 #CXXFLAGS   = -g -Wall -Wno-format -Wno-unused-variable -Wno-unused-but-set-parameter -Wno-unused-result -fPIC -std=c++11 -O0 -g3 -fno-inline -fno-omit-frame-pointer -fno-lto -fvar-tracking -fvar-tracking-assignments -lpthread 
-CXXFLAGS   = -g -g3 -ggdb -O0 -Wall -Wextra -Wpedantic -std=c++11
+CXXFLAGS   = -g -g3 -ggdb -O0 -std=c++11
+#CXXFLAGS   += -Wall -Wextra -Wpedantic
 HEADER  = 
 LIBS    = libsimulator.a 
 LINKFLAGS = 

@@ -167,7 +167,7 @@ void chain_simulate(pe_array *pe_array_unit, call_t chain_input, int n, FILE* fp
         pe_array_unit->input_buffer_write_from_ddr(i*3+2+8, &q_span);
     }
 
-    printf("Cells %d\n", chain_input.n * 64);
+    printf("Cells %lu\n", chain_input.n * 64);
     pe_array_unit->run(n, simd, PE_64_SETTING, MAIN_INSTRUCTION_2);
 
     if (show_output) pe_array_unit->chain_show_output_buffer(chain_input.n, fp);
