@@ -7,7 +7,6 @@ void comp_decoder::execute(unsigned long instruction, int* op, int* in_addr, int
 
     // instruction: op[0] op[1] op[2] in_addr[0] in_addr[1] in_addr[2] in_addr[3] in_addr[4] in_addr[5] out_addr
 
-    printf("instruction = %lx\n", instruction);
     unsigned long magic_mask = (unsigned long)((1ul << (63)));
     unsigned long magic_payload_mask = (unsigned long)(0xFFFFFFFF);
     bool is_magic = (instruction & magic_mask);

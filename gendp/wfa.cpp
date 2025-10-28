@@ -92,7 +92,6 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
     if (fp_compute_instruction.is_open()) {
         read_index = 0;
         while(getline(fp_compute_instruction, line)) {
-            printf("line: %s\n", line.c_str());
             compute_instruction[read_index/2][read_index%2] = std::stoull(line, 0, 0);
             read_index++;
         }
