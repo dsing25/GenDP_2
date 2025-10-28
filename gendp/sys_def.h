@@ -54,6 +54,9 @@
 
 #define NUM_THREADS 5
 
+#define COMP_NOP_INSTRUCTION 0x1ef7800000000
+#define CTRL_NOP_INSTRUCTION 0xe
+
 // Opcode
 #define ADDITION 0
 #define SUBTRACTION 1

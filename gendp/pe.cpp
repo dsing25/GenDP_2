@@ -308,6 +308,8 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     unsigned long reg_imm_1_mask = (unsigned long)((1 << IMMEDIATE_WIDTH) - 1) << (GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     unsigned long reg_1_mask = (unsigned long)((1 << GLOBAL_REGISTER_ADDR_WIDTH) - 1) << CTRL_OPCODE_WIDTH;
     unsigned long opcode_mask = (unsigned long)((1 << CTRL_OPCODE_WIDTH) - 1);
+    unsigned long magic_mask = (unsigned long)((1ul << (63)));
+    unsigned long magic_payload_mask = (unsigned long)(0xFFFFFFFF);
 
     int dest = (instruction & dest_mask) >> (INSTRUCTION_WIDTH - MEMORY_COMPONENTS_ADDR_WIDTH);
     int src = (instruction & src_mask) >> (INSTRUCTION_WIDTH - 2*MEMORY_COMPONENTS_ADDR_WIDTH);
@@ -325,6 +327,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     int reg_1 = (instruction & reg_1_mask) >> CTRL_OPCODE_WIDTH;
     int opcode = instruction & opcode_mask;
 
+    bool is_magic = (instruction & magic_mask);
+    int  magic_payload = instruction & magic_payload_mask;
+
     src_dest[0] = src;
     src_dest[1] = dest;
     *op = opcode;
@@ -337,7 +342,11 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     printf("dest: %d src: %d reg_immBar_flag_0: %d reg_auto_increasement_flag_0: %d reg_imm_0_sign_bit: %d sext_imm_0: %d, reg_0: %d reg_immBar_flag_1: %d reg_auto_increasement_flag_1: %d reg_imm_1_sign_bit: %d sext_imm_1: %d reg_1: %d opcode: %d\n", dest, src, reg_immBar_flag_0, reg_auto_increasement_flag_0, reg_imm_0_sign_bit, sext_imm_0, reg_0, reg_immBar_flag_1, reg_auto_increasement_flag_1, reg_imm_1_sign_bit, sext_imm_1, reg_1, opcode);
 #endif
 
-    if (opcode == 0) {              // add rd rs1 rs2
+    if (is_magic) {
+        //Used to wreak simulator havoc. Put whatever you want here
+        printf("Magic!!!!! payload = %d\n", magic_payload);
+        (*PC)++;
+    } else if (opcode == 0) {              // add rd rs1 rs2
         rd = reg_imm_0;
         rs1 = reg_imm_1;
         rs2 = reg_1;
