@@ -8,6 +8,8 @@ SPM_BANDWIDTH = 4 # in words
 PE_LOOP_WF = 0
 WFA_COMPUTE_INSTRUCTION_NUM = 28
 COMPUTE_LOOP_NEXT = 0
+N_PES = 4
+INITIALIZATION_PE_NEXT = WFA_COMPUTE_INSTRUCTION_NUM*2+4+N_PES
 
 
 
@@ -18,10 +20,14 @@ def wfa_main_instruction():
     
     f = InstructionWriter("instructions/wfa/main_instruction.txt");
 
-    
     # Dump in the instructions
     for i in range(WFA_COMPUTE_INSTRUCTION_NUM):
-        f.write(data_movement_instruction(out_port, comp_ib, 0, 0, 0, 0, 0, 0, i, 0, mv)); # out = instr[i]
+        f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, i, 0, mv)); # out = instr[i]
+    f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                               # bne 1 gr[13] 0
+    f.write(data_movement_instruction(gr, gr, 0, 0, PE_LOOP_WF, 0, 0, 0, 0, 0, set_PC))                    # PE_PC = PE_LOOP_WF
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
+    f.write(write_magic(1));
 
     #INIT
     #reg[8] is edit distance, reg[1-4] are n_iters for pe 0-4
@@ -83,6 +89,7 @@ def wfa_compute():
     # gr8 = blocksize // value of i when we switch blocks
     # gr9 = i // the current iteration
 
+
     #BANDWIDTH = 4
 #COMPUTE_LOOP_NEXT
 #COMPUTE H SCORES (note this operates on dummy data first iter)
@@ -113,11 +120,30 @@ def wfa_compute():
 
 
     
-def pe_instruction(i):
+def pe_instruction(pe_id):
     
-    f = InstructionWriter("instructions/wfa/pe_{}_instruction.txt".format(i));
+    f = InstructionWriter("instructions/wfa/pe_{}_instruction.txt".format(pe_id));
 
-#INITIALIZATION NEXT
+
+    for i in range(pe_id):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op 
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op 
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op 
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op 
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op 
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op 
+    for j in range(WFA_COMPUTE_INSTRUCTION_NUM-1):
+        f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, j+1, 0, 0, 0, 0, 0, mv))                 # ir[j+1] = in
+        f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, j, 0, mv))                  # out = ir[j]
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                                  # gr[10] = 1
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op 
+    for i in range(4 - pe_id): #just here to align the instructions between PEs
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op 
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op 
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
+
+#INITIALIZATION NEXT CYCLE=WFA_COMPUTE_INSTRUCTION_NUM*2+4+N_PES
     #NOTES
     #I assume write to reg file can be done in adjacent blocks. #TODO we need to implement this
     #The general format is, load SPM, update cursor, stall for a cycle until SPM is ready again
