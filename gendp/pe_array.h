@@ -55,6 +55,7 @@ class pe_array {
     private:
         //helper
         int* get_output_dest(int dest, int rd);
+        SPM * SPM_units[PE_NUM];
 
 };
 

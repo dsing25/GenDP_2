@@ -19,7 +19,9 @@ pe_array::pe_array(int input_size, int output_size) {
     main_addressing_register[0] = 0;
     main_PC = 0;
     for (i = 0; i < PE_NUM; i++)
-        pe_unit[i] = new pe(i);
+        SPM_units[i] = new SPM(SPM_ADDR_NUM);
+    for (i = 0; i < PE_NUM; i++)
+        pe_unit[i] = new pe(i, SPM_units[i]);
     load_data = 0;
     store_data = 0;
     from_fifo = 0;
@@ -29,8 +31,10 @@ pe_array::~pe_array() {
     int i;
     free(input_buffer);
     free(output_buffer);
-    for (i = 0; i < PE_NUM; i++)
+    for (i = 0; i < PE_NUM; i++){
         delete pe_unit[i];
+        delete SPM_units[i];
+    }
 }
 
 void pe_array::buffer_reset(int* buffer, int num) {

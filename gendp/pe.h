@@ -8,7 +8,7 @@ class pe {
 
     public:
 
-        pe(int id);
+        pe(int id, SPM* spm);
         ~pe();
 
         int id;
@@ -45,7 +45,7 @@ class pe {
         // TODO: Put conponents below to private later
         comp_instr_buffer *comp_instr_buffer_unit = new comp_instr_buffer(COMP_INSTR_BUFFER_GROUP_NUM);
         ctrl_instr_buffer *ctrl_instr_buffer_unit = new ctrl_instr_buffer(CTRL_INSTR_BUFFER_NUM);
-        SPM *SPM_unit = new SPM(SPM_ADDR_NUM);
+        SPM *SPM_unit;
         addr_regfile *addr_regfile_unit = new addr_regfile(ADDR_REGISTER_NUM);
         comp_decoder comp_decoder_unit;
         regfile *regfile_unit = new regfile();

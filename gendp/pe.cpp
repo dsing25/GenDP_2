@@ -3,8 +3,9 @@
 #include <cassert>
 #include "simGlobals.h"
 
-pe::pe(int _id) {
+pe::pe(int _id, SPM* spm) {
 
+    SPM_unit = spm;
     id = _id;
     comp_reg_load = 0, comp_reg_store = 0, addr_reg_load = 0, addr_reg_store = 0, SPM_load = 0, SPM_store = 0,
     comp_instr_load = 0, comp_instr_store = 0,
@@ -20,7 +21,6 @@ pe::pe(int _id) {
 pe::~pe() {
     delete comp_instr_buffer_unit;
     delete ctrl_instr_buffer_unit;
-    delete SPM_unit;
     delete addr_regfile_unit;
     delete regfile_unit;
 }
