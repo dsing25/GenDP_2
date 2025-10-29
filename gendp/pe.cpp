@@ -52,9 +52,9 @@ void pe::run(int simd) {
 #endif
     comp_decoder_unit.execute(instruction[0], op[0], input_addr[0], &output_addr[0], &comp_PC);
     comp_decoder_unit.execute(instruction[1], op[1], input_addr[1], &output_addr[1], &i);
-#ifdef PROFILE
-    printf("\n");
-#endif
+//#ifdef PROFILE
+//    printf("\n");
+//#endif
     for (i = 0; i < 6; i++) {
         regfile_unit->read_addr[i] =  input_addr[0][i];
         regfile_unit->read_addr[i+6] = input_addr[1][i];
@@ -335,7 +335,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     *op = opcode;
 
 #ifdef PROFILE
-    printf("PC = %d\t", *PC);
+    printf("PC = %d @%d:%016lx\t", *PC, cycle, instruction);
 #endif
 
 #ifdef DEBUG

@@ -44,7 +44,7 @@ void comp_decoder::execute(unsigned long instruction, int* op, int* in_addr, int
     }
 
     // printf("%d %d %d %d %d %d %d %d %d %d\t", op[0], op[1], op[2], in_addr[0], in_addr[1], in_addr[2], in_addr[3], in_addr[4], in_addr[5], *out_addr);
-#ifdef PROFILE
-    printf("%d %d %d %d %d %d %d\t", in_addr[0], in_addr[1], in_addr[2], in_addr[3], in_addr[4], in_addr[5], *out_addr);
-#endif
+//#ifdef PROFILE
+//    printf("%d %d %d %d %d %d %d\t", in_addr[0], in_addr[1], in_addr[2], in_addr[3], in_addr[4], in_addr[5], *out_addr);
+//#endif
 }

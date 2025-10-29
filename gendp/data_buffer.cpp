@@ -87,16 +87,17 @@ void SPM::show_data(int addr) {
     } else fprintf(stderr, "SPM show data addr error.\n");
 }
 
-void SPM::show_data(int start_addr, int end_addr) {
+void SPM::show_data(int start_addr, int end_addr, int line_width=64) {
     int i;
     if (start_addr >= 0 && end_addr < buffer_size && start_addr <= end_addr) {
         // print aligned SPM in rows of 64 ints each
-        int width = 5;
-        for (i = start_addr; i <= end_addr; i++) {
-            std::cout << std::setw(width) << buffer[i];
-            if ((i - start_addr) % 64 == 0)
+        int width = 3;
+        for (i = start_addr; i < end_addr; i++) {
+            if ((i - start_addr) % line_width == 0)
                 std::cout << std::endl;
+            std::cout << std::setw(width) << buffer[i];
         }
+        std::cout << std::endl;
     } else fprintf(stderr, "SPM show data addr error.\n");
 }
 

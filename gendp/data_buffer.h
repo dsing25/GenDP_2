@@ -48,7 +48,7 @@ class SPM {
         void reset();
 
         void show_data(int addr);
-        void show_data(int start_addr, int end_addr);
+        void show_data(int start_addr, int end_addr, int line_width=64);
 
         int *buffer;
         int buffer_size;

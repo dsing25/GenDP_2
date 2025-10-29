@@ -9,7 +9,7 @@
 //compute instructions is num / 2. 2 lines is one vliw instr
 #define WFA_COMPUTE_INSTRUCTION_NUM 16
 #define WFA_PE_GROUP_SIZE 4
-#define MAX_CYCLES 100000
+#define MAX_CYCLES 500
 
 /*
  * Alignment Input
