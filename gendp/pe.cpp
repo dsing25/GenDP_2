@@ -530,6 +530,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         printf("wait.\t");
 #endif
     } else if (opcode == CTRL_SHIFTI_R) {      // SHIFT_R
+        //main_addressing_register
+        //TODO is main_addressing_register the correct place to go?
+        assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = addr_regfile_unit->buffer[rs2];
@@ -537,9 +540,13 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
         int shift_result = operand1 / (1<<reg_imm_1);
-        *get_output_dest(dest, rd) = shift_result;
+        *get_output_dest(dest,rd) = shift_result;
         (*PC)++;
+#ifdef PROFILE
+        printf("rShift gr[%d] = gr[%d] >> %d (%d) \n", rd, rs2, reg_imm_1, operand1);
+#endif
     } else if (opcode == CTRL_SHIFTI_L) {      // SHIFT_L
+        assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = addr_regfile_unit->buffer[rs2];
@@ -547,15 +554,21 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
         int shift_result = operand1 <<reg_imm_1;
-        *get_output_dest(dest, rd) = shift_result;
+        *get_output_dest(dest,rd) = shift_result;
         (*PC)++;
+#ifdef PROFILE
+        printf("lShift gr[%d] = gr[%d] << %d (%d) \n", rd, rs2, reg_imm_1, operand1);
+#endif
     } else if (opcode == CTRL_ANDI) {      // AND
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = addr_regfile_unit->buffer[rs2];
-        int and_result = operand1 & (1<<reg_imm_1);
-        *get_output_dest(dest, rd) = and_result;
+        int and_result = operand1 & reg_imm_1;
+        *get_output_dest(dest,rd) = and_result;
         (*PC)++;
+#ifdef PROFILE
+        printf("andi gr[%d] = gr[%d] & %d (%d) \n", rd, rs2, reg_imm_1, operand1);
+#endif
     } else {
         fprintf(stderr, "PE[%d] control instruction opcode error.\n", id);
         exit(-1);

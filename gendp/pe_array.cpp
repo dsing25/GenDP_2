@@ -548,6 +548,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         int shift_result = operand1 / (1<<reg_imm_1);
         *get_output_dest(dest,rd) = shift_result;
         (*PC)++;
+#ifdef PROFILE
+        printf("rShift gr[%d] = gr[%d] >> %d (%d) \n", rd, rs2, reg_imm_1, operand1);
+#endif
     } else if (opcode == CTRL_SHIFTI_L) {      // SHIFT_L
         assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
@@ -559,13 +562,19 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         int shift_result = operand1 <<reg_imm_1;
         *get_output_dest(dest,rd) = shift_result;
         (*PC)++;
+#ifdef PROFILE
+        printf("lShift gr[%d] = gr[%d] << %d (%d) \n", rd, rs2, reg_imm_1, operand1);
+#endif
     } else if (opcode == CTRL_ANDI) {      // AND
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = main_addressing_register[rs2];
-        int and_result = operand1 & (1<<reg_imm_1);
+        int and_result = operand1 & reg_imm_1;
         *get_output_dest(dest,rd) = and_result;
         (*PC)++;
+#ifdef PROFILE
+        printf("andi gr[%d] = gr[%d] & %d (%d) \n", rd, rs2, reg_imm_1, operand1);
+#endif
     } else {
         fprintf(stderr, "main control instruction opcode error. opcode = %d\n", opcode);
         exit(-1);
