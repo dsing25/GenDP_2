@@ -51,26 +51,26 @@ void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
             if (outstanding_req.single_load) {
                 regfile_unit->write_addr[outstanding_req.dst] = data[0];
 #ifdef PROFILE
-            printf("PE[\d] recv SPM: gr[%d] = %d", id, outstanding_req.dst, data[0]);
+            printf("PE[%d] recv SPM: gr[%d] = %d\n", id, outstanding_req.dst, data[0]);
 #endif
             } else {
                 for (int i = 0; i < SPM_BANDWIDTH; i++)
                     regfile_unit->write_addr[outstanding_req.dst + i] = data[i];
 #ifdef PROFILE
-                printf("PE[\d] recv SPM: reg[%d,%d] = [%d,%d]\n", id, outstanding_req.dst, outstanding_req.dst+1, data[0], data[1]);
+                printf("PE[%d] recv SPM: reg[%d,%d] = [%d,%d]\n", id, outstanding_req.dst, outstanding_req.dst+1, data[0], data[1]);
 #endif
             }
             break;
         case CTRL_GR:
             addr_regfile_unit->buffer[outstanding_req.dst] = data[0];
 #ifdef PROFILE
-            printf("PE[\d] recv SPM: gr[%d] = %d", id, outstanding_req.dst, data[0]);
+            printf("PE[%d] recv SPM: gr[%d] = %d\n", id, outstanding_req.dst, data[0]);
 #endif
             break;
         case CTRL_OUT_PORT:
             store_data = data[0];
 #ifdef PROFILE
-            printf("PE[\d] recv SPM: out = %d", id, outstanding_req.dst, data[0]);
+            printf("PE[%d] recv SPM: out = %d\n", id, data[0]);
 #endif
             break;
         default:

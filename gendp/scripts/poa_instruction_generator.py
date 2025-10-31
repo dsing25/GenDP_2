@@ -132,6 +132,7 @@ def poa_main_instruction():
     
     f.write(data_movement_instruction(0, 0, 0, 0, PE_SEND_PRED_INDEX, 0, 0, 0, 0, 0, set_PC))                  # PE_PC = send_pred_index
     f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 9, mv))                        # out = input[gr[9]++]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op zkn
     f.write(data_movement_instruction(0, 0, 0, 0, -1, 0, 1, 0, 11, 9, bne))                                 # bne gr[11] gr[9] -1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                                  # bne 1 gr[13] 0
     
@@ -249,9 +250,11 @@ def pe_0_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(SPM, in_port, 0, 1, 0, 3, 0, 0, 0, 0, mv))                            # SPM[gr[3]++] = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
     f.write(data_movement_instruction(out_port, SPM, 0, 0, 0, 0, 0, 1, 0, 5, mv))                           # out = SPM[gr[5]++]
-    f.write(data_movement_instruction(0, 0, 0, 0, -1, 0, 1, 0, 3, 2, blt))                                  # blt gr[3] gr[2] -1
-    f.write(data_movement_instruction(0, 0, 0, 0, -1, 0, 1, 0, 5, 4, blt))                                  # blt gr[5] gr[4] -1
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 3, 2, blt))                                  # blt gr[3] gr[2] -2
+    f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 5, 4, blt))                                  # blt gr[5] gr[4] -2
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                                  # gr[10] = 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
@@ -423,10 +426,14 @@ def pe_1_instruction():
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
     f.write(data_movement_instruction(SPM, in_port, 0, 1, 0, 3, 0, 0, 0, 0, mv))                            # SPM[gr[3]++] = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
     f.write(data_movement_instruction(out_port, SPM, 0, 0, 0, 0, 0, 1, 0, 5, mv))                           # out = SPM[gr[5]++]
-    f.write(data_movement_instruction(0, 0, 0, 0, -1, 0, 1, 0, 3, 2, blt))                                  # blt gr[3] gr[2] -1
-    f.write(data_movement_instruction(0, 0, 0, 0, -1, 0, 1, 0, 5, 4, blt))                                  # blt gr[5] gr[4] -1
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 3, 2, blt))                                  # blt gr[3] gr[2] -2
+    f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 5, 4, blt))                                  # blt gr[5] gr[4] -2
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                                  # gr[10] = 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
@@ -597,10 +604,16 @@ def pe_2_instruction():
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
     f.write(data_movement_instruction(SPM, in_port, 0, 1, 0, 3, 0, 0, 0, 0, mv))                            # SPM[gr[3]++] = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
     f.write(data_movement_instruction(out_port, SPM, 0, 0, 0, 0, 0, 1, 0, 5, mv))                           # out = SPM[gr[5]++]
-    f.write(data_movement_instruction(0, 0, 0, 0, -1, 0, 1, 0, 3, 2, blt))                                  # blt gr[3] gr[2] -1
-    f.write(data_movement_instruction(0, 0, 0, 0, -1, 0, 1, 0, 5, 4, blt))                                  # blt gr[5] gr[4] -1
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 3, 2, blt))                                  # blt gr[3] gr[2] -2
+    f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 5, 4, blt))                                  # blt gr[5] gr[4] -2
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                                  # gr[10] = 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
@@ -778,9 +791,15 @@ def pe_3_instruction():
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
     f.write(data_movement_instruction(SPM, in_port, 0, 1, 0, 3, 0, 0, 0, 0, mv))                            # SPM[gr[3]++] = in
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
-    f.write(data_movement_instruction(0, 0, 0, 0, -1, 0, 1, 0, 3, 2, blt))                                  # blt gr[3] gr[2] -1
+    f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 3, 2, blt))                                  # blt gr[3] gr[2] -2
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                                  # gr[10] = 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
