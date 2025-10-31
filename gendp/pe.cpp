@@ -50,13 +50,16 @@ void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
         case CTRL_REG:
             if (outstanding_req.single_load) {
                 regfile_unit->write_addr[outstanding_req.dst] = data[0];
+#ifdef PROFILE
+            printf("PE[\d] recv SPM: gr[%d] = %d", id, outstanding_req.dst, data[0]);
+#endif
             } else {
                 for (int i = 0; i < SPM_BANDWIDTH; i++)
                     regfile_unit->write_addr[outstanding_req.dst + i] = data[i];
-            }
 #ifdef PROFILE
-            printf("PE[\d] recv SPM: reg[%d,%d] = [%d,%d]", id, outstanding_req.dst, outstanding_req.dst+1, data[0], data[1]);
+                printf("PE[\d] recv SPM: reg[%d,%d] = [%d,%d]\n", id, outstanding_req.dst, outstanding_req.dst+1, data[0], data[1]);
 #endif
+            }
             break;
         case CTRL_GR:
             addr_regfile_unit->buffer[outstanding_req.dst] = data[0];
@@ -205,19 +208,9 @@ int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
         }
     } else if (source_pos == 2) {
         SPM_unit->access(source_addr, id);
-        if (source_addr >= 0 && source_addr < SPM_ADDR_NUM) {
-
-            data = SPM_unit->buffer[source_addr];
 #ifdef PROFILE
-    if (simd)
-        printf("%lx from SPM[%d] to ", data, source_addr);
-    else
-        printf("%lx from SPM[%d] to ", data, source_addr);
+        printf("initiate ld SPM[%d] to ", data, source_addr);
 #endif
-        } else {
-            fprintf(stderr, "PE[%d] load SPM addr %d error.\n", id, source_addr);
-            exit(-1);
-        }
     } else if (source_pos == 3) {
         comp_instr_load = 1;
         comp_instr_load_addr = source_addr;
@@ -267,6 +260,11 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
         outstanding_req.single_load = true;
         outstanding_req.dst = dest_pos;
         outstanding_req.addr = dest_addr;
+        //still log the dest we're sending to
+#ifdef PROFILE
+        std::string dst = (dest_pos == CTRL_REG) ? "reg" : (dest_pos == CTRL_GR) ? "gr" : "out port";
+        printf("comp reg[%d].\t", dest_addr);
+#endif
     } else {
         if (dest_pos == 0) {
             comp_reg_store = 1;

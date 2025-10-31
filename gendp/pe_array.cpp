@@ -20,7 +20,8 @@ pe_array::pe_array(int input_size, int output_size) {
     main_addressing_register[0] = 0;
     main_PC = 0;
     for (i = 0; i < PE_NUM; i++)
-        SPM_units[i] = new SPM(SPM_ADDR_NUM, &active_event_producers);
+        //+1 allows addressing full range. 1 is dummy data. Not legal in real hardware
+        SPM_units[i] = new SPM(SPM_ADDR_NUM+1, &active_event_producers);
     for (i = 0; i < PE_NUM; i++)
         pe_unit[i] = new pe(i, SPM_units[i]);
     load_data = 0;
@@ -821,12 +822,7 @@ void pe_array::poa_show_output_buffer(int len_y, int len_x, FILE* fp) {
 }
 
 void pe_array::handle_spm_data_ready(SpmDataReadyData* evData) {
-    int pe_id = evData->requestorId;
-    int data[SPM_BANDWIDTH];
-    for (int i = 0; i < SPM_BANDWIDTH; i++)
-        data[i] = evData->data[i];
-
-    pe_unit[pe_id]->recieve_spm_data(data);
+    pe_unit[evData->requestorId]->recieve_spm_data(evData->data);
 }
 
 void pe_array::process_events() {
