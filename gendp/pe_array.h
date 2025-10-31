@@ -1,7 +1,10 @@
 #ifndef PE_ARRAY_H
 #define PE_ARRAY_H
 #include "pe.h"
+#include <set>
+#include "simulator.h"
 #include "FIFO.h"
+#include <list>
 
 typedef struct thread_data {
     int master;
@@ -55,7 +58,13 @@ class pe_array {
     private:
         //helper
         int* get_output_dest(int dest, int rd);
+        void process_events();
+        void handle_spm_data_ready(SpmDataReadyData* evData);
+
+        std::set<EventProducer*> active_event_producers;
+
         SPM * SPM_units[PE_NUM];
+
 
 };
 

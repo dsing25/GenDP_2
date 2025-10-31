@@ -65,9 +65,11 @@ void addr_regfile::show_data(int addr) {
 }
 
 
-SPM::SPM(int size) {
+SPM::SPM(int size, std::set<EventProducer*>* producers) : active_producers(producers) {
     buffer = (int*)malloc(size * sizeof(int));
     buffer_size = size;
+    for (int i = 0; i < PE_4_SETTING; i++)
+        requests[i] = nullptr;
     reset();
 }
 
@@ -87,7 +89,7 @@ void SPM::show_data(int addr) {
     } else fprintf(stderr, "SPM show data addr error.\n");
 }
 
-void SPM::show_data(int start_addr, int end_addr, int line_width=64) {
+void SPM::show_data(int start_addr, int end_addr, int line_width) {
     int i;
     if (start_addr >= 0 && end_addr < buffer_size && start_addr <= end_addr) {
         // print aligned SPM in rows of 64 ints each
@@ -99,6 +101,49 @@ void SPM::show_data(int start_addr, int end_addr, int line_width=64) {
         }
         std::cout << std::endl;
     } else fprintf(stderr, "SPM show data addr error.\n");
+}
+
+void SPM::access(int addr, int peid){
+    if (addr < 0 || addr >= SPM_ADDR_NUM) {
+        fprintf(stderr, "PE[%d] load SPM addr %d error.\n", peid, addr);
+        exit(-1);
+    }
+    OutstandingRequest* newReq = new OutstandingRequest();
+    newReq->addr        = addr;
+    newReq->cycles_left = SPM_ACCESS_LATENCY;
+    newReq->peid        = peid;
+    requests[peid]      = newReq;
+    mark_active_producer();
+}
+
+void SPM::mark_active_producer(){
+    active_producers.push(this);
+}
+
+std::pair<bool, std::list<Event>*> SPM::tick(){
+    std::list<Event>* events = new std::list<Event>();
+    bool requestsOutstanding = false;
+    for(int i = 0; i < PE_4_SETTING; i++){
+        OutstandingRequest* req = requests[i];
+        if (req == nullptr) continue;
+        req->cycles_left--;
+        if(req->cycles_left == 0){
+            // generate SpmDataReadyEv
+            void* data = static_cast<void*>(new SpmDataReadyData(i, &buffer[req->addr]));
+            events->push_back(Event(EventType::SPM_DATA_READY, data));
+            delete requests[i];
+            requests[i] = nullptr;
+        } else {
+            requestsOutstanding = true;
+        }
+    }
+    return std::make_pair(requestsOutstanding, events);
+}
+
+SpmDataReadyData::SpmDataReadyData(int reqId, int* data) : requestorId(reqId) {
+    for (int i = 0; i < SPM_BANDWIDTH; i++) {
+        this->data[i] = data[i];
+    }
 }
 
 ctrl_instr_buffer::ctrl_instr_buffer(int size) {

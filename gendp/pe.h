@@ -7,6 +7,19 @@
 class pe {
 
     public:
+        struct OutstandingReq{
+            int dst;
+            int addr;
+            bool single_load;
+            bool valid;
+            OutstandingReq() : dst(-42), addr(-42), single_load(false),valid(false) {}
+            void clear() {
+                dst = -42;
+                addr = -42;
+                single_load = false;
+                valid = false;
+            }
+        };
 
         pe(int id, SPM* spm);
         ~pe();
@@ -19,10 +32,12 @@ class pe {
 
         int decode(unsigned long instruction, int* PC, int src_dest[], int* op, int simd);
         int load(int pos, int reg_immBar_flag, int rs1, int rs2, int simd);
-        void store(int pos, int reg_immBar_flag, int rs1, int rs2, int data, int simd);
+        void store(int pos, int src, int reg_immBar_flag, int rs1, int rs2, int data, int simd);
         void ctrl_instr_load_from_ddr(int addr, unsigned long data[]);
         int get_gr_10();
         void reset();
+
+        void recieve_spm_data(int data[SPM_BANDWIDTH]);
 
         void show_comp_reg();
 
@@ -51,6 +66,9 @@ class pe {
         regfile *regfile_unit = new regfile();
         compute_unit_32 cu_32;
         crossbar crossbar_unit;
+
+        //-1 means there is no outstanding request
+        OutstandingReq outstanding_req;
 
 
 };

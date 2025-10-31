@@ -1,7 +1,8 @@
 #include "pe_array.h"
 #include <cassert>
 #include "sys_def.h"
-#include "simGlobals.h"
+#include "data_buffer.h"
+#include "simulator.h"
 
 #define NUM_FRACTION_BITS 16
 #define MAX_RANGE NUM_FRACTION_BITS
@@ -19,7 +20,7 @@ pe_array::pe_array(int input_size, int output_size) {
     main_addressing_register[0] = 0;
     main_PC = 0;
     for (i = 0; i < PE_NUM; i++)
-        SPM_units[i] = new SPM(SPM_ADDR_NUM);
+        SPM_units[i] = new SPM(SPM_ADDR_NUM, &active_event_producers);
     for (i = 0; i < PE_NUM; i++)
         pe_unit[i] = new pe(i, SPM_units[i]);
     load_data = 0;
@@ -819,6 +820,43 @@ void pe_array::poa_show_output_buffer(int len_y, int len_x, FILE* fp) {
     }
 }
 
+void pe_array::handle_spm_data_ready(SpmDataReadyData* evData) {
+    int pe_id = evData->requestorId;
+    int data[SPM_BANDWIDTH];
+    for (int i = 0; i < SPM_BANDWIDTH; i++)
+        data[i] = evData->data[i];
+
+    pe_unit[pe_id]->recieve_spm_data(data);
+}
+
+void pe_array::process_events() {
+    std::list<EventProducer*> to_remove{};
+    for (auto event_producer : active_event_producers) {
+        std::pair<bool, std::list<Event>*> result = event_producer->tick();
+        if (result.first) // Event producer has finished, mark it for removal
+            to_remove.push_back(event_producer);
+        for (auto& event : *(result.second)) {
+#ifdef PROFILE
+            printf("main processing event type %d\n", event.type);
+#endif
+            switch (event.type) {
+                case EventType::SPM_DATA_READY:
+                    handle_spm_data_ready(static_cast<SpmDataReadyData*>(event.data));
+                    delete static_cast<SpmDataReadyData*>(event.data);
+                    break;
+                default:
+                    fprintf(stderr, "Unknown event type %d\n", event.type);
+                    exit(-1);
+            }
+        }
+        delete result.second;
+    }
+    // Remove finished event producers
+    for (auto event_producer : to_remove) {
+        active_event_producers.erase(event_producer);
+    }
+
+}
 
 
 void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_setting) {
@@ -828,6 +866,7 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     while (1) {
         cycle++;
         old_PC = main_PC;
+        process_events();
         flag = decode(main_instruction_buffer[main_PC][1], &main_PC, simd, setting, main_instruction_setting);
         pe_unit[0]->load_data = store_data;
         pe_unit[0]->load_instruction[0] = PE_instruction[0];

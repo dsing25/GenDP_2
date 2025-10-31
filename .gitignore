@@ -1,7 +1,8 @@
 build/
 gendp-datasets*
 datasets/
-sim*
+sim
+sim_*
 *sim_results
 *_output*
 *_correctness
