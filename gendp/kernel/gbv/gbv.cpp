@@ -104,7 +104,7 @@ static inline std::tuple<WordSlice, Word, Word> getNextSlice_debug(Word Eq, Word
 }
 
 
-void accelerator_compute(Word Eq, WordSlice &slice, Word hinP, Word hinN, Word &Ph, Word &Mh)
+void getNextSlice_accelerator(Word Eq, WordSlice &slice, Word hinP, Word hinN, Word &Ph, Word &Mh)
 {
 	Word Xh = 0, Xv = 0, tempMh = 0, tempPh = 0, scoreBefore = 0, scoreEnd = 0;
 	Word temp1 = 0, temp2 = 0, temp3 = 0;
@@ -184,7 +184,7 @@ void accelerator_compute(Word Eq, WordSlice &slice, Word hinP, Word hinN, Word &
 
 }
 
-void accelerator_compute_debug(Word Eq, WordSlice &slice, Word hinP, Word hinN, Word &Ph, Word &Mh)
+void getNextSlice_accelerator_debug(Word Eq, WordSlice &slice, Word hinP, Word hinN, Word &Ph, Word &Mh)
 {
 	Word Xh = 0, Xv = 0, tempMh = 0, tempPh = 0, scoreBefore = 0, scoreEnd = 0;
 	Word temp1 = 0, temp2 = 0, temp3 = 0;
@@ -291,6 +291,38 @@ void accelerator_compute_debug(Word Eq, WordSlice &slice, Word hinP, Word hinN, 
 
 }
 
+static WordSlice flattenWordSlice_accelerator(WordSlice slice, size_t row)
+	{
+		Word mask = 0;
+
+		regfile[1] = slice.VN;
+		regfile[2] = slice.VP;
+		regfile[12] = slice.scoreEnd;
+		regfile[23] = row; // this would cause a bitshift that is unknown, implementing in ISA will be hard
+		regfile[24] = mask;
+
+		regfile[24] = WordConfiguration<Word>::AllOnes << regfile[23]; 
+		regfile[24] = ~regfile[24]; // gets mask
+
+		regfile[25] = ~regfile[24]; // gets ~mask
+		regfile[26] = regfile[2] & regfile[25]; // VP & ~mask
+		regfile[27] = WordConfiguration<Word>::popcount(regfile[26]); // popcount of vp & ~mask
+		regfile[12] = regfile[12] - regfile[27]; // update scoreend - popcount
+
+		regfile[26] = regfile[1] & regfile[25]; // VN & ~mask
+		regfile[27] = WordConfiguration<Word>::popcount(regfile[26]); // popcount of vn & ~mask
+		regfile[12] = regfile[12] + regfile[27]; // update scoreend + popcount
+
+		regfile[2] = regfile[2] & regfile[24];
+		regfile[1] = regfile[1] & regfile[24];
+
+		slice.VN = regfile[1];
+		slice.VP = regfile[2];
+		slice.scoreEnd = regfile[12];
+
+		return slice;
+	}
+
 
 int main() {
     // Example input values
@@ -308,7 +340,7 @@ int main() {
 
     // Run accelerator implementation
 	Word Ph_acc, Mh_acc;
-	accelerator_compute(Eq, slice_acc, hinP, hinN, Ph_acc, Mh_acc);
+	getNextSlice_accelerator(Eq, slice_acc, hinP, hinN, Ph_acc, Mh_acc);
 
     // Print results
     std::cout << "getNextSlice results:" << std::endl;
