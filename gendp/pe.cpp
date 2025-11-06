@@ -42,6 +42,7 @@ void pe::reset() {
 }
 
 void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
+    //TODO magic here. We flash regfile instantly. In future we'll load into register to write and write at end of cycle, but that is 2 latency
     if (!outstanding_req.valid){
         fprintf(stderr, "Error: No outstanding request present, but recieve_spm_data called for PE[%d]\n", id);
         exit(-1);
@@ -49,22 +50,24 @@ void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
     switch (outstanding_req.dst){
         case CTRL_REG:
             if (outstanding_req.single_load) {
-                regfile_unit->write_addr[outstanding_req.dst] = data[0];
+                regfile_unit->register_file[outstanding_req.addr] = data[0];
+                //regfile_unit->write_addr[outstanding_req.addr] = data[0];
 #ifdef PROFILE
-            printf("PE[%d] recv SPM: gr[%d] = %d\n", id, outstanding_req.dst, data[0]);
+            printf("PE[%d] recv SPM: reg[%d] = %d\n", id, outstanding_req.addr, data[0]);
 #endif
             } else {
                 for (int i = 0; i < SPM_BANDWIDTH; i++)
-                    regfile_unit->write_addr[outstanding_req.dst + i] = data[i];
+                    regfile_unit->register_file[outstanding_req.addr + i] = data[i];
+                    //regfile_unit->write_addr[outstanding_req.addr + i] = data[i];
 #ifdef PROFILE
-                printf("PE[%d] recv SPM: reg[%d,%d] = [%d,%d]\n", id, outstanding_req.dst, outstanding_req.dst+1, data[0], data[1]);
+                printf("PE[%d] recv SPM: reg[%d,%d] = [%d,%d]\n", id, outstanding_req.addr, outstanding_req.addr+1, data[0], data[1]);
 #endif
             }
             break;
         case CTRL_GR:
-            addr_regfile_unit->buffer[outstanding_req.dst] = data[0];
+            addr_regfile_unit->buffer[outstanding_req.addr] = data[0];
 #ifdef PROFILE
-            printf("PE[%d] recv SPM: gr[%d] = %d\n", id, outstanding_req.dst, data[0]);
+            printf("PE[%d] recv SPM: gr[%d] = %d\n", id, outstanding_req.addr, data[0]);
 #endif
             break;
         case CTRL_OUT_PORT:
@@ -78,11 +81,27 @@ void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
             exit(-1);
     }
     outstanding_req.clear();
+#ifdef PROFILE
+    if (id == 0){
+        printf("\nzkn @%d:%d\n", cycle-1, data[0]);
+    }
+#endif
 }
 
 
 void pe::run(int simd) {
     int i, op[2][3], input_addr[2][6], output_addr[2], ctrl_op[2];
+
+#ifdef PROFILE
+    //zkn
+    if (id == 0 ){
+        std::cout << std::dec << std::endl << "qqq @" << cycle << " ";
+        for (int i = 0; i < 32; i++){
+            std::cout << " " << regfile_unit->register_file[i];
+        }
+        std::cout << std::endl;
+    }
+#endif
 
     // Compute
     instruction[0] = comp_instr_buffer_unit->buffer[comp_PC][0];
@@ -144,6 +163,7 @@ void pe::run(int simd) {
     // Control
     decode(ctrl_instr_buffer_unit->buffer[PC[1]][1], &PC[1], src_dest[1], &ctrl_op[1], simd);
     decode(ctrl_instr_buffer_unit->buffer[PC[0]][0], &PC[0], src_dest[0], &ctrl_op[0], simd);
+
 #ifdef PROFILE
     printf("\n");
 #endif
@@ -181,7 +201,7 @@ int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
     printf("src: %d reg_immBar_flag: %d reg_imm_1: %d reg_1: %d src_addr: %d\n", source_pos, reg_immBar_flag, rs1, rs2, source_addr);
 #endif
 
-    if (source_pos == 0) {
+    if (source_pos == CTRL_REG) {
         comp_reg_load = 1;
         comp_reg_load_addr = source_addr;
         regfile_unit->read_addr[12] = comp_reg_load_addr;
@@ -193,7 +213,7 @@ int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
     else
         printf("%d from comp reg[%d] to ", data, source_addr);
 #endif
-    } else if (source_pos == 1) {
+    } else if (source_pos == CTRL_GR) {
         if (source_addr >= 0 && source_addr < ADDR_REGISTER_NUM) {
             data = addr_regfile_unit->buffer[source_addr];
 #ifdef PROFILE
@@ -206,12 +226,12 @@ int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
             fprintf(stderr, "PE[%d] load gr addr %d error.\n", id, source_addr);
             exit(-1);
         }
-    } else if (source_pos == 2) {
+    } else if (source_pos == CTRL_SPM) {
         SPM_unit->access(source_addr, id);
 #ifdef PROFILE
-        printf("initiate ld SPM[%d] to ", data, source_addr);
+        printf("initiate ld SPM[%d] to ", source_addr);
 #endif
-    } else if (source_pos == 3) {
+    } else if (source_pos == CTRL_COMP_IB) {
         comp_instr_load = 1;
         comp_instr_load_addr = source_addr;
         instruction[0] = comp_instr_buffer_unit->buffer[comp_instr_load_addr][0];
@@ -219,7 +239,7 @@ int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
 #ifdef PROFILE
         printf("%lx %lx from comp instruction buffer[%d] to ", instruction[0], instruction[1], source_addr);
 #endif
-    } else if (source_pos == 7) {
+    } else if (source_pos == CTRL_IN_PORT) {
         data = load_data;
 #ifdef PROFILE
     if (simd)
@@ -227,7 +247,7 @@ int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
     else
         printf("%d from input data port to ", data);
 #endif
-    } else if (source_pos == 8) {
+    } else if (source_pos == CTRL_IN_INSTR) {
         instruction[0] = load_instruction[0];
         instruction[1] = load_instruction[1];
 #ifdef PROFILE
@@ -256,14 +276,24 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
             fprintf(stderr, "Error: unsupported dest %d for SPM source store in PE[%d]\n", dest_pos, id);
             exit(-1);
         }
+        assert(!outstanding_req.valid); //should not have outstanding already
         outstanding_req.valid = true;
         outstanding_req.single_load = true;
         outstanding_req.dst = dest_pos;
         outstanding_req.addr = dest_addr;
         //still log the dest we're sending to
 #ifdef PROFILE
-        std::string dst = (dest_pos == CTRL_REG) ? "reg" : (dest_pos == CTRL_GR) ? "gr" : "out port";
-        printf("comp reg[%d].\t", dest_addr);
+        switch (dest_pos) {
+            case CTRL_REG:
+                printf("reg[%d].\t", dest_addr);
+                break;
+            case CTRL_GR:
+                printf("gr[%d].\t", dest_addr);
+                break;
+            case CTRL_OUT_PORT:
+                printf("out port.\t");
+                break;
+        }
 #endif
     } else {
         if (dest_pos == 0) {
@@ -291,6 +321,10 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
 #ifdef PROFILE
                 printf("SPM[%d].\t", dest_addr);
 #endif
+            if (id == 0){
+                printf("\nzkn w%d:%d\n", cycle, data);
+            }
+
             } else {
                 fprintf(stderr, "PE[%d] store SPM addr %d error.\n", id, dest_addr);
                 exit(-1);

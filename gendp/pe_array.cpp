@@ -833,7 +833,7 @@ void pe_array::process_events() {
             to_remove.push_back(event_producer);
         for (auto& event : *(result.second)) {
 #ifdef PROFILE
-            printf("main processing event type %d\n", event.type);
+            printf("main processing event type %d\n\n", event.type);
 #endif
             switch (event.type) {
                 case EventType::SPM_DATA_READY:

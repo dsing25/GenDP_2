@@ -36,11 +36,10 @@ void comp_decoder::execute(unsigned long instruction, int* op, int* in_addr, int
 
     // zkn I changed this from op[0] < HALT to op[0] != HALT. I think required cause we now have
     // opcodes greater than HALT
-    if (op[0] != HALT) (*PC)++;
-    else if (op[0] == HALT) (*PC) = (*PC);
-    else {
-        fprintf(stderr, "compute opcode %d error.\n", op[0]);
-        exit(-1);
+    if (op[0] != HALT){
+        (*PC)++;
+    } else {  //(op[0] == HALT)
+        (*PC) = (*PC);
     }
 
     // printf("%d %d %d %d %d %d %d %d %d %d\t", op[0], op[1], op[2], in_addr[0], in_addr[1], in_addr[2], in_addr[3], in_addr[4], in_addr[5], *out_addr);

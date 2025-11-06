@@ -12,7 +12,7 @@ mkdir Traces
 
 #strip out PE traces
 for i in {0..3}; do
-  grep -P "^PE\[${i}\]" out.txt | grep -oP '@\d+:[0-9a-f]+' | paste -sd' \n' - > "Traces/pe${i}.txt"
+  grep -P "^PE\[${i}\].*@\d+:[0-9a-f]+" out.txt | grep -oP '@\d+:[0-9a-f]+'  > "Traces/pe${i}.txt"
   grep -P "^PE\[${i}\]" out.txt | paste -sd' \n' - > "Traces/fullPe${i}.txt"
 done
 
