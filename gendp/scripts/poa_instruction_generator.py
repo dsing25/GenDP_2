@@ -812,7 +812,6 @@ def pe_3_instruction():
     for j in range(peid):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
-        print(j)
     f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                           # gr[1] = in zkn
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
     f.write(data_movement_instruction(SPM, gr, 0, 1, 0, 3, 0, 0, 1, 0, mv))                               # SPM[gr[3]++] = gr[1] zkn
