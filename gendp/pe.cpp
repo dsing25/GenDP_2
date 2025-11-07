@@ -2,6 +2,15 @@
 #include "sys_def.h"
 #include <cassert>
 #include "simulator.h"
+bool check_legal_mv(int src, int dest) {
+    //TODO come back and add this. Right now some traces (cough cough poa) are illegal
+    //can't move between SPM and out or in ports
+    //if ((src == CTRL_SPM && (dest == CTRL_IN_PORT || dest == CTRL_OUT_PORT)) ||
+    //    (dest == CTRL_SPM && (src == CTRL_IN_PORT || src == CTRL_OUT_PORT))) {
+    //    return false;
+    //}
+    return true;
+}
 
 pe::pe(int _id, SPM* spm) {
 
@@ -52,9 +61,10 @@ void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
             if (outstanding_req.single_load) {
                 regfile_unit->register_file[outstanding_req.addr] = data[0];
                 //regfile_unit->write_addr[outstanding_req.addr] = data[0];
-#ifdef PROFILE
-            printf("PE[%d] recv SPM: reg[%d] = %d\n", id, outstanding_req.addr, data[0]);
-#endif
+//TODO reinstatte after fix
+//#ifdef PROFILE
+//            printf("PE[%d] recv SPM: reg[%d] = %d\n", id, outstanding_req.addr, data[0]);
+//#endif
             } else {
                 for (int i = 0; i < SPM_BANDWIDTH; i++)
                     regfile_unit->register_file[outstanding_req.addr + i] = data[i];
@@ -82,9 +92,9 @@ void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
     }
     outstanding_req.clear();
 #ifdef PROFILE
-    if (id == 0){
-        printf("\nzkn @%d:%d\n", cycle-1, data[0]);
-    }
+    //if (id == 0){
+    //    printf("\nzkn @%d:%d\n", cycle-1, data[0]);
+    //}
 #endif
 }
 
@@ -94,13 +104,13 @@ void pe::run(int simd) {
 
 #ifdef PROFILE
     //zkn
-    if (id == 0 ){
-        std::cout << std::dec << std::endl << "qqq @" << cycle << " ";
-        for (int i = 0; i < 32; i++){
-            std::cout << " " << regfile_unit->register_file[i];
-        }
-        std::cout << std::endl;
-    }
+    //if (id == 0 ){
+    //    std::cout << std::dec << std::endl << "qqq @" << cycle << " ";
+    //    for (int i = 0; i < 32; i++){
+    //        std::cout << " " << regfile_unit->register_file[i];
+    //    }
+    //    std::cout << std::endl;
+    //}
 #endif
 
     // Compute
@@ -168,10 +178,10 @@ void pe::run(int simd) {
     printf("\n");
 #endif
 
-    if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][0] == src_dest[1][0]) {
+    if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][0] == src_dest[1][0] && src_dest[0][0] != CTRL_GR) {
         fprintf(stderr, "PE[%d] PC[%d %d] source position confliction.\n", id, PC[0], PC[1]);
         exit(-1);
-    } else if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][1] == src_dest[1][1]) {
+    } else if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][1] == src_dest[1][1] && src_dest[0][1] != CTRL_GR) {
         fprintf(stderr, "PE[%d] PC[%d %d] dest position confliction.\n", id, PC[0], PC[1]);
         exit(-1);
     }
@@ -228,8 +238,15 @@ int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
         }
     } else if (source_pos == CTRL_SPM) {
         SPM_unit->access(source_addr, id);
+//TODO reinstate after fixed
+//#ifdef PROFILE
+//        printf("initiate ld SPM[%d] to ", source_addr);
+//#endif
 #ifdef PROFILE
-        printf("initiate ld SPM[%d] to ", source_addr);
+    if (simd)
+        printf("%lx from SPM[%d] to ", data, source_addr);
+    else
+        printf("%d from SPM[%d] to ", data, source_addr);
 #endif
     } else if (source_pos == CTRL_COMP_IB) {
         comp_instr_load = 1;
@@ -321,9 +338,9 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
 #ifdef PROFILE
                 printf("SPM[%d].\t", dest_addr);
 #endif
-            if (id == 0){
-                printf("\nzkn w%d:%d\n", cycle, data);
-            }
+            //if (id == 0){
+            //    printf("\nzkn w%d:%d\n", cycle, data);
+            //}
 
             } else {
                 fprintf(stderr, "PE[%d] store SPM addr %d error.\n", id, dest_addr);
@@ -340,7 +357,7 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
         } else if (dest_pos == 9) {
             store_data = data;
 #ifdef PROFILE
-            printf("output data port.\t");
+            printf("out port.\t");
 #endif
         } else if (dest_pos == 10) {
             store_instruction[0] = instruction[0];
@@ -493,6 +510,13 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 #endif
         data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd);
         store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd);
+
+        bool leagal_mv = check_legal_mv(src, dest);
+        if (!leagal_mv) {
+            fprintf(stderr, "PE[%d] PC=%d illegal mv from %d to %d\n", id, *PC, src, dest);
+            exit(-1);
+        }
+
         if (reg_auto_increasement_flag_0)
             addr_regfile_unit->buffer[reg_0]++;
         if (reg_auto_increasement_flag_1)
