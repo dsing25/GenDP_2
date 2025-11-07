@@ -3,13 +3,15 @@ import os
 from utils import *
 from opcodes import *
 
+N_PES = 4
+
 POA_COMPUTE_INSTRUCTION_NUM = 29
 
 PE_INIT_CONSTANT_AND_INSTRUCTION = 1
 PE_GROUP = 49
 PE_SEND_PRED_INDEX = 70
-PE_RUN = 76
-PE_OUTPUT = 106
+PE_RUN = 79
+PE_OUTPUT = 109
 
     
 def poa_compute():
@@ -171,6 +173,7 @@ def poa_main_instruction():
     f.close()
     
 def pe_0_instruction():
+    peid = 0
     
     f = InstructionWriter("instructions/poa/pe_0_instruction.txt");
     
@@ -249,13 +252,19 @@ def pe_0_instruction():
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
-    f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                           # gr[1] = in zkn
-    f.write(data_movement_instruction(out_port, SPM, 0, 0, 0, 0, 0, 1, 0, 5, mv))                           # out = SPM[gr[5]++] zkn
-    f.write(data_movement_instruction(SPM, gr, 0, 1, 0, 3, 0, 0, 1, 0, mv))                               # SPM[gr[3]++] = gr[1] zkn
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    for j in range(peid):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                             # gr[1] = in zkn
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 7, 0, 0, 1, 0, 5, mv))                                 # gr[7] = SPM[gr[5]++] zkn
+    f.write(data_movement_instruction(SPM, gr, 0, 1, 0, 3, 0, 0, 1, 0, mv))                                 # SPM[gr[3]++] = gr[1] zkn
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                            # out = gr[7]
     f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 3, 2, blt))                                  # blt gr[3] gr[2] -2
     f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 5, 4, blt))                                  # blt gr[5] gr[4] -2
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                                  # gr[10] = 1
+    for j in range(N_PES - peid - 1):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op             74
@@ -352,6 +361,7 @@ def pe_0_instruction():
     f.close()
 
 def pe_1_instruction():
+    peid = 1
     
     f = InstructionWriter("instructions/poa/pe_1_instruction.txt");
     
@@ -426,13 +436,19 @@ def pe_1_instruction():
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
-    f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                           # gr[1] = in zkn
-    f.write(data_movement_instruction(out_port, SPM, 0, 0, 0, 0, 0, 1, 0, 5, mv))                           # out = SPM[gr[5]++] zkn
-    f.write(data_movement_instruction(SPM, gr, 0, 1, 0, 3, 0, 0, 1, 0, mv))                               # SPM[gr[3]++] = gr[1] zkn
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    for j in range(peid):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                             # gr[1] = in zkn
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 7, 0, 0, 1, 0, 5, mv))                                 # gr[7] = SPM[gr[5]++] zkn
+    f.write(data_movement_instruction(SPM, gr, 0, 1, 0, 3, 0, 0, 1, 0, mv))                                 # SPM[gr[3]++] = gr[1] zkn
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                            # out = gr[7]
     f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 3, 2, blt))                                  # blt gr[3] gr[2] -2
     f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 5, 4, blt))                                  # blt gr[5] gr[4] -2
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                                  # gr[10] = 1
+    for j in range(N_PES - peid - 1):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op             74
@@ -532,6 +548,7 @@ def pe_1_instruction():
     f.close()
     
 def pe_2_instruction():
+    peid=2
     
     f = InstructionWriter("instructions/poa/pe_2_instruction.txt");
     
@@ -602,13 +619,19 @@ def pe_2_instruction():
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
-    f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                           # gr[1] = in zkn
-    f.write(data_movement_instruction(out_port, SPM, 0, 0, 0, 0, 0, 1, 0, 5, mv))                           # out = SPM[gr[5]++] zkn
-    f.write(data_movement_instruction(SPM, gr, 0, 1, 0, 3, 0, 0, 1, 0, mv))                               # SPM[gr[3]++] = gr[1] zkn
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    for j in range(peid):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                             # gr[1] = in zkn
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 7, 0, 0, 1, 0, 5, mv))                                 # gr[7] = SPM[gr[5]++] zkn
+    f.write(data_movement_instruction(SPM, gr, 0, 1, 0, 3, 0, 0, 1, 0, mv))                                 # SPM[gr[3]++] = gr[1] zkn
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                            # out = gr[7]
     f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 3, 2, blt))                                  # blt gr[3] gr[2] -2
     f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 5, 4, blt))                                  # blt gr[5] gr[4] -2
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                                  # gr[10] = 1
+    for j in range(N_PES - peid - 1):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op             74
@@ -713,6 +736,7 @@ def pe_2_instruction():
     f.close()
     
 def pe_3_instruction():
+    peid=3
     
     f = InstructionWriter("instructions/poa/pe_3_instruction.txt");
     
@@ -785,6 +809,10 @@ def pe_3_instruction():
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    for j in range(peid):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+        print(j)
     f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                           # gr[1] = in zkn
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
     f.write(data_movement_instruction(SPM, gr, 0, 1, 0, 3, 0, 0, 1, 0, mv))                               # SPM[gr[3]++] = gr[1] zkn
@@ -792,6 +820,9 @@ def pe_3_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 3, 2, blt))                                  # blt gr[3] gr[2] -2
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                                  # gr[10] = 1
+    for j in range(N_PES - peid - 1):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op zkn
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op             74
