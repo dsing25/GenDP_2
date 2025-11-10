@@ -18,3 +18,7 @@ backtest-datasets
 */instructions
 success.txt
 __pycache__/
+*.gdbinit
+Traces/
+simGlobals.cpp
+simGlobals.h
