@@ -817,24 +817,30 @@ def pe_3_instruction():
 
     for i in range(10):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(SPM, 0, 0, 0, 272, 0, 0, 0, 0, 0, si))                                # SPM[272] = 0
     f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 0, 0, si))                                   # gr[5] = 0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                                  # gr[10] = 0
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
-    f.write(data_movement_instruction(SPM, 0, 0, 0, 272, 0, 0, 0, 0, 0, si))                                # SPM[272] = 0
-    f.write(data_movement_instruction(reg, in_port, 0, 0, 10, 0, 0, 0, 0, 0, mv))                           # reg[10] = in
     f.write(data_movement_instruction(SPM, 0, 0, 0, 144, 0, 0, 0, 0, 0, si))                                # SPM[144] = 0
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(reg, in_port, 0, 0, 10, 0, 0, 0, 0, 0, mv))                           # reg[10] = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(reg, in_port, 0, 0, 11, 0, 0, 0, 0, 0, mv))                           # reg[11] = in
     f.write(data_movement_instruction(SPM, 0, 0, 0, 16, 0, 0, 0, 17, 0, si))                                # SPM[16] = 17
     f.write(data_movement_instruction(reg, 0, 0, 0, 9, 0, 0, 0, -4, 0, si))                                 # reg[9] = -4
     f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, 0, 0, si))                                   # gr[6] = 0
-    for i in range(8):
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(SPM, 0, 0, 0, 146, 0, 0, 0, 0, 0, si))                                # SPM[146] = 0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(SPM, 0, 0, 0, 18, 0, 0, 0, 17, 0, si))                                # SPM[18] = 17
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(SPM, 0, 0, 0, 274, 0, 0, 0, 0, 0, si))                                # SPM[274] = 0
     f.write(data_movement_instruction(SPM, 0, 0, 0, 271, 0, 0, 0, 0, 0, si))                                # SPM[271] = 0
