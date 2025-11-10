@@ -36,6 +36,8 @@ class addr_regfile {
 
         void show_data(int addr);
 
+        void write(int* write_addr, int* write_data, int n);
+
         int *buffer;
         int buffer_size;
 

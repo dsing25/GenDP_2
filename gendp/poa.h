@@ -15,8 +15,8 @@
 #define POA_CONSTANT_16 16
 #define POA_MIN_SCORE -999999
 #define POA_CONSTANT_MINUS_1 -1
-//#define POA_MAX_INSTRUCTIONS 100000000
-#define POA_MAX_INSTRUCTIONS 50000
+#define POA_MAX_INSTRUCTIONS 100000000
+//#define POA_MAX_INSTRUCTIONS 50000
 
 typedef struct poa_input {
     int len_y, len_y_unpadding, *seq_y, *index_y, len_x, *seq_x, *index_x;

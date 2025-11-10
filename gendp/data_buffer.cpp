@@ -1,5 +1,6 @@
 #include "data_buffer.h"
 #include <iomanip>
+#include <cassert>
 
 // template <typename T>
 // data_buffer<T>::data_buffer(int size) {
@@ -58,6 +59,24 @@ void addr_regfile::reset() {
         buffer[i] = 0;
 }
 
+void addr_regfile::write(int* write_addr, int* write_data, int n){
+    for(int i = 0; i < n; i++){
+        if (write_addr[i] != -1){
+            if (write_addr[i] >= 0 && write_addr[i] < buffer_size)
+                buffer[write_addr[i]] = write_data[i];
+            else fprintf(stderr, "addr_regfile write addr error. %d outside buffsize %d\n", write_addr[i], buffer_size);
+        }
+    }
+    //ensure no two addrs are the same
+    for(int i = 0; i < n; i++){
+        for(int j = i + 1; j < n; j++){
+            if(write_addr[i] == write_addr[j] && write_addr[i] != -1){
+                fprintf(stderr, "addr_regfile write addr error. duplicate addr %d\n", write_addr[i]);
+            }
+        }
+    }
+}
+
 void addr_regfile::show_data(int addr) {
     if (addr >= 0 && addr < buffer_size) {
         printf("addr_regfile[%d] = %d\n", addr, buffer[addr]);
@@ -75,6 +94,9 @@ SPM::SPM(int size, std::set<EventProducer*>* producers) : active_producers(produ
 
 SPM::~SPM() {
     free(buffer);
+    for (int i = 0; i < PE_4_SETTING; i++)
+        if (requests[i] != nullptr)
+            delete requests[i];
 }
 
 void SPM::reset() {
@@ -104,6 +126,7 @@ void SPM::show_data(int start_addr, int end_addr, int line_width) {
 }
 
 void SPM::access(int addr, int peid){
+    assert(requests[peid] == nullptr); //there was a request already there
     if (addr < 0 || addr >= SPM_ADDR_NUM) {
         fprintf(stderr, "PE[%d] load SPM addr %d error.\n", peid, addr);
         exit(-1);
@@ -137,7 +160,7 @@ std::pair<bool, std::list<Event>*> SPM::tick(){
             requestsOutstanding = true;
         }
     }
-    return std::make_pair(requestsOutstanding, events);
+    return std::make_pair(!requestsOutstanding, events);
 }
 
 SpmDataReadyData::SpmDataReadyData(int reqId, int* data) : requestorId(reqId) {
