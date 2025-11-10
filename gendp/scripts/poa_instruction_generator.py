@@ -650,8 +650,8 @@ def pe_2_instruction():
     f.write(data_movement_instruction(SPM, 0, 0, 0, 145, 0, 0, 0, 0, 0, si))                                # SPM[145] = 0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
-    f.write(data_movement_instruction(SPM, 0, 0, 0, 273, 0, 0, 0, 0, 0, si))                                # SPM[273] = 0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(SPM, 0, 0, 0, 273, 0, 0, 0, 0, 0, si))                                # SPM[273] = 0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
