@@ -9,9 +9,9 @@ POA_COMPUTE_INSTRUCTION_NUM = 29
 
 PE_INIT_CONSTANT_AND_INSTRUCTION = 1
 PE_GROUP = 49
-PE_SEND_PRED_INDEX = 70
-PE_RUN = 79
-PE_OUTPUT = 109
+PE_SEND_PRED_INDEX = 74
+PE_RUN = 83
+PE_OUTPUT = 113
 
 TMP_REG1 = 12
 TMP_REG2 = 13
@@ -115,7 +115,7 @@ def poa_main_instruction():
     f.write(data_movement_instruction(gr, 0, 1, 0, 7, 0, 1, 0, 2, 3, add))                                   # gr[7] = gr[2] + gr[3]
     f.write(data_movement_instruction(gr, 0, 1, 0, 3, 0, 1, 0, 3, 1, add))                                   # gr[3] = gr[3] + gr[1]
     f.write(data_movement_instruction(gr, 0, 1, 0, 6, 0, 0, 0, 0, 1, addi))                                  # gr[6] = gr[1]
-    f.write(data_movement_instruction(0, 0, 0, 0, 65, 0, 1, 0, 6, 3, bge))                                  # bge gr[6] gr[3] 59
+    f.write(data_movement_instruction(0, 0, 0, 0, 69, 0, 1, 0, 6, 3, bge))                                  # bge gr[6] gr[3] 59
     f.write(data_movement_instruction(0, 0, 0, 0, PE_GROUP, 0, 0, 0, 0, 0, set_PC))                            # PE_PC = PE_GROUP
     f.write(data_movement_instruction(gr, 0, 1, 0, 5, 0, 0, 0, -1, 6, addi))                                 # gr[5] = gr[6] - 1
     f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 1, 0, 2, 5, mv))                        # out = input[gr[2](gr[5])]
@@ -137,6 +137,10 @@ def poa_main_instruction():
     f.write(data_movement_instruction(gr, in_buf, 0, 0, 10, 0, 0, 1, 0, 8, mv))                             # gr[10] = input[gr[8]++]
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 10, 0, mv))                           # out = gr[10]
     f.write(data_movement_instruction(gr, 0, 1, 0, 11, 0, 1, 0, 9, 10, add))                                 # gr[11] = gr[9] + gr[10]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     
     f.write(data_movement_instruction(0, 0, 0, 0, PE_SEND_PRED_INDEX, 0, 0, 0, 0, 0, set_PC))                  # PE_PC = send_pred_index
     f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 9, mv))                        # out = input[gr[9]++]
@@ -174,7 +178,7 @@ def poa_main_instruction():
     for i in range(4):
         f.write(data_movement_instruction(out_buf, in_port, 0, 1, 0, 14, 0, 0, 0, 0, mv))                   # output[gr[14]++] = in
     f.write(data_movement_instruction(0, 0, 0, 0, -41, 0, 1, 0, 12, 4, bne))                                # bne gr[12] gr[4]  -41 zkn
-    f.write(data_movement_instruction(0, 0, 0, 0, -64, 0, 0, 0, 0, 0, beq))                                 # beq 0 0 -64 zkn
+    f.write(data_movement_instruction(0, 0, 0, 0, -68, 0, 0, 0, 0, 0, beq))                                 # beq 0 0 -68 zkn
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     
     
@@ -260,6 +264,14 @@ def pe_0_instruction():
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 4, 0, mv))                            # out = gr[4]
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))                                   # gr[3] = 0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op             69
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
@@ -450,6 +462,14 @@ def pe_1_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))                                   # gr[3] = 0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op             69
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
@@ -649,6 +669,14 @@ def pe_2_instruction():
     f.write(data_movement_instruction(SPM, 0, 0, 0, 17, 0, 0, 0, 17, 0, si))                                # SPM[17] = 17
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))                                   # gr[3] = 0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op               69
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
@@ -850,11 +878,19 @@ def pe_3_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 4, 0, 0, 0, 2, 0, mv))                                  # gr[4] = gr[2]
     f.write(data_movement_instruction(reg, reg, 0, 0, 8, 0, 0, 0, -1, 0, si))                               # reg[8] = -1
     f.write(data_movement_instruction(SPM, 0, 0, 0, 399, 0, 0, 0, 0, 0, si))                                # SPM[399] = 0
-    f.write(data_movement_instruction(SPM, 0, 0, 0, 145, 0, 0, 0, 0, 0, si))                                # SPM[145] = 0
-    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 1, 0, si))                                   # gr[2] = 1
-    f.write(data_movement_instruction(SPM, 0, 0, 0, 17, 0, 0, 0, 17, 0, si))                                # SPM[17] = 17
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))                                   # gr[3] = 0
+    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 1, 0, si))                                   # gr[2] = 1
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(SPM, 0, 0, 0, 145, 0, 0, 0, 0, 0, si))                                # SPM[145] = 0
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(SPM, 0, 0, 0, 17, 0, 0, 0, 17, 0, si))                                # SPM[17] = 17
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(SPM, 0, 0, 0, 273, 0, 0, 0, 0, 0, si))                                # SPM[273] = 0      69
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
