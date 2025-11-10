@@ -105,7 +105,7 @@ static inline std::tuple<WordSlice, Word, Word> getNextSlice_debug(Word Eq, Word
 
 
 void getNextSlice_accelerator(Word Eq, WordSlice &slice, Word hinP, Word hinN, Word &Ph, Word &Mh)
-{
+{// these changes are in graphalignerbitvectorcommon
 	Word Xh = 0, Xv = 0, tempMh = 0, tempPh = 0, scoreBefore = 0, scoreEnd = 0;
 	Word temp1 = 0, temp2 = 0, temp3 = 0;
 
@@ -185,7 +185,7 @@ void getNextSlice_accelerator(Word Eq, WordSlice &slice, Word hinP, Word hinN, W
 }
 
 void getNextSlice_accelerator_debug(Word Eq, WordSlice &slice, Word hinP, Word hinN, Word &Ph, Word &Mh)
-{
+{// these changes are in graphalignerbitvectorcommon
 	Word Xh = 0, Xv = 0, tempMh = 0, tempPh = 0, scoreBefore = 0, scoreEnd = 0;
 	Word temp1 = 0, temp2 = 0, temp3 = 0;
 
@@ -292,7 +292,7 @@ void getNextSlice_accelerator_debug(Word Eq, WordSlice &slice, Word hinP, Word h
 }
 
 static WordSlice flattenWordSlice_accelerator(WordSlice slice, size_t row)
-	{
+	{ // these changes are in graphalignerbitvectorcommon
 		Word mask = 0;
 
 		regfile[1] = slice.VN;
@@ -323,6 +323,96 @@ static WordSlice flattenWordSlice_accelerator(WordSlice slice, size_t row)
 		return slice;
 	}
 
+ScoreType getScoreBeforeStart_accelerator() const
+	{ // this is in wordslice.h
+		auto& regfile = GraphAlignerBitvectorCommon<LengthType, ScoreType, Word>::regfile;
+
+		regfile[0] = scoreEnd;
+		regfile[1] = VP;
+		regfile[2] = VN;
+		regfile[23] = WordConfiguration<Word>::popcount(VP);
+		regfile[24] = WordConfiguration<Word>::popcount(VN);
+		regfile[25] = regfile[0] - regfile[23];
+		regfile[25] = regfile[25] + regfile[24];
+
+		return regfile[25];
+	}
+
+	
+static WordSlice mergeTwoSlices_accelerator(WordSlice left, WordSlice right, Word leftSmaller, Word rightSmaller)
+	{ // partially works - need to debug
+		auto& regfile = GraphAlignerBitvectorCommon<LengthType, ScoreType, Word>::regfile;
+
+		WordSlice result;
+
+		regfile[1] = left.VN;
+		regfile[2] = left.VP;
+		regfile[11] = left.getScoreBeforeStart();
+		regfile[12] = left.scoreEnd;
+		regfile[13] = right.VN;
+		regfile[14] = right.VP;
+		regfile[15] = right.getScoreBeforeStart();
+		regfile[16] = right.scoreEnd;
+		regfile[17] = result.VN;
+		regfile[18] = result.VP;
+		regfile[20] = result.scoreEnd;
+		regfile[23] = leftSmaller;
+		regfile[24] = rightSmaller;
+
+		assert(regfile[11] <= regfile[15]);
+		assert((regfile[2] & regfile[1]) == WordConfiguration<Word>::AllZeros);
+
+		assert((regfile[14] & regfile[13]) == WordConfiguration<Word>::AllZeros);
+		assert((regfile[23] & regfile[24]) == 0);
+
+		regfile[25] = regfile[23] | regfile[24]; // leftsmaller | rightsmaller
+		regfile[26] = regfile[24] << 1; // rightsmaller << 1
+		regfile[25] = regfile[25] - regfile[26]; // ((leftSmaller | rightSmaller) - (rightSmaller << 1))
+		regfile[25] = regfile[24] | regfile[25]; // rightsmaller | regfile25
+		regfile[26] = ~regfile[23]; // ~leftsmaller
+		regfile[25] = regfile[25] & regfile[26]; // reg25 = mask
+
+		regfile[26] = regfile[24] << 1; // rightsmaller << 1
+		regfile[26] = regfile[23] & regfile[26]; // leftreduction = reg26
+		regfile[27] = regfile[23] << 1; // leftsmaller << 1
+		regfile[27] = regfile[24] & regfile[27]; // rightreduction = reg27
+
+		// regfile[27] = (((regfile[24] & 1) && regfile[11]) < regfile[15]) ? regfile[27] | 1 : regfile[27];
+
+		if ((regfile[24] & 1) && regfile[11] < regfile[15])
+		{
+			regfile[27] |= 1;
+		}
+
+		assert((regfile[26] & regfile[14]) == regfile[26]); 
+		assert((regfile[27] & regfile[2]) == regfile[27]);  
+		assert((regfile[26] & regfile[1]) == regfile[26]);  
+		assert((regfile[27] & regfile[13]) == regfile[27]); 
+
+		regfile[28] = ~regfile[26]; // ~leftreduction
+		regfile[1] = regfile[1] & regfile[28]; // leftvn &= ~leftreduction
+		regfile[28] = ~regfile[27]; // ~rightreduction
+		regfile[13] = regfile[13] & regfile[28]; // rightvn &= ~rightreduction
+
+		regfile[28] = ~regfile[25]; //~mask
+		regfile[29] = regfile[1] & regfile[28]; // leftVN & ~mask
+		regfile[30] = regfile[13] & regfile[25]; // rightVN & mask
+		regfile[17] = regfile[29] | regfile[30]; // (left.VN & ~mask) | (right.VN & mask);
+
+		regfile[29] = regfile[2] & regfile[28]; // leftVP & ~mask
+		regfile[30] = regfile[14] & regfile[25]; // rightVP & mask
+		regfile[18] = regfile[29] | regfile[30]; // (left.VP & ~mask) | (right.VP & mask);
+
+		assert((regfile[18] & regfile[17]) == 0);
+
+		regfile[20] = std::min(regfile[12], regfile[16]);
+		
+		result.VN = regfile[17];
+		result.VP = regfile[18];
+		result.scoreEnd = regfile[20];
+
+		return result;
+	}
 
 int main() {
     // Example input values
