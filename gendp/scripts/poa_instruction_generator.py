@@ -372,11 +372,11 @@ def pe_0_instruction():
     
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
-    f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 8
-    f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 8
+    f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 10
+    f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 10
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                                  # gr[10] = 0
-    for i in range(10):
+    for i in range(14):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, 0, 0, beq))                                   # beq 0 0 10
     f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, 0, 0, beq))                                   # beq 0 0 10
@@ -588,11 +588,11 @@ def pe_1_instruction():
     
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
-    f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 8
-    f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 8
+    f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 10
+    f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 10
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                                  # gr[10] = 0
-    for i in range(10):
+    for i in range(14):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, 0, 0, beq))                                   # beq 0 0 10
     f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, 0, 0, beq))                                   # beq 0 0 10
@@ -813,11 +813,11 @@ def pe_2_instruction():
     
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
-    f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 8
-    f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 8
+    f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 10
+    f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 10
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                                  # gr[10] = 0
-    for i in range(10):
+    for i in range(14):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, 0, 0, beq))                                   # beq 0 0 10
     f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, 0, 0, beq))                                   # beq 0 0 10
@@ -1045,11 +1045,11 @@ def pe_3_instruction():
     
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
-    f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 8
-    f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 8
+    f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 10
+    f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, -1, 11, blt))                                 # blt -1 gr[11] 10
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                                  # gr[10] = 0
-    for i in range(10):
+    for i in range(14):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, 0, 0, beq))                                   # beq 0 0 10
     f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 0, 0, 0, 0, beq))                                   # beq 0 0 10
