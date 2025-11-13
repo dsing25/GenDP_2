@@ -56,34 +56,35 @@ void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
         fprintf(stderr, "Error: No outstanding request present, but recieve_spm_data called for PE[%d]\n", id);
         exit(-1);
     }
+    printf("PE[%d] @%d recv SPM: ", id, cycle);
     switch (outstanding_req.dst){
         case CTRL_REG:
             if (outstanding_req.single_load) {
                 regfile_unit->register_file[outstanding_req.addr] = data[0];
                 //regfile_unit->write_addr[outstanding_req.addr] = data[0];
 //TODO reinstatte after fix
-//#ifdef PROFILE
-//            printf("PE[%d] recv SPM: reg[%d] = %d\n", id, outstanding_req.addr, data[0]);
-//#endif
+#ifdef PROFILE
+            printf("reg[%d] = %d\n", id, outstanding_req.addr, data[0]);
+#endif
             } else {
                 for (int i = 0; i < SPM_BANDWIDTH; i++)
                     regfile_unit->register_file[outstanding_req.addr + i] = data[i];
                     //regfile_unit->write_addr[outstanding_req.addr + i] = data[i];
 #ifdef PROFILE
-                printf("PE[%d] recv SPM: reg[%d,%d] = [%d,%d]\n", id, outstanding_req.addr, outstanding_req.addr+1, data[0], data[1]);
+                printf("reg[%d,%d] = [%d,%d]\n", id, outstanding_req.addr, outstanding_req.addr+1, data[0], data[1]);
 #endif
             }
             break;
         case CTRL_GR:
             addr_regfile_unit->buffer[outstanding_req.addr] = data[0];
 #ifdef PROFILE
-            printf("PE[%d] recv SPM: gr[%d] = %d\n", id, outstanding_req.addr, data[0]);
+            printf("gr[%d] = %d\n", id, outstanding_req.addr, data[0]);
 #endif
             break;
         case CTRL_OUT_PORT:
             store_data = data[0];
 #ifdef PROFILE
-            printf("PE[%d] recv SPM: out = %d\n", id, data[0]);
+            printf("out = %d\n", id, data[0]);
 #endif
             break;
         default:
