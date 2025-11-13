@@ -78,6 +78,6 @@ echo "======================================REFERENCE===========================
 echo "BSW Throughput: 47036245.456 MCUPS/mm2"
 echo "Chain Throughput: 3612.677 MCUPS/mm2"
 echo "PairHMM Throughput: 15142.282 MCUPS/mm2"
-echo "POA Throughput: 3122.950 MCUPS/mm2" #3742.828
+echo "POA Throughput: 2661.124 MCUPS/mm2" #3742.828
 echo "=======================================RESULTS========================================="
 cat success.txt
