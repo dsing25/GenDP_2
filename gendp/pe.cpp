@@ -56,7 +56,9 @@ void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
         fprintf(stderr, "Error: No outstanding request present, but recieve_spm_data called for PE[%d]\n", id);
         exit(-1);
     }
+#ifdef PROFILE
     printf("PE[%d] @%d recv SPM: ", id, cycle);
+#endif
     switch (outstanding_req.dst){
         case CTRL_REG:
             if (outstanding_req.single_load) {
