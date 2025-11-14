@@ -209,9 +209,10 @@ void pe::ctrl_instr_load_from_ddr(int addr, unsigned long data[]) {
 }
 
 
-int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
+LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data) {
 
-    int data = 0;
+    LoadResult data{};
+    data.data[0] = 0;
     int source_addr = 0;
     
     if (reg_immBar_flag) source_addr = addr_regfile_unit->buffer[rs1] + addr_regfile_unit->buffer[rs2];
@@ -227,21 +228,21 @@ int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
         comp_reg_load_addr = source_addr;
         regfile_unit->read_addr[12] = comp_reg_load_addr;
         regfile_unit->read(regfile_unit->read_addr, regfile_unit->read_data);
-        data = regfile_unit->read_data[12];
+        data.data[0] = regfile_unit->read_data[12];
 #ifdef PROFILE
     if (simd)
-        printf("%lx from reg[%d] to ", data, source_addr);
+        printf("%lx from reg[%d] to ", data.data[0], source_addr);
     else
-        printf("%d from reg[%d] to ", data, source_addr);
+        printf("%d from reg[%d] to ", data.data[0], source_addr);
 #endif
     } else if (source_pos == CTRL_GR) {
         if (source_addr >= 0 && source_addr < ADDR_REGISTER_NUM) {
-            data = addr_regfile_unit->buffer[source_addr];
+            data.data[0] = addr_regfile_unit->buffer[source_addr];
 #ifdef PROFILE
     if (simd)
-        printf("%lx from gr[%d] to ", data, source_addr);
+        printf("%lx from gr[%d] to ", data.data[0], source_addr);
     else
-        printf("%d from gr[%d] to ", data, source_addr);
+        printf("%d from gr[%d] to ", data.data[0], source_addr);
 #endif
         } else {
             fprintf(stderr, "PE[%d] load gr addr %d error.\n", id, source_addr);
@@ -249,10 +250,6 @@ int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
         }
     } else if (source_pos == CTRL_SPM) {
         SPM_unit->access(source_addr, id, SpmAccessT::READ);
-//TODO reinstate after fixed
-//#ifdef PROFILE
-//        printf("initiate ld SPM[%d] to ", source_addr);
-//#endif
 #ifdef PROFILE
     if (simd)
         printf("%lx from SPM[%d] to ", SPM_unit->buffer[source_addr], source_addr);
@@ -268,12 +265,12 @@ int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
         printf("%lx %lx from comp instruction buffer[%d] to ", instruction[0], instruction[1], source_addr);
 #endif
     } else if (source_pos == CTRL_IN_PORT) {
-        data = load_data;
+        data.data[0] = load_data;
 #ifdef PROFILE
     if (simd)
-        printf("%lx from input data port to ", data);
+        printf("%lx from input data port to ", data.data[0]);
     else
-        printf("%d from input data port to ", data);
+        printf("%d from input data port to ", data.data[0]);
 #endif
     } else if (source_pos == CTRL_IN_INSTR) {
         instruction[0] = load_instruction[0];
@@ -288,7 +285,7 @@ int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
     return data;
 }
 
-void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2, int data, int simd, int* ctrl_write_addr, int* ctrl_write_datum) {
+void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_data) {
 
     int dest_addr = 0;
 
@@ -306,7 +303,7 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
         }
         assert(!outstanding_req.valid); //should not have outstanding already
         outstanding_req.valid = true;
-        outstanding_req.single_load = true;
+        outstanding_req.single_load = single_data;
         outstanding_req.dst = dest_pos;
         outstanding_req.addr = dest_addr;
         //still log the dest we're sending to
@@ -328,14 +325,14 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
             comp_reg_store = 1;
             comp_reg_store_addr = dest_addr;
             regfile_unit->write_addr[2] = comp_reg_store_addr;
-            regfile_unit->write_data[2] = data;
+            regfile_unit->write_data[2] = data.data[0];
             regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 2);
 #ifdef PROFILE
             printf("reg[%d].\t", dest_addr);
 #endif
         } else if (dest_pos == CTRL_GR) {
             if (dest_addr >= 0 && dest_addr < ADDR_REGISTER_NUM) {
-                *ctrl_write_datum = data;
+                *ctrl_write_datum = data.data[0];
                 *ctrl_write_addr = dest_addr;
 
 #ifdef PROFILE
@@ -368,7 +365,7 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
             printf("comp instruction buffer[%d].\t", dest_addr);
 #endif
         } else if (dest_pos == 9) {
-            store_data = data;
+            store_data = data.data[0];
 #ifdef PROFILE
             printf("out port.\t");
 #endif
@@ -404,7 +401,8 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     // 11 - imm
     // 12 - none
 
-    int rd, rs1, rs2, imm, data, comp_0 = 0, comp_1 = 0, sum = 0, add_a = 0, add_b = 0;
+    int rd, rs1, rs2, imm, comp_0 = 0, comp_1 = 0, sum = 0, add_a = 0, add_b = 0;
+    LoadResult data;
 
     unsigned long dest_mask = (unsigned long)((1 << MEMORY_COMPONENTS_ADDR_WIDTH) - 1) << (INSTRUCTION_WIDTH - MEMORY_COMPONENTS_ADDR_WIDTH);
     unsigned long src_mask = (unsigned long)((1 << MEMORY_COMPONENTS_ADDR_WIDTH) - 1) << (INSTRUCTION_WIDTH - 2*MEMORY_COMPONENTS_ADDR_WIDTH);
@@ -513,7 +511,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     else
         printf("Store %d to ", sext_imm_1);
 #endif
-        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, sext_imm_1, simd, ctrl_write_addr, ctrl_write_datum);
+        LoadResult immediate_data{};
+        immediate_data.data[0] = sext_imm_1;
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, immediate_data, simd, ctrl_write_addr, ctrl_write_datum);
         if (reg_auto_increasement_flag_0)
             addr_regfile_unit->buffer[reg_0]++;
         (*PC)++;
@@ -687,6 +687,26 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 #ifdef PROFILE
         printf("andi gr[%d] = gr[%d] & %d (%d) \n", rd, rs2, reg_imm_1, operand1);
 #endif
+    } else if (opcode == CTRL_MVD) {      // AND
+#ifdef PROFILE
+        printf("MoveDouble ");
+#endif
+        assert(src == CTRL_SPM || dest == CTRL_SPM); //only support to/from spm
+        bool single_data = false;
+        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, single_data);
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, single_data);
+
+        bool leagal_mv = check_legal_mv(src, dest);
+        if (!leagal_mv) {
+            fprintf(stderr, "PE[%d] PC=%d illegal mv from %d to %d\n", id, *PC, src, dest);
+            exit(-1);
+        }
+
+        if (reg_auto_increasement_flag_0)
+            addr_regfile_unit->buffer[reg_0]++;
+        if (reg_auto_increasement_flag_1)
+            addr_regfile_unit->buffer[reg_1]++;
+        (*PC)++;
     } else {
         fprintf(stderr, "PE[%d] control instruction opcode error.\n", id);
         exit(-1);

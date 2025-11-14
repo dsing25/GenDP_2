@@ -2,6 +2,7 @@
 #define SIMGLOBALS_H
 #include <set>
 #include <list>
+#include "sys_def.h"
 
 
 extern int cycle;
@@ -37,6 +38,18 @@ class PushableProducerSet {
         inline void push(EventProducer* producer) { producers->insert(producer); }
     private:
         std::set<EventProducer*>* producers;
+};
+
+/*
+ * This is used within a PE for loads to/from SPM
+ */
+struct LoadResult {
+    int data[SPM_BANDWIDTH];
+    LoadResult() {
+        for (int i = 0; i < SPM_BANDWIDTH; i++) {
+            data[i] = 42;
+        }
+    }
 };
 
 #endif // SIMGLOBALS_H

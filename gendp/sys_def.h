@@ -122,6 +122,8 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_SHIFTI_R 16
 #define CTRL_SHIFTI_L 17
 #define CTRL_ANDI 18
+//move double (so does two words)
+#define CTRL_MVD 19
 
 // DEST/SRCS
 #define CTRL_REG 0
