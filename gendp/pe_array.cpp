@@ -1,7 +1,8 @@
 #include "pe_array.h"
 #include <cassert>
 #include "sys_def.h"
-#include "simGlobals.h"
+#include "data_buffer.h"
+#include "simulator.h"
 
 #define NUM_FRACTION_BITS 16
 #define MAX_RANGE NUM_FRACTION_BITS
@@ -19,7 +20,10 @@ pe_array::pe_array(int input_size, int output_size) {
     main_addressing_register[0] = 0;
     main_PC = 0;
     for (i = 0; i < PE_NUM; i++)
-        pe_unit[i] = new pe(i);
+        //+1 allows addressing full range. 1 is dummy data. Not legal in real hardware
+        SPM_units[i] = new SPM(SPM_ADDR_NUM+1, &active_event_producers);
+    for (i = 0; i < PE_NUM; i++)
+        pe_unit[i] = new pe(i, SPM_units[i]);
     load_data = 0;
     store_data = 0;
     from_fifo = 0;
@@ -29,8 +33,10 @@ pe_array::~pe_array() {
     int i;
     free(input_buffer);
     free(output_buffer);
-    for (i = 0; i < PE_NUM; i++)
+    for (i = 0; i < PE_NUM; i++){
         delete pe_unit[i];
+        delete SPM_units[i];
+    }
 }
 
 void pe_array::buffer_reset(int* buffer, int num) {
@@ -88,9 +94,9 @@ void pe_array::pe_instruction_buffer_write_from_ddr(int addr, unsigned long data
 };
 
 
-int pe_array::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
+LoadResult pe_array::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
 
-    int data = 0;
+    LoadResult data{};
     int source_addr = 0;
     
     if (reg_immBar_flag) source_addr = main_addressing_register[rs1] + main_addressing_register[rs2];
@@ -102,12 +108,12 @@ int pe_array::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int si
 #endif
 
     if (source_pos == 1) {
-        data = main_addressing_register[source_addr];
+        data.data[0] = main_addressing_register[source_addr];
 #ifdef PROFILE
     if (simd)
-        printf("%lx from main addr reg[%d] to ", data, source_addr);
+        printf("%lx from main addr reg[%d] to ", data.data[0], source_addr);
     else
-        printf("%d from main addr reg[%d] to ", data, source_addr);
+        printf("%d from main addr reg[%d] to ", data.data[0], source_addr);
 #endif
     } else if (source_pos == 3) {
         PE_instruction[0] = compute_instruction_buffer[source_addr][0];
@@ -117,33 +123,33 @@ int pe_array::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int si
 #endif
     } else if (source_pos == 5) {
         if (source_addr >= 0 && source_addr < input_buffer_size) {
-            data = input_buffer[source_addr];
+            data.data[0] = input_buffer[source_addr];
 #ifdef PROFILE
     if (simd)
-        printf("%lx from input buffer[%d] to ", data, source_addr);
+        printf("%lx from input buffer[%d] to ", data.data[0], source_addr);
     else
-        printf("%d from input buffer[%d] to ", data, source_addr);
+        printf("%d from input buffer[%d] to ", data.data[0], source_addr);
 #endif
         } else {
             fprintf(stderr, "main load input buffer addr %d error.\n", source_addr);
             exit(-1);
         }
     } else if (source_pos == 7) {
-        data = load_data;
+        data.data[0] = load_data;
 #ifdef PROFILE
     if (simd)
-        printf("%lx from last PE to ", data);
+        printf("%lx from last PE to ", data.data[0]);
     else
-        printf("%d from last PE to ", data);
+        printf("%d from last PE to ", data.data[0]);
 #endif
     } else if (source_pos >= 11 && source_pos <=14) {
-        data = fifo_unit[0][source_pos - 11].pop();
+        data.data[0] = fifo_unit[0][source_pos - 11].pop();
         from_fifo = 1;
 #ifdef PROFILE
     if (simd)
-        printf("%lx from fifo[%d] to ", data, source_pos - 11);
+        printf("%lx from fifo[%d] to ", data.data[0], source_pos - 11);
     else {
-        printf("%d from fifo[%d] to (size is %d)", data, source_pos - 11, fifo_unit[0][source_pos - 11].size());
+        printf("%d from fifo[%d] to (size is %d)", data.data[0], source_pos - 11, fifo_unit[0][source_pos - 11].size());
         fifo_unit[0][source_pos - 11].show();
     }
 #endif
@@ -154,34 +160,26 @@ int pe_array::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int si
     return data;
 }
 
-void pe_array::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, int data, int simd) {
+void pe_array::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd) {
 
     int dest_addr = 0;
 
     if (reg_immBar_flag) dest_addr = main_addressing_register[rs1] + main_addressing_register[rs2];
     else dest_addr = rs1 + main_addressing_register[rs2];
 
-    // if (dest_pos == 1 && dest_addr == 0) printf("%d\n", data);
-    // if (main_addressing_register[0] != 0) printf("!");
-    // if (rs2 == 0 && rs1 == 0) {
-    //     printf("%lx %d\n", main_addressing_register[rs2], data);
-    //     if (main_addressing_register[rs2] != 0) 
-    //         printf("!");
-    // }
-
 #ifdef DEBUG
     printf("dest: %d reg_immBar_flag: %d reg_imm_1: %d reg_1: %d gr[reg_1]: %d dest_addr: %d\n", dest_pos, reg_immBar_flag, rs1, rs2, main_addressing_register[rs2], dest_addr);
 #endif
 
     if (dest_pos == 1) {
-        main_addressing_register[dest_addr] = data;
-        if (dest_addr == 0) printf("%d\n", data);
+        main_addressing_register[dest_addr] = data.data[0];
+        if (dest_addr == 0) printf("%d\n", data.data[0]);
 #ifdef PROFILE
         printf("main addr register[%d].\n", dest_addr);
 #endif
     } else if(dest_pos == 6) {
         if (dest_addr >= 0 && dest_addr < output_buffer_size) {
-            output_buffer[dest_addr] = data;
+            output_buffer[dest_addr] = data.data[0];
 #ifdef PROFILE
             printf("output buffer[%d].\n", dest_addr);
 #endif
@@ -190,13 +188,13 @@ void pe_array::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, int da
             exit(-1);
         }
     } else if (dest_pos == 9) {
-        store_data = data;
+        store_data = data.data[0];
 #ifdef PROFILE
         printf("PE[0].\n");
 #endif
     } else if (dest_pos >= 11 && dest_pos <= 14) {
         // fprintf(stderr, "fifo[0] ");
-        fifo_unit[0][dest_pos - 11].push(data);
+        fifo_unit[0][dest_pos - 11].push(data.data[0]);
 #ifdef PROFILE
     printf("fifo[%d]. size is %d\n", dest_pos - 11, fifo_unit[0][dest_pos - 11].size());
     fifo_unit[0][dest_pos - 11].show();
@@ -228,7 +226,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         fprintf(stderr, "WARNING: PE_ARRAY PC=%d cycle=%d executing uninitialized instruction.\n", *PC, cycle);
     }
 
-    int i, rd, rs1, rs2, imm, data, comp_0 = 0, comp_1 = 0, sum = 0, add_a = 0, add_b = 0;
+    int i, rd, rs1, rs2, imm, comp_0 = 0, comp_1 = 0, sum = 0, add_a = 0, add_b = 0;
+    LoadResult data{};
 
     int8_t rs[4];
         
@@ -268,7 +267,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
     int  magic_payload = instruction & magic_payload_mask;
 
 #ifdef PROFILE
-    printf("PC = %d\t", *PC);
+    printf("PC = %d @%d:%016lx\t", *PC, cycle, instruction);
 #endif
     if (main_instruction_setting == MAIN_INSTRUCTION_2) {
         if (((opcode == 4 || opcode == 5) && (dest == 5 || dest == 6 || dest == 11 || dest == 12 || dest == 13 || dest == 14)) || opcode == 14) {
@@ -295,6 +294,32 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
     if (is_magic) {
         //Used to wreak simulator havoc. Put whatever you want here
         printf("Magic!!!!! payload = %d\n", magic_payload);
+        static int score = 0;
+        constexpr int MEM_BLOCK_SIZE = 64;
+        for (int i = 0; i < 4; i++) {
+            printf("SPM of PE[%d] at score %d:\n", i, score);
+            SPM_units[i]->show_data(0, MEM_BLOCK_SIZE*7, 32);
+        }
+        int open_score = std::max(score - 8, 0);
+        int match_score= std::max(score - 4, 0);
+        int d_i_score  = std::max(score - 2, 0);
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set open
+                SPM_units[i]->buffer[j] = open_score;
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set match
+                SPM_units[i]->buffer[1 * MEM_BLOCK_SIZE + j] = match_score;
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set i
+                SPM_units[i]->buffer[2 * MEM_BLOCK_SIZE + j] = d_i_score;
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set d
+                SPM_units[i]->buffer[3 * MEM_BLOCK_SIZE + j] = d_i_score;
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set m write
+                SPM_units[i]->buffer[4 * MEM_BLOCK_SIZE + j] = 0;
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set d write
+                SPM_units[i]->buffer[5 * MEM_BLOCK_SIZE + j] = 0;
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set i write
+                SPM_units[i]->buffer[6 * MEM_BLOCK_SIZE + j] = 0;
+        }
+        score += 2;
         (*PC)++;
     } else if (opcode == 0) {              // add rd rs1 rs2
         rd = reg_imm_0;
@@ -352,7 +377,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
     else
         printf("Store %d to ", sext_imm_1);
 #endif
-        store(dest, reg_immBar_flag_0, sext_imm_0, reg_0, sext_imm_1, simd);
+        LoadResult immediate_data{};
+        immediate_data.data[0] = sext_imm_1;
+        store(dest, reg_immBar_flag_0, sext_imm_0, reg_0, immediate_data, simd);
         if (reg_auto_increasement_flag_0)
             main_addressing_register[reg_0]++;
         (*PC)++;
@@ -518,6 +545,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         int shift_result = operand1 / (1<<reg_imm_1);
         *get_output_dest(dest,rd) = shift_result;
         (*PC)++;
+#ifdef PROFILE
+        printf("rShift gr[%d] = gr[%d] >> %d (%d) \n", rd, rs2, reg_imm_1, operand1);
+#endif
     } else if (opcode == CTRL_SHIFTI_L) {      // SHIFT_L
         assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
@@ -529,13 +559,19 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         int shift_result = operand1 <<reg_imm_1;
         *get_output_dest(dest,rd) = shift_result;
         (*PC)++;
+#ifdef PROFILE
+        printf("lShift gr[%d] = gr[%d] << %d (%d) \n", rd, rs2, reg_imm_1, operand1);
+#endif
     } else if (opcode == CTRL_ANDI) {      // AND
         rd = reg_imm_0;
         rs2 = reg_1;
         int operand1 = main_addressing_register[rs2];
-        int and_result = operand1 & (1<<reg_imm_1);
+        int and_result = operand1 & reg_imm_1;
         *get_output_dest(dest,rd) = and_result;
         (*PC)++;
+#ifdef PROFILE
+        printf("andi gr[%d] = gr[%d] & %d (%d) \n", rd, rs2, reg_imm_1, operand1);
+#endif
     } else {
         fprintf(stderr, "main control instruction opcode error. opcode = %d\n", opcode);
         exit(-1);
@@ -563,7 +599,8 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
 #ifdef PROFILE
     printf("main\t");
 #endif
-    int i, rd, rs1, rs2, imm, data, sum = 0, add_a = 0, add_b = 0;
+    int i, rd, rs1, rs2, imm, sum = 0, add_a = 0, add_b = 0;
+    LoadResult data{};
     int8_t rs[4];
         
     unsigned long dest_mask = (unsigned long)((1 << MEMORY_COMPONENTS_ADDR_WIDTH) - 1) << (INSTRUCTION_WIDTH - MEMORY_COMPONENTS_ADDR_WIDTH);
@@ -671,7 +708,9 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
     else
         printf("Store %d to ", sext_imm_1);
 #endif
-        store(dest, reg_immBar_flag_0, sext_imm_0, reg_0, sext_imm_1, simd);
+        LoadResult immediate_data{};
+        immediate_data.data[0] = sext_imm_1;
+        store(dest, reg_immBar_flag_0, sext_imm_0, reg_0, immediate_data, simd);
         if (reg_auto_increasement_flag_0)
             main_addressing_register[reg_0]++;
     } else if (opcode == 5) {       // mv dest src imm/reg(reg(++)) imm/reg(reg(++))
@@ -780,6 +819,38 @@ void pe_array::poa_show_output_buffer(int len_y, int len_x, FILE* fp) {
     }
 }
 
+void pe_array::handle_spm_data_ready(SpmDataReadyData* evData) {
+    pe_unit[evData->requestorId]->recieve_spm_data(evData->data);
+}
+
+void pe_array::process_events() {
+    std::list<EventProducer*> to_remove{};
+    for (auto event_producer : active_event_producers) {
+        std::pair<bool, std::list<Event>*> result = event_producer->tick();
+        if (result.first) // Event producer has finished, mark it for removal
+            to_remove.push_back(event_producer);
+        for (auto& event : *(result.second)) {
+#ifdef PROFILE
+            printf("main processing event type %d\n\n", event.type);
+#endif
+            switch (event.type) {
+                case EventType::SPM_DATA_READY:
+                    handle_spm_data_ready(static_cast<SpmDataReadyData*>(event.data));
+                    delete static_cast<SpmDataReadyData*>(event.data);
+                    break;
+                default:
+                    fprintf(stderr, "Unknown event type %d\n", event.type);
+                    exit(-1);
+            }
+        }
+        delete result.second;
+    }
+    // Remove finished event producers
+    for (auto event_producer : to_remove) {
+        active_event_producers.erase(event_producer);
+    }
+
+}
 
 
 void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_setting) {
@@ -789,6 +860,7 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     while (1) {
         cycle++;
         old_PC = main_PC;
+        process_events();
         flag = decode(main_instruction_buffer[main_PC][1], &main_PC, simd, setting, main_instruction_setting);
         pe_unit[0]->load_data = store_data;
         pe_unit[0]->load_instruction[0] = PE_instruction[0];

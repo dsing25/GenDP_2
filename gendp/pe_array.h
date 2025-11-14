@@ -1,7 +1,10 @@
 #ifndef PE_ARRAY_H
 #define PE_ARRAY_H
 #include "pe.h"
+#include <set>
+#include "simulator.h"
 #include "FIFO.h"
+#include <list>
 
 typedef struct thread_data {
     int master;
@@ -43,8 +46,8 @@ class pe_array {
         int decode(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting);
         int decode_output(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting);
 
-        int load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd);
-        void store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, int data, int simd);
+        LoadResult load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd);
+        void store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd);
         unsigned long PE_instruction[2];
         int load_data, store_data, from_fifo;
 
@@ -55,6 +58,13 @@ class pe_array {
     private:
         //helper
         int* get_output_dest(int dest, int rd);
+        void process_events();
+        void handle_spm_data_ready(SpmDataReadyData* evData);
+
+        std::set<EventProducer*> active_event_producers;
+
+        SPM * SPM_units[PE_NUM];
+
 
 };
 

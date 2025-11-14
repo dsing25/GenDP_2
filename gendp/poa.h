@@ -3,7 +3,7 @@
 
 // POA
 #define POA_PE_GROUP_SIZE 4
-#define POA_COMPUTE_INSTRUCTION_NUM 29
+#define POA_COMPUTE_INSTRUCTION_NUM 33
 #define POA_MAX_INPUT 200
 #define POA_MAX_SEQ_LEN 2048
 #define POA_MAX_EDGE_LEN 4096
@@ -15,6 +15,8 @@
 #define POA_CONSTANT_16 16
 #define POA_MIN_SCORE -999999
 #define POA_CONSTANT_MINUS_1 -1
+#define POA_MAX_INSTRUCTIONS 100000000
+//#define POA_MAX_INSTRUCTIONS 50000
 
 typedef struct poa_input {
     int len_y, len_y_unpadding, *seq_y, *index_y, len_x, *seq_x, *index_x;

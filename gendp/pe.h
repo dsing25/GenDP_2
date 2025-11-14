@@ -3,12 +3,26 @@
 #include "regfile.h"
 #include "compute_unit_32.h"
 #include "crossbar.h"
+#include "simulator.h"
 
 class pe {
 
     public:
+        struct OutstandingReq{
+            int dst;
+            int addr;
+            bool single_load;
+            bool valid;
+            OutstandingReq() : dst(-42), addr(-42), single_load(false),valid(false) {}
+            void clear() {
+                dst = -42;
+                addr = -42;
+                single_load = false;
+                valid = false;
+            }
+        };
 
-        pe(int id);
+        pe(int id, SPM* spm);
         ~pe();
 
         int id;
@@ -17,12 +31,14 @@ class pe {
 
         void run(int simd);
 
-        int decode(unsigned long instruction, int* PC, int src_dest[], int* op, int simd);
-        int load(int pos, int reg_immBar_flag, int rs1, int rs2, int simd);
-        void store(int pos, int reg_immBar_flag, int rs1, int rs2, int data, int simd);
+        int decode(unsigned long instruction, int* PC, int src_dest[], int* op, int simd, int* ctrl_write_addr, int* ctrl_write_datum);
+        LoadResult load(int pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data=true);
+        void store(int pos, int src, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_datak=true);
         void ctrl_instr_load_from_ddr(int addr, unsigned long data[]);
         int get_gr_10();
         void reset();
+
+        void recieve_spm_data(int data[SPM_BANDWIDTH]);
 
         void show_comp_reg();
 
@@ -45,12 +61,19 @@ class pe {
         // TODO: Put conponents below to private later
         comp_instr_buffer *comp_instr_buffer_unit = new comp_instr_buffer(COMP_INSTR_BUFFER_GROUP_NUM);
         ctrl_instr_buffer *ctrl_instr_buffer_unit = new ctrl_instr_buffer(CTRL_INSTR_BUFFER_NUM);
-        SPM *SPM_unit = new SPM(SPM_ADDR_NUM);
+        SPM *SPM_unit;
         addr_regfile *addr_regfile_unit = new addr_regfile(ADDR_REGISTER_NUM);
+        //write buffer to send to addr_regfile
+        int ctrl_write_addrs[CTRL_REGFILE_WRITE_PORTS];
+        int ctrl_write_data[CTRL_REGFILE_WRITE_PORTS];
         comp_decoder comp_decoder_unit;
         regfile *regfile_unit = new regfile();
         compute_unit_32 cu_32;
         crossbar crossbar_unit;
+
+        //-1 means there is no outstanding request
+        OutstandingReq outstanding_req;
+
 
 
 };

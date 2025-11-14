@@ -283,12 +283,12 @@ void poa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
 
     if (simulation_cases < 0 || simulation_cases >= poa_input_index) {
         for (i = 0; i < poa_input_index; i++) {
-            poa_simulate(pe_array_unit, poa_input[i], 100000000, fp, show_output, poa_output+index);
+            poa_simulate(pe_array_unit, poa_input[i], POA_MAX_INSTRUCTIONS, fp, show_output, poa_output+index);
             index += poa_input[i].len_x * poa_input[i].len_y *2;
         }
     } else {
         for (i = 0; i < simulation_cases; i++) {
-            poa_simulate(pe_array_unit, poa_input[i], 100000000, fp, show_output, poa_output+index);
+            poa_simulate(pe_array_unit, poa_input[i], POA_MAX_INSTRUCTIONS, fp, show_output, poa_output+index);
             index += poa_input[i].len_x * poa_input[i].len_y *2;
         }
     }

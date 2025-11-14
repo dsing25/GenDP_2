@@ -1,7 +1,8 @@
 build/
 gendp-datasets*
 datasets/
-sim*
+sim
+sim_*
 *sim_results
 *_output*
 *_correctness
@@ -17,3 +18,7 @@ backtest-datasets
 */instructions
 success.txt
 __pycache__/
+*.gdbinit
+Traces/
+simGlobals.cpp
+simGlobals.h

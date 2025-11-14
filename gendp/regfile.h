@@ -17,8 +17,9 @@ class regfile {
         
         int *read_addr, *read_data;
         
+        //TODO move back to private after debug
+        int *register_file;
     private:
 
-        int *register_file;
 
 };
