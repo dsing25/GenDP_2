@@ -248,7 +248,7 @@ int pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
             exit(-1);
         }
     } else if (source_pos == CTRL_SPM) {
-        SPM_unit->access(source_addr, id);
+        SPM_unit->access(source_addr, id, SpmAccessT::READ);
 //TODO reinstate after fixed
 //#ifdef PROFILE
 //        printf("initiate ld SPM[%d] to ", source_addr);
@@ -347,7 +347,7 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
             }
         } else if (dest_pos == 2) {
             if (dest_addr >= 0 && dest_addr < SPM_ADDR_NUM) {
-                SPM_unit->buffer[dest_addr] = data;
+                SPM_unit->access(dest_addr, id, SpmAccessT::WRITE, data);
 #ifdef PROFILE
                 printf("SPM[%d].\t", dest_addr);
 #endif

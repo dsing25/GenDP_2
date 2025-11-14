@@ -125,7 +125,7 @@ void SPM::show_data(int start_addr, int end_addr, int line_width) {
     } else fprintf(stderr, "SPM show data addr error.\n");
 }
 
-void SPM::access(int addr, int peid){
+void SPM::access(int addr, int peid, SpmAccessT access_t, int data){
     assert(requests[peid] == nullptr); //there was a request already there
     if (addr < 0 || addr >= SPM_ADDR_NUM) {
         fprintf(stderr, "PE[%d] load SPM addr %d error.\n", peid, addr);
@@ -135,6 +135,8 @@ void SPM::access(int addr, int peid){
     newReq->addr        = addr;
     newReq->cycles_left = SPM_ACCESS_LATENCY;
     newReq->peid        = peid;
+    newReq->access_t    = access_t;
+    newReq->data        = data;
     requests[peid]      = newReq;
     mark_active_producer();
 }
@@ -151,9 +153,20 @@ std::pair<bool, std::list<Event>*> SPM::tick(){
         if (req == nullptr) continue;
         req->cycles_left--;
         if(req->cycles_left == 0){
-            // generate SpmDataReadyEv
-            void* data = static_cast<void*>(new SpmDataReadyData(i, &buffer[req->addr]));
-            events->push_back(Event(EventType::SPM_DATA_READY, data));
+            if(req->access_t == SpmAccessT::WRITE){
+                // write data to SPM
+                buffer[req->addr] = req->data;
+#ifdef PROFILE
+                printf("PE[%d]@%d write SPM[%d] = %d\n", id, cycle, req->addr, req->data);
+#endif
+            } else if (req->access_t == SpmAccessT::READ){
+                // generate SpmDataReadyEv
+                void* data = static_cast<void*>(new SpmDataReadyData(i, &buffer[req->addr]));
+                events->push_back(Event(EventType::SPM_DATA_READY, data));
+            } else {
+                fprintf(stderr, "SPM tick error: unknown access type.\n");
+                exit(-1);
+            }
             delete requests[i];
             requests[i] = nullptr;
         } else {

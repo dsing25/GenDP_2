@@ -3,6 +3,11 @@
 #include "sys_def.h"
 #include "simulator.h"
 
+enum class SpmAccessT {
+    READ,
+    WRITE
+};
+
 // template <class T>
 // class data_buffer {
 
@@ -49,6 +54,8 @@ class SPM : EventProducer{
             int addr;
             int peid;
             int cycles_left;
+            SpmAccessT access_t;
+            int data;
         };
         void mark_active_producer();
 
@@ -61,7 +68,7 @@ class SPM : EventProducer{
 
         void show_data(int addr);
         void show_data(int start_addr, int end_addr, int line_width=64);
-        void access(int addr, int peid);
+        void access(int addr, int peid, SpmAccessT accessT, int data=42);
         std::pair<bool, std::list<Event>*> tick() override;
 
         int *buffer;
