@@ -51,7 +51,6 @@ void pe::reset() {
 }
 
 void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
-    //TODO magic here. We flash regfile instantly. In future we'll load into register to write and write at end of cycle, but that is 2 latency
     if (!outstanding_req.valid){
         fprintf(stderr, "Error: No outstanding request present, but recieve_spm_data called for PE[%d]\n", id);
         exit(-1);
@@ -63,8 +62,6 @@ void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
         case CTRL_REG:
             if (outstanding_req.single_load) {
                 regfile_unit->register_file[outstanding_req.addr] = data[0];
-                //regfile_unit->write_addr[outstanding_req.addr] = data[0];
-//TODO reinstatte after fix
 #ifdef PROFILE
             printf("reg[%d] = %d\n", id, outstanding_req.addr, data[0]);
 #endif
@@ -224,30 +221,42 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
 #endif
 
     if (source_pos == CTRL_REG) {
-        comp_reg_load = 1;
-        comp_reg_load_addr = source_addr;
-        regfile_unit->read_addr[12] = comp_reg_load_addr;
-        regfile_unit->read(regfile_unit->read_addr, regfile_unit->read_data);
-        data.data[0] = regfile_unit->read_data[12];
+        int n_loads = single_data ? 1 : SPM_BANDWIDTH;
+        for (int i = 0; i < n_loads; i++) {
+            int addr = source_addr + i;
+            if (addr >= 0 && addr < REGFILE_ADDR_NUM) {
+                data.data[i] = regfile_unit->register_file[addr];
+            } else {
+                fprintf(stderr, "PE[%d] load gr addr %d error.\n", id, addr);
+                exit(-1);
+            }
 #ifdef PROFILE
-    if (simd)
-        printf("%lx from reg[%d] to ", data.data[0], source_addr);
-    else
-        printf("%d from reg[%d] to ", data.data[0], source_addr);
+        if (simd)
+            printf("%lx from reg[%d] to ", data.data[i], source_addr);
+        else
+            printf("%d from reg[%d] to ", data.data[i], source_addr);
 #endif
-    } else if (source_pos == CTRL_GR) {
-        if (source_addr >= 0 && source_addr < ADDR_REGISTER_NUM) {
-            data.data[0] = addr_regfile_unit->buffer[source_addr];
-#ifdef PROFILE
-    if (simd)
-        printf("%lx from gr[%d] to ", data.data[0], source_addr);
-    else
-        printf("%d from gr[%d] to ", data.data[0], source_addr);
-#endif
-        } else {
-            fprintf(stderr, "PE[%d] load gr addr %d error.\n", id, source_addr);
-            exit(-1);
         }
+    } else if (source_pos == CTRL_GR) {
+        int n_loads = single_data ? 1 : SPM_BANDWIDTH;
+        for (int i = 0; i < n_loads; i++) {
+            int addr = source_addr + i;
+            if (addr >= 0 && addr < ADDR_REGISTER_NUM) {
+                data.data[i] = addr_regfile_unit->buffer[addr];
+            } else {
+                fprintf(stderr, "PE[%d] load gr addr %d error.\n", id, addr);
+                exit(-1);
+            }
+#ifdef PROFILE
+            if (simd)
+                printf("%lx from gr[%d]-", data.data[i], addr);
+            else
+                printf("%d from gr[%d]-", data.data[i], addr);
+#endif
+        }
+#ifdef PROFILE
+        printf("to ", data.data[i], addr);
+#endif
     } else if (source_pos == CTRL_SPM) {
         SPM_unit->access(source_addr, id, SpmAccessT::READ);
 #ifdef PROFILE
@@ -257,6 +266,7 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
         printf("%d from SPM[%d] to ", SPM_unit->buffer[source_addr], source_addr);
 #endif
     } else if (source_pos == CTRL_COMP_IB) {
+        assert(single_data); //only support single instruction load from comp instr buffer
         comp_instr_load = 1;
         comp_instr_load_addr = source_addr;
         instruction[0] = comp_instr_buffer_unit->buffer[comp_instr_load_addr][0];
@@ -265,6 +275,7 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
         printf("%lx %lx from comp instruction buffer[%d] to ", instruction[0], instruction[1], source_addr);
 #endif
     } else if (source_pos == CTRL_IN_PORT) {
+        assert(single_data); //only support single data load from input port
         data.data[0] = load_data;
 #ifdef PROFILE
     if (simd)
@@ -286,6 +297,8 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
 }
 
 void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_data) {
+    assert(single_data); //Right now only support single data store because multidata store is 
+                         //handled in the recv function after SPM load
 
     int dest_addr = 0;
 
@@ -648,8 +661,6 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         printf("wait.\t");
 #endif
     } else if (opcode == CTRL_SHIFTI_R) {      // SHIFT_R
-        //main_addressing_register
-        //TODO is main_addressing_register the correct place to go?
         assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
@@ -694,7 +705,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         assert(src == CTRL_SPM || dest == CTRL_SPM); //only support to/from spm
         bool single_data = false;
         data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, single_data);
-        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, single_data);
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, true);
 
         bool leagal_mv = check_legal_mv(src, dest);
         if (!leagal_mv) {
