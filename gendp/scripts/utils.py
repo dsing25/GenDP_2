@@ -78,7 +78,7 @@ class InstructionWriter:
         frame = inspect.currentframe().f_back
         line = inspect.getframeinfo(frame).code_context[0].strip()
         expr_text = line[line.find('(')+1:]  # crude extraction
-        self.hr_file.write(f"{value[:-1].ljust(18)} {expr_text}\n")
+        self.hr_file.write(f"{value[2:-1].ljust(16)} {expr_text}\n")
 
     def close(self):
         self.file.close()

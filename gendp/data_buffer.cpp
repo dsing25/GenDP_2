@@ -1,4 +1,6 @@
 #include "data_buffer.h"
+#include <iomanip>
+#include <cassert>
 
 // template <typename T>
 // data_buffer<T>::data_buffer(int size) {
@@ -57,20 +59,44 @@ void addr_regfile::reset() {
         buffer[i] = 0;
 }
 
+void addr_regfile::write(int* write_addr, int* write_data, int n){
+    for(int i = 0; i < n; i++){
+        if (write_addr[i] != -1){
+            if (write_addr[i] >= 0 && write_addr[i] < buffer_size)
+                buffer[write_addr[i]] = write_data[i];
+            else fprintf(stderr, "addr_regfile write addr error. %d outside buffsize %d\n", write_addr[i], buffer_size);
+        }
+    }
+    //ensure no two addrs are the same
+    for(int i = 0; i < n; i++){
+        for(int j = i + 1; j < n; j++){
+            if(write_addr[i] == write_addr[j] && write_addr[i] != -1){
+                fprintf(stderr, "addr_regfile write addr error. duplicate addr %d\n", write_addr[i]);
+            }
+        }
+    }
+}
+
 void addr_regfile::show_data(int addr) {
     if (addr >= 0 && addr < buffer_size) {
         printf("addr_regfile[%d] = %d\n", addr, buffer[addr]);
     } else fprintf(stderr, "addr_regfile show data addr error.\n");
 }
 
-SPM::SPM(int size) {
+
+SPM::SPM(int size, std::set<EventProducer*>* producers) : active_producers(producers) {
     buffer = (int*)malloc(size * sizeof(int));
     buffer_size = size;
+    for (int i = 0; i < PE_4_SETTING; i++)
+        requests[i] = nullptr;
     reset();
 }
 
 SPM::~SPM() {
     free(buffer);
+    for (int i = 0; i < PE_4_SETTING; i++)
+        if (requests[i] != nullptr)
+            delete requests[i];
 }
 
 void SPM::reset() {
@@ -83,6 +109,78 @@ void SPM::show_data(int addr) {
     if (addr >= 0 && addr < buffer_size) {
         printf("SPM[%d] = %d\n", addr, buffer[addr]);
     } else fprintf(stderr, "SPM show data addr error.\n");
+}
+
+void SPM::show_data(int start_addr, int end_addr, int line_width) {
+    int i;
+    if (start_addr >= 0 && end_addr < buffer_size && start_addr <= end_addr) {
+        // print aligned SPM in rows of 64 ints each
+        int width = 3;
+        for (i = start_addr; i < end_addr; i++) {
+            if ((i - start_addr) % line_width == 0)
+                std::cout << std::endl;
+            std::cout << std::setw(width) << buffer[i];
+        }
+        std::cout << std::endl;
+    } else fprintf(stderr, "SPM show data addr error.\n");
+}
+
+void SPM::access(int addr, int peid, SpmAccessT access_t, LoadResult data){
+    assert(requests[peid] == nullptr); //there was a request already there
+    if (addr < 0 || addr >= SPM_ADDR_NUM) {
+        fprintf(stderr, "PE[%d] load SPM addr %d error.\n", peid, addr);
+        exit(-1);
+    }
+    OutstandingRequest* newReq = new OutstandingRequest();
+    newReq->addr        = addr;
+    newReq->cycles_left = SPM_ACCESS_LATENCY;
+    newReq->peid        = peid;
+    newReq->access_t    = access_t;
+    newReq->data        = data;
+    requests[peid]      = newReq;
+    mark_active_producer();
+}
+
+void SPM::mark_active_producer(){
+    active_producers.push(this);
+}
+
+std::pair<bool, std::list<Event>*> SPM::tick(){
+    std::list<Event>* events = new std::list<Event>();
+    bool requestsOutstanding = false;
+    for(int i = 0; i < PE_4_SETTING; i++){
+        OutstandingRequest* req = requests[i];
+        if (req == nullptr) continue;
+        req->cycles_left--;
+        if(req->cycles_left == 0){
+            if(req->access_t == SpmAccessT::WRITE){
+                // write data to SPM
+                //TODO update for wide store
+                buffer[req->addr] = req->data.data[0];
+#ifdef PROFILE
+                printf("PE[%d]@%d write SPM[%d] = %d\n", id, cycle, req->addr, req->data);
+#endif
+            } else if (req->access_t == SpmAccessT::READ){
+                // generate SpmDataReadyEv
+                void* data = static_cast<void*>(new SpmDataReadyData(i, &buffer[req->addr]));
+                events->push_back(Event(EventType::SPM_DATA_READY, data));
+            } else {
+                fprintf(stderr, "SPM tick error: unknown access type.\n");
+                exit(-1);
+            }
+            delete requests[i];
+            requests[i] = nullptr;
+        } else {
+            requestsOutstanding = true;
+        }
+    }
+    return std::make_pair(!requestsOutstanding, events);
+}
+
+SpmDataReadyData::SpmDataReadyData(int reqId, int* data) : requestorId(reqId) {
+    for (int i = 0; i < SPM_BANDWIDTH; i++) {
+        this->data[i] = data[i];
+    }
 }
 
 ctrl_instr_buffer::ctrl_instr_buffer(int size) {

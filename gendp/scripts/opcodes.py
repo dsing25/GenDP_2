@@ -32,7 +32,7 @@ none = 14
 halt = 15
 shifti_r = 16
 shifti_l = 17
-AND = 18
+ANDI = 18
 # these instruction tags here are for data movement
 # use sys_def.h for compute tags
 

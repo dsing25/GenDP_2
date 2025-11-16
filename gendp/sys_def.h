@@ -26,11 +26,12 @@
 #define FIFO_ID_WIDTH 5
 #define FIFO_ADDR_NUM 3072
 
+#define SPM_ACCESS_LATENCY 2
+#define SPM_BANDWIDTH 2
 #define SPM_ADDR_NUM 512
-#define ADDR_REGISTER_NUM 12
 #define MAIN_ADDR_REGISTER_NUM 16
 #define CTRL_INSTR_BUFFER_NUM 512
-#define COMP_INSTR_BUFFER_GROUP_NUM 32
+#define COMP_INSTR_BUFFER_GROUP_NUM 33
 #define CTRL_INSTR_BUFFER_GROUP_SIZE 2
 #define COMP_INSTR_BUFFER_GROUP_SIZE 2
 
@@ -41,6 +42,12 @@
 #define REGFILE_ADDR_NUM 32
 #define REGFILE_WRITE_PORTS 3
 #define REGFILE_READ_PORTS 13
+
+//This is CTRL regfile number of registers
+//TODO drop back to 12 
+#define ADDR_REGISTER_NUM 16
+#define CTRL_REGFILE_READ_PORTS 2
+#define CTRL_REGFILE_WRITE_PORTS 2
 
 #define CROSSBAR_IN_NUM 2
 #define CROSSBAR_OUT_NUM 2
@@ -116,6 +123,8 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_SHIFTI_R 16
 #define CTRL_SHIFTI_L 17
 #define CTRL_ANDI 18
+//move double (so does two words)
+#define CTRL_MVD 19
 
 // DEST/SRCS
 #define CTRL_REG 0

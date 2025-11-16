@@ -1,4 +1,12 @@
+#ifndef DATA_BUFFER_H
+#define DATA_BUFFER_H
 #include "sys_def.h"
+#include "simulator.h"
+
+enum class SpmAccessT {
+    READ,
+    WRITE
+};
 
 // template <class T>
 // class data_buffer {
@@ -33,27 +41,52 @@ class addr_regfile {
 
         void show_data(int addr);
 
+        void write(int* write_addr, int* write_data, int n);
+
         int *buffer;
         int buffer_size;
 
 };
 
-class SPM {
+class SPM : EventProducer{
+    private:
+        struct OutstandingRequest {
+            int addr;
+            int peid;
+            int cycles_left;
+            SpmAccessT access_t;
+            LoadResult data;
+        };
+        void mark_active_producer();
 
     public:
 
-        SPM(int size);
+        SPM(int size, std::set<EventProducer*>* active_producers);
         ~SPM();
 
         void reset();
 
         void show_data(int addr);
+        void show_data(int start_addr, int end_addr, int line_width=64);
+        void access(int addr, int peid, SpmAccessT accessT, LoadResult data=LoadResult());
+        std::pair<bool, std::list<Event>*> tick() override;
 
         int *buffer;
         int buffer_size;
+        
+        OutstandingRequest* requests[PE_4_SETTING];
 
+        PushableProducerSet active_producers;
 
 };
+
+class SpmDataReadyData {
+    public:
+        SpmDataReadyData(int reqId, int* data);
+        int requestorId;
+        int data[SPM_BANDWIDTH];
+};
+
 
 class ctrl_instr_buffer {
 
@@ -82,3 +115,5 @@ class comp_instr_buffer {
         int buffer_size;
 
 };
+
+#endif // DATA_BUFFER_H
