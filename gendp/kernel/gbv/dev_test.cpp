@@ -206,46 +206,7 @@ void test_popcount_all() {
     std::cout << std::endl;
 }
 int main() {
-    PriorityQueue pq;
-
-    // Create some nodes
-    QueueNode node1;
-    node1.priority = 30;
-    node1.node_id = 101;
-    node1.child_ids = {201, 202, -1, -1, -1};
-
-    QueueNode node2;
-    node2.priority = 15;
-    node2.node_id = 102;
-    node2.child_ids = {203, -1, -1, -1, -1};
-
-    QueueNode node3;
-    node3.priority = 32;
-    node3.node_id = 103;
-    node3.child_ids = {-1, -1, -1, -1, -1};
-
-    // Push nodes into the queue
-    pq.push(node1);
-    pq.push(node2);
-    pq.push(node3);
-
-    std::cout << "Initial queue size: " << pq.size() << std::endl;
-
-    // Pop all nodes and print their info
-    while (!pq.empty()) {
-        const QueueNode& top = pq.top();
-        std::cout << "Popped node: id=" << top.node_id
-                  << ", priority=" << top.priority
-                  << ", children=[";
-        for (int i = 0; i < 5; ++i) {
-            if (top.child_ids[i] != -1)
-                std::cout << top.child_ids[i] << " ";
-        }
-        std::cout << "]" << std::endl;
-        pq.pop();
-    }
-
-    std::cout << "Queue empty: " << std::boolalpha << pq.empty() << std::endl;
+    
 
     // test_popcount_all();
     //test_popcount();
