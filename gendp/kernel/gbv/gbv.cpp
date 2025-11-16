@@ -337,9 +337,9 @@ ScoreType getScoreBeforeStart_accelerator() const
 
 		return regfile[25];
 	}
+static WordSlice mergeTwoSlices_accelerator(WordSlice left, WordSlice right, Word leftSmaller, Word rightSmaller)
+	{ // this is in wordslice.h - fully works 
 
-static WordSlice mergeTwoSlices(WordSlice left, WordSlice right, Word leftSmaller, Word rightSmaller)
-	{ // this is in wordslice.h 
 		auto& regfile = GraphAlignerBitvectorCommon<LengthType, ScoreType, Word>::regfile;
 
 		WordSlice result;
@@ -356,7 +356,7 @@ static WordSlice mergeTwoSlices(WordSlice left, WordSlice right, Word leftSmalle
 		regfile[29] = result.VN;
 		regfile[30] = result.VP;
 		regfile[31] = result.scoreEnd;
-		
+
 		regfile[21] = leftSmaller;
 		regfile[22] = rightSmaller;
 
@@ -378,13 +378,13 @@ static WordSlice mergeTwoSlices(WordSlice left, WordSlice right, Word leftSmalle
 		regfile[25] = regfile[21] << 1; // leftsmaller << 1
 		regfile[25] = regfile[22] & regfile[25]; // rightreduction = reg25
 
-		// regfile[27] = (((regfile[22] & 1) && regfile[15]) < regfile[19]) ? regfile[27] | 1 : regfile[27];
+		// if ((regfile[22] & 1) && regfile[15] < regfile[19])
+		// {
+		// 	regfile[25] |= 1;
+		// }
 
-		if ((regfile[22] & 1) && regfile[15] < regfile[19])
-		{
-			regfile[25] |= 1;
-		}
-
+		regfile[25] = ((regfile[22] & 1) && (regfile[15] < regfile[19])) ? (regfile[25] | 1) : regfile[25];
+		
 		assert((regfile[24] & regfile[18]) == regfile[24]); 
 		assert((regfile[25] & regfile[14]) == regfile[25]);  
 		assert((regfile[24] & regfile[13]) == regfile[24]);  
@@ -416,6 +416,54 @@ static WordSlice mergeTwoSlices(WordSlice left, WordSlice right, Word leftSmalle
 
 		return result;
 	}
+
+static WordSlice mergeTwoSlicesInitial_accelerator(WordSlice left, WordSlice right)
+	{ // in wordslice.h 
+		auto& regfile = GraphAlignerBitvectorCommon<LengthType, ScoreType, Word>::regfile;
+		static_assert(std::is_same<Word, uint64_t>::value);
+
+		regfile[13] = left.VN;
+		regfile[14] = left.VP;
+		regfile[15] = left.getScoreBeforeStart();
+		regfile[16] = left.scoreEnd;
+		regfile[17] = right.VN;
+		regfile[18] = right.VP;
+		regfile[19] = right.getScoreBeforeStart();
+		regfile[20] = right.scoreEnd;
+
+		if (regfile[15] > regfile[19]) // std::swap(left, right);
+		{ 
+			regfile[23] = regfile[13];
+			regfile[24] = regfile[14];
+			regfile[25] = regfile[16];
+			regfile[26] = regfile[15];
+
+			regfile[13] = regfile[17];
+			regfile[14] = regfile[18];
+			regfile[16] = regfile[20];
+			regfile[15] = regfile[19];
+			
+			regfile[17] = regfile[23];
+			regfile[18] = regfile[24];
+			regfile[20] = regfile[25];
+			regfile[19] = regfile[26];
+		}
+
+		assert((regfile[14] & regfile[13]) == WordConfiguration<Word>::AllZeros);
+		assert((regfile[18] & regfile[17]) == WordConfiguration<Word>::AllZeros);
+		auto masks = differenceMasks(regfile[14], regfile[13], regfile[18], regfile[17], regfile[19] - regfile[15]);
+		regfile[21] = masks.first;
+		regfile[22] = masks.second;
+		left.VN = regfile[13];
+		left.VP = regfile[14];
+		left.scoreEnd = regfile[16];
+		right.VN = regfile[17];
+		right.VP = regfile[18];
+		right.scoreEnd = regfile[20];
+
+		return mergeTwoSlices(left, right, regfile[21], regfile[22]);
+	}
+
 
 	
 
