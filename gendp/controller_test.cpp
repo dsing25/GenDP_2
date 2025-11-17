@@ -2,50 +2,102 @@
 #include <iostream>
 #include <vector>
 #include <array>
+#include <ctime>
+#include <bitset>
 
 int main() {
-PriorityQueue pq;
 
-    // Create some nodes
-    QueueNode node1;
-    node1.priority = 30;
-    node1.node_id = 101;
-    node1.child_ids = {201, 202, -1, -1, -1};
+    struct InputDataNode 
+    {
+    uint8_t basepair : 2;   // 2-bit basepair (values 0-3)
+    int parent_node_id;     // Parent node ID
+    };
 
-    QueueNode node2;
-    node2.priority = 15;
-    node2.node_id = 102;
-    node2.child_ids = {203, -1, -1, -1, -1};
+    // Buffer to store 30 nodes
+    InputDataNode input_buffer[30];
 
-    QueueNode node3;
-    node3.priority = 32;
-    node3.node_id = 103;
-    node3.child_ids = {-1, -1, -1, -1, -1};
+    PriorityQueue pq;
+    std::srand(std::time(nullptr)); // Seed for random priorities
 
-    // Push nodes into the queue
-    pq.push(node1);
-    pq.push(node2);
-    pq.push(node3);
+// After defining input_buffer and before/after queue insertion loop
 
-    std::cout << "Initial queue size: " << pq.size() << std::endl;
+for (int i = 0; i < 20; ++i) {
+    // Generate random parent node id between 100 and 200
+    int parent_id = 100 + std::rand() % 101;
+    // Generate random basepair between 0 and 3 (00, 01, 10, 11)
+    uint8_t basepair = std::rand() % 4;
 
-    // Pop all nodes and print their info
+    // Store in input_buffer
+    input_buffer[i].parent_node_id = parent_id;
+    input_buffer[i].basepair = basepair;
+
+    // Create and push node to queue as before
+    QueueNode node;
+    node.priority = std::rand() % 101;
+    node.node_id = parent_id; // Use same parent_id for node_id
+    int num_children = std::rand() % 6;
+    node.child_ids.fill(-1);
+    for (int c = 0; c < num_children; ++c) {
+        node.child_ids[c] = 1 + std::rand() % 100;
+    }
+    pq.push(node);
+
+// Print what is being inserted into the priority queue
+std::cout << "Inserting into PriorityQueue: id=" << node.node_id
+          << ", priority=" << node.priority
+          << ", num_children=" << num_children
+          << ", children=[";
+for (int c = 0; c < num_children; ++c) {
+    std::cout << node.child_ids[c] << " ";
+}
+std::cout << "]" << std::endl;
+
+// Print what is being inserted into the input data buffer
+std::cout << "Inserting into InputDataBuffer: index=" << i
+          << ", parent_node_id=" << input_buffer[i].parent_node_id
+          << ", basepair=" << std::bitset<2>(input_buffer[i].basepair)
+          << std::endl;
+}
+
+
+
+    std::cout << "\nQueue size after insertion: " << pq.size() << std::endl;
+    // Pop all nodes and print their info in priority order
     while (!pq.empty()) {
         const QueueNode& top = pq.top();
+        int child_count = 0;
+        for (int c = 0; c < 5; ++c) {
+            if (top.child_ids[c] != -1) child_count++;
+        }
         std::cout << "Popped node: id=" << top.node_id
                   << ", priority=" << top.priority
+                  << ", num_children=" << child_count
                   << ", children=[";
-        for (int i = 0; i < 5; ++i) {
-            if (top.child_ids[i] != -1)
-                std::cout << top.child_ids[i] << " ";
+        for (int c = 0; c < child_count; ++c) {
+            std::cout << top.child_ids[c] << " ";
         }
         std::cout << "]" << std::endl;
         pq.pop();
     }
-
     std::cout << "Queue empty: " << std::boolalpha << pq.empty() << std::endl;
 
+    return 0;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // void dataflow_accelerator()
 // {
 //     Word new_parents, current_parent, new_children, spm_index, requeue = 0;
