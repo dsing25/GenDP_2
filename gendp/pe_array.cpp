@@ -295,8 +295,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         //Used to wreak simulator havoc. Put whatever you want here
         printf("Magic!!!!! payload = %d\n", magic_payload);
         static int score = 0;
-        constexpr int MEM_BLOCK_SIZE = 64;
-        for (int i = 0; i < 4; i++) {
+        constexpr int MEM_BLOCK_SIZE = 32;
+        int n_pes_to_show = 1;
+        for (int i = 0; i < n_pes_to_show; i++) {
             printf("SPM of PE[%d] at score %d:\n", i, score);
             SPM_units[i]->show_data(0, MEM_BLOCK_SIZE*7, 32);
         }
