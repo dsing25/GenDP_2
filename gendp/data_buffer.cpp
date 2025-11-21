@@ -125,7 +125,7 @@ void SPM::show_data(int start_addr, int end_addr, int line_width) {
     } else fprintf(stderr, "SPM show data addr error.\n");
 }
 
-void SPM::access(int addr, int peid, SpmAccessT access_t, LoadResult data){
+void SPM::access(int addr, int peid, SpmAccessT access_t, bool single_data, LoadResult data){
     assert(requests[peid] == nullptr); //there was a request already there
     if (addr < 0 || addr >= SPM_ADDR_NUM) {
         fprintf(stderr, "PE[%d] load SPM addr %d error.\n", peid, addr);
@@ -137,6 +137,7 @@ void SPM::access(int addr, int peid, SpmAccessT access_t, LoadResult data){
     newReq->peid        = peid;
     newReq->access_t    = access_t;
     newReq->data        = data;
+    newReq->single_data = single_data;
     requests[peid]      = newReq;
     mark_active_producer();
 }
@@ -155,11 +156,13 @@ std::pair<bool, std::list<Event>*> SPM::tick(){
         if(req->cycles_left == 0){
             if(req->access_t == SpmAccessT::WRITE){
                 // write data to SPM
-                //TODO update for wide store
-                buffer[req->addr] = req->data.data[0];
+                int n_writes = req->single_data ? 1 : SPM_BANDWIDTH;
+                for (int j = 0; j < n_writes; j++){
+                    buffer[req->addr+j] = req->data.data[j];
 #ifdef PROFILE
-                printf("PE[%d]@%d write SPM[%d] = %d\n", id, cycle, req->addr, req->data);
+                    printf("PE[%d]@%d write SPM[%d] = %d\n", id, cycle, req->addr, req->data);
 #endif
+                }
             } else if (req->access_t == SpmAccessT::READ){
                 // generate SpmDataReadyEv
                 void* data = static_cast<void*>(new SpmDataReadyData(i, &buffer[req->addr]));

@@ -258,7 +258,7 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
         printf("to ", data.data[i], addr);
 #endif
     } else if (source_pos == CTRL_SPM) {
-        SPM_unit->access(source_addr, id, SpmAccessT::READ);
+        SPM_unit->access(source_addr, id, SpmAccessT::READ, single_data);
 #ifdef PROFILE
     if (simd)
         printf("%lx from SPM[%d] to ", SPM_unit->buffer[source_addr], source_addr);
@@ -357,7 +357,7 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
             }
         } else if (dest_pos == 2) {
             if (dest_addr >= 0 && dest_addr < SPM_ADDR_NUM) {
-                SPM_unit->access(dest_addr, id, SpmAccessT::WRITE, data);
+                SPM_unit->access(dest_addr, id, SpmAccessT::WRITE, single_data, data);
 #ifdef PROFILE
                 printf("SPM[%d].\t", dest_addr);
 #endif
