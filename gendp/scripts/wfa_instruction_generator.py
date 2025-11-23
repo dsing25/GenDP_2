@@ -5,13 +5,12 @@ from opcodes import *
 
 MEM_BLOCK_SIZE = 32 # in words
 SPM_BANDWIDTH = 2 # in words
-WFA_COMPUTE_INSTRUCTION_NUM = 28
-PE_ALIGN_SYNC = WFA_COMPUTE_INSTRUCTION_NUM + 9 + 5
+PE_ALIGN_SYNC = 9 + 5
 COMPUTE_LOOP_NEXT = 0
 N_PES = 4
 #locations in PE ctrl
-INITIALIZATION_PE_NEXT = WFA_COMPUTE_INSTRUCTION_NUM*2+4+N_PES
-PE_CONST_AND_INIT = 1
+INIT_PE_NEXT = 2
+PE_ALIGN_SYNC = INIT_PE_NEXT + 6
 # locations in compute
 COMPUTE_H = 0
 COMPUTE_D = COMPUTE_H + SPM_BANDWIDTH // 2 + 1 #1 is halts
@@ -25,18 +24,8 @@ COMPUTE_I_AND_LOAD_H = COMPUTE_D + SPM_BANDWIDTH // 2 + 1 #1 is halts
 def wfa_main_instruction():
     
     f = InstructionWriter("instructions/wfa/main_instruction.txt");
-    f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 0, 0, si))                           # set gr[0]=0 to start
-
-    f.write(data_movement_instruction(gr, gr, 0, 0, PE_CONST_AND_INIT, 0, 0, 0, 0, 0, set_PC))       # PE_PC = PE_CONST_AND_INIT
-    # Dump in the instructions
-    for i in range(WFA_COMPUTE_INSTRUCTION_NUM):
-        f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, i, 0, mv));          # out = instr[i]
-    f.write(write_magic(1));
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # bne 1 gr[13] 0
-    f.write(data_movement_instruction(gr, gr, 0, 0, PE_ALIGN_SYNC, 0, 0, 0, 0, 0, set_PC))           # PE_PC = PE_ALIGN_SYNC
-
-
-    #INIT
+    f.write(data_movement_instruction(gr, gr, 0, 0, INIT_PE_NEXT, 0, 0, 0, 0, 0, set_PC))           # PE_PC = PE_ALIGN_SYNC
 
     #ALIGN_LOOP
     f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 1, 8, shifti_l))                     # gr[5] = gr[8] * 2 = gr[8] << 1
@@ -64,8 +53,6 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 7, addi))                   # out = gr[7] + 1
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 0, 7, mv))                     # out = gr[7]
   #endif
-    #TODO INVOKE MEMORY LOAD MAGIC
-
     f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, 1, 8, addi))                         # gr[8]++ (ed++)
     #JMP ALIGN_LOOP
     f.write(data_movement_instruction(gr, gr, 0, 0, -20, 0, 0, 0, 0, 0, beq))                        # beq 0 0 -20
@@ -126,30 +113,12 @@ def pe_instruction(pe_id):
     
     f = InstructionWriter("instructions/wfa/pe_{}_instruction.txt".format(pe_id));
 
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
-
-    for i in range(pe_id):
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op 
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op 
-    for j in range(WFA_COMPUTE_INSTRUCTION_NUM-1):
-        f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, j+1, 0, 0, 0, 0, 0, mv))          # ir[j+1] = in
-        f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, j, 0, mv))           # out = ir[j]
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                           # gr[10] = 1
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 0, 0, si))                           # set gr[0]=0 to start (just setting const)
-    for i in range(4 - pe_id): #just here to align the instructions between PEs
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op 
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
 
-#INITIALIZATION NEXT CYCLE=WFA_COMPUTE_INSTRUCTION_NUM*2+4+N_PES
-    #NOTES
-    #I assume write to reg file can be done in adjacent blocks. #TODO we need to implement this
-    #The general format is, load SPM, update cursor, stall for a cycle until SPM is ready again
-    #initialize the counter
-    #INITIALIZING REGISTERS
-    #mark busy
+#INIT_PE_NEXT
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                           # gr[10] = 0
     #gr[1,6] are initialized to cursor positions. Each block is offset by MEM_BLOCK_SIZE
     f.write(data_movement_instruction(gr, 0, 0, 0, 11, 0, 0, 0, 0*MEM_BLOCK_SIZE, 0, si))            # gr[11] open
@@ -166,7 +135,7 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
 
-    #PE_ALIGN_SYNC = WFA_COMPUTE_INSTRUCTION_NUM + 18(instruction mv) + 12(start align loop)
+#PE_ALIGN_SYNC = (2 INIT) (6 INIT_PE_NEXT)
     #mark as busy
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                           # gr[10] = 0
@@ -185,7 +154,7 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si))                            # gr[2] = 0
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))                            # gr[3] = 0
     f.write(data_movement_instruction(gr, 0, 0, 0, 11, 0, 0, 0, 0, 0, si))                           # gr[4] = 0
-    #COPY FIRST PART OF BLOCK LOOP SKIP WRITE THOUGH
+    #COPY FIRST PART OF BLOCK LOOP SKIP WRITE. Note computiation does nothing useful
     #Load DELETIONS [0,3]
     f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 0, 0, 11, mvd))                       # reg[4]=SPM[gr[11]]
     f.write(data_movement_instruction(gr, gr, 1, 0, 11, 0, 0, 0, SPM_BANDWIDTH, 11, addi))           # gr[11] = gr[11] + SPM_BANDWIDTH
