@@ -160,7 +160,7 @@ std::pair<bool, std::list<Event>*> SPM::tick(){
                 for (int j = 0; j < n_writes; j++){
                     buffer[req->addr+j] = req->data.data[j];
 #ifdef PROFILE
-                    printf("PE[%d]@%d write SPM[%d] = %d\n", id, cycle, req->addr, req->data);
+                    printf("PE[%d]@%d write SPM[%d] = %d\n", i, cycle, req->addr+j, req->data.data[j]);
 #endif
                 }
             } else if (req->access_t == SpmAccessT::READ){

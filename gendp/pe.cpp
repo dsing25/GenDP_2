@@ -232,11 +232,14 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
             }
 #ifdef PROFILE
         if (simd)
-            printf("%lx from reg[%d] to ", data.data[i], source_addr);
+            printf("%lx from reg[%d]", data.data[i], source_addr);
         else
-            printf("%d from reg[%d] to ", data.data[i], source_addr);
+            printf("%d from reg[%d]", data.data[i], source_addr);
 #endif
         }
+#ifdef PROFILE
+        printf(" to ");
+#endif
     } else if (source_pos == CTRL_GR) {
         int n_loads = single_data ? 1 : SPM_BANDWIDTH;
         for (int i = 0; i < n_loads; i++) {
@@ -255,7 +258,7 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
 #endif
         }
 #ifdef PROFILE
-        printf("to ", data.data[i], addr);
+        printf(" to ");
 #endif
     } else if (source_pos == CTRL_SPM) {
         SPM_unit->access(source_addr, id, SpmAccessT::READ, single_data);
