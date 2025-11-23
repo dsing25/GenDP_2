@@ -68,12 +68,12 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
     unsigned long pe_instruction[pe_group_size][CTRL_INSTR_BUFFER_NUM][CTRL_INSTR_BUFFER_GROUP_SIZE];
     for (int i = 0; i < pe_group_size; i++) {
         for (int j = 0; j < CTRL_INSTR_BUFFER_NUM; j++) {
-            pe_instruction[i][j][0] = 0x20f7800000000;
-            pe_instruction[i][j][1] = 0x20f7800000000;
+            pe_instruction[i][j][0] = 0x42;
+            pe_instruction[i][j][1] = 0x42;
         }
     }
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {
-        main_instruction[i] = 0x20f7800000000;
+        main_instruction[i] = 0x42;
     }
 
     std::string compute_instruction_file = "instructions/"+kernel_name+"/compute_instruction.txt";
