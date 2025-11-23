@@ -84,6 +84,7 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
     pe_instruction_file[2] = "instructions/"+kernel_name+"/pe_2_instruction.txt";
     pe_instruction_file[3] = "instructions/"+kernel_name+"/pe_3_instruction.txt";
     std::fstream fp_input, fp_compute_instruction, fp_main_instruction;
+    int n_compute_instruction = 0;
     std::fstream fp_pe_instruction[pe_group_size];
     std::string line;
     int read_index = 0;
@@ -95,6 +96,7 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
             compute_instruction[read_index/2][read_index%2] = std::stoull(line, 0, 0);
             read_index++;
         }
+        n_compute_instruction = read_index/2;
     } else {
         fprintf(stderr, "Cannot open file %s.\n", compute_instruction_file.c_str());
         exit(-1);
@@ -129,10 +131,14 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
         fp_pe_instruction[i].close();
     }
 
+    //Legacy mode used for POA and prior traces
     // Load data from input file to instruction buffer
     for (int i = 0; i < n_comp_instructions; i++) {
         pe_array_unit->compute_instruction_buffer_write_from_ddr(i, compute_instruction[i]);
     }
+    //End legacy mode. Up to date way is to flash to the PE directly
+    for (int i = 0; i < pe_group_size; i++)
+        pe_array_unit->pe_comp_instruction_buffer_write_from_ddr(n_comp_instructions, &compute_instruction[0][0], i);
 
     // Load main & pe instructions into pe_array instruction buffer
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {
@@ -140,8 +146,10 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
         tmp[0] = 0x20f7800000000;
         tmp[1] = main_instruction[i];
         pe_array_unit->main_instruction_buffer_write_from_ddr(i, tmp);
-        for (int j = 0; j < pe_group_size; j++)
+        for (int j = 0; j < pe_group_size; j++){
+            //ctrl
             pe_array_unit->pe_instruction_buffer_write_from_ddr(i, pe_instruction[j][i], j);
+        }
     }
     //END LOADING INSTRUCTIONS
 

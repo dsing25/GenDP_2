@@ -205,6 +205,18 @@ void pe::ctrl_instr_load_from_ddr(int addr, unsigned long data[]) {
     }
 }
 
+void pe::comp_instr_load_from_ddr(int n_instr, unsigned long* data) {
+    for (int i = 0; i < n_instr; i++){
+        if (i < COMP_INSTR_BUFFER_GROUP_NUM) {
+            comp_instr_buffer_unit->buffer[i][0] = data[2*i];
+            comp_instr_buffer_unit->buffer[i][1] = data[2*i+1];
+        } else {
+            fprintf(stderr, "PE[%d] comp instr buffer write addr %d is out of bound\n", id, i);
+            exit(-1);
+        }
+    }
+}
+
 
 LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data) {
 
@@ -300,8 +312,6 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
 }
 
 void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_data) {
-    assert(single_data); //Right now only support single data store because multidata store is 
-                         //handled in the recv function after SPM load
 
     int dest_addr = 0;
 
@@ -708,7 +718,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         assert(src == CTRL_SPM || dest == CTRL_SPM); //only support to/from spm
         bool single_data = false;
         data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, single_data);
-        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, true);
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, single_data);
 
         bool leagal_mv = check_legal_mv(src, dest);
         if (!leagal_mv) {

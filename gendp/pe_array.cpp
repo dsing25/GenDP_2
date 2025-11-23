@@ -93,6 +93,12 @@ void pe_array::pe_instruction_buffer_write_from_ddr(int addr, unsigned long data
 
 };
 
+void pe_array::pe_comp_instruction_buffer_write_from_ddr(int n_instr, unsigned long* data, int id) {
+
+    pe_unit[id]->comp_instr_load_from_ddr(n_instr, data);
+
+};
+
 
 LoadResult pe_array::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd) {
 

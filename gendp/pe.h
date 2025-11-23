@@ -35,6 +35,7 @@ class pe {
         LoadResult load(int pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data=true);
         void store(int pos, int src, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_datak=true);
         void ctrl_instr_load_from_ddr(int addr, unsigned long data[]);
+        void comp_instr_load_from_ddr(int n_instr, unsigned long data[]);
         int get_gr_10();
         void reset();
 
