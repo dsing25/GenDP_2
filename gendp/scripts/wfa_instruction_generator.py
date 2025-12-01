@@ -25,7 +25,6 @@ def wfa_main_instruction():
     
     f = InstructionWriter("instructions/wfa/main_instruction.txt");
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # bne 1 gr[13] 0
-    f.write(data_movement_instruction(gr, gr, 0, 0, INIT_PE_NEXT, 0, 0, 0, 0, 0, set_PC))           # PE_PC = PE_ALIGN_SYNC
 
     #ALIGN_LOOP
     f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 1, 8, shifti_l))                     # gr[5] = gr[8] * 2 = gr[8] << 1
@@ -37,7 +36,7 @@ def wfa_main_instruction():
     #sync until all PEs done, then set their PC back
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # bne 1 gr[13] 0
     f.write(write_magic(1));
-    f.write(data_movement_instruction(gr, gr, 0, 0, PE_ALIGN_SYNC, 0, 0, 0, 0, 0, set_PC))           # PE_PC = PE_ALIGN_SYNC
+    f.write(data_movement_instruction(gr, gr, 0, 0, INIT_PE_NEXT, 0, 0, 0, 0, 0, set_PC))           # PE_PC = INIT_PE_NEXT
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 0, 7, mv))                     # out = gr[7]
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 0, 7, mv))                     # out = gr[7]
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 0, 7, mv))                     # out = gr[7]
@@ -47,7 +46,7 @@ def wfa_main_instruction():
     #sync until all PEs done, then set their PC back
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # bne 1 gr[13] 0
     f.write(write_magic(1));
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_ALIGN_SYNC, 0, 0, 0, 0, 0, set_PC))             # PE_PC = PE_ALIGN_SYNC
+    f.write(data_movement_instruction(0, 0, 0, 0, INIT_PE_NEXT, 0, 0, 0, 0, 0, set_PC))             # PE_PC = INIT_PE_NEXT
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 7, addi))                   # out = gr[7] + 1
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 7, addi))                   # out = gr[7] + 1
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 7, addi))                   # out = gr[7] + 1
@@ -91,7 +90,7 @@ def wfa_compute():
 
 #COMPUTE DELETIONS [4]
     for i in range(SPM_BANDWIDTH):
-        f.write(compute_instruction(INVALID, MAXIMUM, COPY, 0, 0, 0, 0, 4+i, 16+i, 20+i))
+        f.write(compute_instruction(MAXIMUM, INVALID, COPY, 4+i, 16+i, 0, 0, 0, 0, 20+i))
     #free reg 4+, 16+
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
@@ -101,7 +100,7 @@ def wfa_compute():
     f.write(compute_instruction(COPY, COPY, INVALID, 5, 0, 0, 0, 0, 0, 1))
     for i in range(SPM_BANDWIDTH): #[9,12]
         #reg[31] = max(reg[0], reg[12]) + 1
-        f.write(compute_instruction(COPY_I, MAXIMUM, ADD, 1, 0, 0, 0, 0, 12+i, 24+i)) 
+        f.write(compute_instruction(COPY_I, MAXIMUM, ADD, 1, 0, 0, 0, 0+i, 12+i, 24+i)) 
     #free reg 0+,12+
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
@@ -118,42 +117,24 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
 
-#INIT_PE_NEXT
+#PE_NEXT = (2 INIT)
+    #mark as busy
+    # gr[7] holds the number of iterations for this pe in this step of next
+    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                           # gr[10] = 0
-    #gr[1,6] are initialized to cursor positions. Each block is offset by MEM_BLOCK_SIZE
+    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
     f.write(data_movement_instruction(gr, 0, 0, 0, 11, 0, 0, 0, 0*MEM_BLOCK_SIZE, 0, si))            # gr[11] open
+    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
     f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 1*MEM_BLOCK_SIZE, 0, si))             # gr[1] match          
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 7, 0, 0, 0, 0, 0, mv))                      # gr[7] = in
     f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 2*MEM_BLOCK_SIZE, 0, si))             # gr[2] i
+    f.write(data_movement_instruction(gr, 0, 0, 0, 9, 0, 0, 0, 0, 0, si))                            # gr[9] = 0 (loop counter)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 3*MEM_BLOCK_SIZE, 0, si))             # gr[3] d
     f.write(data_movement_instruction(gr, 0, 0, 0, 4, 0, 0, 0, 4*MEM_BLOCK_SIZE, 0, si))             # gr[4] m write
     f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 5*MEM_BLOCK_SIZE, 0, si))             # gr[5] d write
     f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, 6*MEM_BLOCK_SIZE, 0, si))             # gr[6] i write
-
-    #mark ready then halt
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
-    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                           # gr[10] = 1
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
-
-#PE_ALIGN_SYNC = (2 INIT) (6 INIT_PE_NEXT)
-    #mark as busy
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
-    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                           # gr[10] = 0
-
-    # gr[7] holds the number of iterations for this pe in this step of next
-    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
-    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
-    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
-    f.write(data_movement_instruction(gr, in_port, 0, 0, 7, 0, 0, 0, 0, 0, mv))                      # gr[7] = in
-    f.write(data_movement_instruction(gr, 0, 0, 0, 9, 0, 0, 0, 0, 0, si))                            # gr[9] = 0 (loop counter)
-    #INITIALIZE FIRST LOADS FROM CURSORS
-    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 0, 0, si))                            # gr[1] = 0
-    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si))                            # gr[2] = 0
-    f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))                            # gr[3] = 0
-    f.write(data_movement_instruction(gr, 0, 0, 0, 11, 0, 0, 0, 0, 0, si))                           # gr[4] = 0
+    #This is where we branch back to
     #COPY FIRST PART OF BLOCK LOOP SKIP WRITE. Note computiation does nothing useful
     #Load DELETIONS [0,3]
     f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 0, 0, 11, mvd))                       # reg[4]=SPM[gr[11]]
@@ -170,7 +151,7 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, COMPUTE_I_AND_LOAD_H, 0, 0, 0, 0, 0, set_PC))      # PE_PC = COMPUTE_I_AND_LOAD_H
     #Load H [6,7]
-    f.write(data_movement_instruction(reg, SPM, 0, 0, 8, 0, 0, 0, 0, 2, mvd))                        # reg[8]=SPM[gr[1]]
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 8, 0, 0, 0, 0, 1, mvd))                        # reg[8]=SPM[gr[1]]
     f.write(data_movement_instruction(gr, gr, 1, 0, 1, 0, 0, 0, SPM_BANDWIDTH, 1, addi))             # gr[1] = gr[1] + SPM_BANDWIDTH
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, COMPUTE_D, 0, 0, 0, 0, 0, set_PC))                 # PE_PC = COMPUTE_D
@@ -191,7 +172,7 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, COMPUTE_I_AND_LOAD_H, 0, 0, 0, 0, 0, set_PC))      # PE_PC = COMPUTE_I_AND_LOAD_H
     #Load H [6,7]
-    f.write(data_movement_instruction(reg, SPM, 0, 0, 8, 0, 0, 0, 0, 2, mvd))                        # reg[8]=SPM[gr[1]]
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 8, 0, 0, 0, 0, 1, mvd))                        # reg[8]=SPM[gr[1]]
     f.write(data_movement_instruction(gr, gr, 1, 0, 1, 0, 0, 0, SPM_BANDWIDTH, 1, addi))             # gr[1] = gr[1] + SPM_BANDWIDTH
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, COMPUTE_D, 0, 0, 0, 0, 0, set_PC))                 # PE_PC = COMPUTE_D
@@ -211,9 +192,14 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, -14, 0, 1, 0, 9, 7, blt))                          # blt gr[9] gr[7] -14 
     f.write(data_movement_instruction(0, 0, 0, 0, -14, 0, 1, 0, 9, 7, blt))                          # blt gr[9] gr[7] -14 
 
-    #jump all the way to top
-    f.write(data_movement_instruction(0, 0, 0, 0, -35, 0, 0, 0, 0, 0, beq))                          # beq 0 0 -36
-    f.write(data_movement_instruction(0, 0, 0, 0, -35, 0, 0, 0, 0, 0, beq))                          # beq 0 0 -36 
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                           # gr[10] = 0
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
+
+    #jump all the way to top. TODO for multiblocks we need to reset pointers and such
+    f.write(data_movement_instruction(0, 0, 0, 0, -32, 0, 0, 0, 0, 0, beq))                          # beq 0 0 -36
+    f.write(data_movement_instruction(0, 0, 0, 0, -32, 0, 0, 0, 0, 0, beq))                          # beq 0 0 -36 
 
 
     f.close()
