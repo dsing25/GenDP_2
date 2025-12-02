@@ -27,19 +27,20 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # bne 1 gr[13] 0
 
     #ALIGN_LOOP
+    #TODO this line can be optimized out. We don't really need gr5
     f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 1, 8, shifti_l))                     # gr[5] = gr[8] * 2 = gr[8] << 1
-    f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0, 0x3, 8, ANDI))                      # gr[6] = gr[8] % 4 = gr[8] & 0x3
+    f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0, 0x3, 5, ANDI))                      # gr[6] = gr[5] % 4 = gr[5] & 0x3
     f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 2, 5, shifti_r))                     # gr[7] = gr[5] // 4
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, 8+1, 0, 0, 0, 0, 6, beq))                        # beq 0 gr[6] 8 DEBUG+1
+    f.write(data_movement_instruction(gr, gr, 0, 0, 8+1, 0, 0, 0, 0, 6, bne))                        # bne 0 gr[6] 8 DEBUG+1
   #if wf_len % 4 == 1:
     #sync until all PEs done, then set their PC back
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # bne 1 gr[13] 0
     f.write(write_magic(1));
     f.write(data_movement_instruction(gr, gr, 0, 0, INIT_PE_NEXT, 0, 0, 0, 0, 0, set_PC))           # PE_PC = INIT_PE_NEXT
-    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 0, 7, mv))                     # out = gr[7]
-    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 0, 7, mv))                     # out = gr[7]
-    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 0, 7, mv))                     # out = gr[7]
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                     # out = gr[7]
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                     # out = gr[7]
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                     # out = gr[7]
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 7, addi))                   # out = gr[7] + 1
     f.write(data_movement_instruction(gr, gr, 0, 0, 7+1, 0, 0, 0, 0, 0, beq))                        # beq 0 0 7 DEBUG +1
   #else wf_len % 4 == 3:
@@ -50,7 +51,7 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 7, addi))                   # out = gr[7] + 1
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 7, addi))                   # out = gr[7] + 1
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 7, addi))                   # out = gr[7] + 1
-    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 0, 7, mv))                     # out = gr[7]
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                     # out = gr[7]
   #endif
     f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, 1, 8, addi))                         # gr[8]++ (ed++)
     #JMP ALIGN_LOOP
