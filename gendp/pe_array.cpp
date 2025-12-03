@@ -298,27 +298,64 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #endif
 
     if (is_magic) {
+        constexpr int MEM_BLOCK_SIZE = 32;
+        //4 previous scores, 3 affine wavefronts, each wavefront MEM_BLOCK entries. Rotating buffer
+        static int past_wfs[4][3][MEM_BLOCK_SIZE];
+        static int past_wf_sizes[4];
+        static int current_size = 1;
+        memset(past_wfs, 0, sizeof(past_wfs));
+        //this is the current wf_i that was last written to.
+        static ModInt current_wf_i(4);
+
+        //print the wavefront size to std err
+        fprintf(stderr, "Magic instruction at PE array PC=%d cycle=%d. Current wavefront size=%d\n", *PC, cycle, current_size);
+        //write results to memory
+        current_wf_i++;
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < current_size; j++) //set d write
+                past_wfs[current_wf_i.val][0][j] = SPM_units[i]->buffer[5 * MEM_BLOCK_SIZE + j];
+            for (int j = 0; j < current_size; j++) //set i write
+                past_wfs[current_wf_i.val][1][j] = SPM_units[i]->buffer[6 * MEM_BLOCK_SIZE + j];
+            for (int j = 0; j < current_size; j++) //set m write
+                past_wfs[current_wf_i.val][2][j] = SPM_units[i]->buffer[4 * MEM_BLOCK_SIZE + j];
+        }
+        past_wf_sizes[current_wf_i.val] = current_size;
+        current_size += 2;
+
         //Used to wreak simulator havoc. Put whatever you want here
         printf("Magic!!!!! payload = %d\n", magic_payload);
-        static int score = 0;
-        constexpr int MEM_BLOCK_SIZE = 32;
         int n_pes_to_show = 1;
         for (int i = 0; i < n_pes_to_show; i++) {
-            printf("SPM of PE[%d] at score %d:\n", i, score);
+            printf("SPM of PE[%d] at size %d:\n", i, current_size);
             SPM_units[i]->show_data(0, MEM_BLOCK_SIZE*7, 32);
         }
-        int open_score = std::max(score - 8, 0);
-        int match_score= std::max(score - 4, 0);
-        int d_i_score  = std::max(score - 2, 0);
+
+        auto writeRow = [&](int pe_idx, int prepad, int postpad, int wf_i,
+                            int affine_ind, int buffer_offset) {
+            int j = 0;
+            // Write prepadding zeros
+            for (; j < prepad; j++)
+                SPM_units[pe_idx]->buffer[buffer_offset + j] = 0;
+            // Copy data from past_wfs
+            for (; j < prepad + past_wf_sizes[wf_i]; j++)
+                SPM_units[pe_idx]->buffer[buffer_offset + j] =
+                    past_wfs[wf_i][affine_ind][j - prepad];
+            // Write postpadding zeros
+            for (; j < prepad + past_wf_sizes[wf_i] + postpad; j++)
+                SPM_units[pe_idx]->buffer[buffer_offset + j] = 0;
+        };
+
         for (int i = 0; i < 4; i++) {
-            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set open
-                SPM_units[i]->buffer[j] = open_score;
-            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set match
-                SPM_units[i]->buffer[1 * MEM_BLOCK_SIZE + j] = match_score;
-            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set i
-                SPM_units[i]->buffer[2 * MEM_BLOCK_SIZE + j] = d_i_score;
-            for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set d
-                SPM_units[i]->buffer[3 * MEM_BLOCK_SIZE + j] = d_i_score;
+            //SET O
+            writeRow(i, 3, 5, current_wf_i - 3, 2, 0);
+            //SET M
+            writeRow(i, 2, 2, current_wf_i - 1, 2, 1*MEM_BLOCK_SIZE);
+            //SET I;
+            writeRow(i, 2, 0, current_wf_i, 1, 2*MEM_BLOCK_SIZE);
+            //SET D
+            writeRow(i, 0, 2, current_wf_i, 0, 3*MEM_BLOCK_SIZE);
+
+            //Clear write buffers (for programmability)
             for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set m write
                 SPM_units[i]->buffer[4 * MEM_BLOCK_SIZE + j] = 0;
             for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set d write
@@ -326,7 +363,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set i write
                 SPM_units[i]->buffer[6 * MEM_BLOCK_SIZE + j] = 0;
         }
-        score += 2;
         (*PC)++;
     } else if (opcode == 0) {              // add rd rs1 rs2
         rd = reg_imm_0;
