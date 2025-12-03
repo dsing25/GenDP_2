@@ -52,6 +52,32 @@ struct LoadResult {
     }
 };
 
+/*
+ * Modular integer for circular buffer indexing.
+ * Automatically wraps on arithmetic operations.
+ */
+class ModInt {
+    public:
+        int val;
+        int size;
+
+        ModInt(int size, int initial_value = 0);
+
+        ModInt& operator+=(int offset);
+        ModInt& operator-=(int offset);
+        ModInt operator+(int offset) const;
+        ModInt operator-(int offset) const;
+        ModInt& operator++();
+        ModInt operator++(int);
+        ModInt& operator--();
+        ModInt operator--(int);
+
+        operator int() const { return val; }
+
+    private:
+        int normalize(int v) const;
+};
+
 #endif // SIMGLOBALS_H
 
 //class or callback. I want it to have the context of SPM, and some of it's own context (like where
