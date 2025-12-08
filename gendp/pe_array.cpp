@@ -302,47 +302,88 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         //4 previous scores, 3 affine wavefronts, each wavefront MEM_BLOCK entries. Rotating buffer
         static int past_wfs[4][3][MEM_BLOCK_SIZE];
         static int past_wf_sizes[4];
-        static int current_size = 1;
-        memset(past_wfs, 0, sizeof(past_wfs));
-        //this is the current wf_i that was last written to.
+        static int current_wf_size = 0;
         static ModInt current_wf_i(4);
+        if (current_wf_size == 0){
+            //initialization logic
+            memset(past_wfs, 0, sizeof(past_wfs));
+            //WF 0
+            past_wf_sizes[current_wf_i] = 1;
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) {
+                for (int k = 0; k < 3; k++) {
+                    past_wfs[current_wf_i][k][j] = -99;
+                }
+            }
+            current_wf_i++; //0 wf all zero
+            //WF 1
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) {
+                for (int k = 0; k < 3; k++) {
+                    past_wfs[current_wf_i][k][j] = -99;
+                }
+            }
+            past_wf_sizes[current_wf_i] = 1;
+            current_wf_i++; //2 wf all zero
+            //WF 2
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) {
+                for (int k = 0; k < 3; k++) {
+                    past_wfs[current_wf_i][k][j] = -99;
+                }
+            }
+            past_wf_sizes[current_wf_i] = 1;
+            //TODO typically you would call an extend here, but since there's nothing to extend, it's
+            //just 0
+            past_wfs[current_wf_i][2][0] = 0; //middle m wavefront
+            current_wf_i++; //4 should have a 1, but it's never used
+            //WF 3
+            for (int j = 0; j < MEM_BLOCK_SIZE; j++) {
+                for (int k = 0; k < 3; k++) {
+                    past_wfs[current_wf_i][k][j] = -99;
+                }
+            }
+            past_wf_sizes[current_wf_i] = 3;
+            past_wfs[current_wf_i][2][1] = 0; //middle m wavefront
 
+            //at this point the first four wavefronts have been defined initialized with dummy, and 
+            //the correct middle m for last two. The score is 2. The size was 3.
+
+            current_wf_size = 5;
+        } else {
+            //first display the SPM. Then write the results back to the past_wfs
+            int n_pes_to_show = 1;
+            for (int i = 0; i < n_pes_to_show; i++) {
+                printf("\nSPM of PE[%d] at score %d:\n", i, current_wf_size - 1);
+                SPM_units[i]->show_data(0, MEM_BLOCK_SIZE*7, 32);
+            }
+            //write results to memory
+            current_wf_i++;
+            for (int i = 0; i < 4; i++) {
+                for (int j = 0; j < current_wf_size; j++) //set d write
+                    past_wfs[current_wf_i.val][0][j] = SPM_units[i]->buffer[5 * MEM_BLOCK_SIZE + j];
+                for (int j = 0; j < current_wf_size; j++) //set i write
+                    past_wfs[current_wf_i.val][1][j] = SPM_units[i]->buffer[6 * MEM_BLOCK_SIZE + j];
+                for (int j = 0; j < current_wf_size; j++) //set m write
+                    past_wfs[current_wf_i.val][2][j] = SPM_units[i]->buffer[4 * MEM_BLOCK_SIZE + j];
+            }
+            past_wf_sizes[current_wf_i.val] = current_wf_size;
+            current_wf_size += 2;
+        }
         //print the wavefront size to std err
-        fprintf(stderr, "Magic instruction at PE array PC=%d cycle=%d. Current wavefront size=%d\n", *PC, cycle, current_size);
-        //write results to memory
-        current_wf_i++;
-        for (int i = 0; i < 4; i++) {
-            for (int j = 0; j < current_size; j++) //set d write
-                past_wfs[current_wf_i.val][0][j] = SPM_units[i]->buffer[5 * MEM_BLOCK_SIZE + j];
-            for (int j = 0; j < current_size; j++) //set i write
-                past_wfs[current_wf_i.val][1][j] = SPM_units[i]->buffer[6 * MEM_BLOCK_SIZE + j];
-            for (int j = 0; j < current_size; j++) //set m write
-                past_wfs[current_wf_i.val][2][j] = SPM_units[i]->buffer[4 * MEM_BLOCK_SIZE + j];
-        }
-        past_wf_sizes[current_wf_i.val] = current_size;
-        current_size += 2;
+        fprintf(stderr, "Magic instruction at PE array PC=%d cycle=%d. Current wavefront size=%d\n", *PC, cycle, current_wf_size);
 
-        //Used to wreak simulator havoc. Put whatever you want here
-        printf("Magic!!!!! payload = %d\n", magic_payload);
-        int n_pes_to_show = 1;
-        for (int i = 0; i < n_pes_to_show; i++) {
-            printf("SPM of PE[%d] at size %d:\n", i, current_size);
-            SPM_units[i]->show_data(0, MEM_BLOCK_SIZE*7, 32);
-        }
 
         auto writeRow = [&](int pe_idx, int prepad, int postpad, int wf_i,
                             int affine_ind, int buffer_offset) {
             int j = 0;
             // Write prepadding zeros
             for (; j < prepad; j++)
-                SPM_units[pe_idx]->buffer[buffer_offset + j] = 0;
+                SPM_units[pe_idx]->buffer[buffer_offset + j] = -99;
             // Copy data from past_wfs
             for (; j < prepad + past_wf_sizes[wf_i]; j++)
                 SPM_units[pe_idx]->buffer[buffer_offset + j] =
                     past_wfs[wf_i][affine_ind][j - prepad];
             // Write postpadding zeros
             for (; j < prepad + past_wf_sizes[wf_i] + postpad; j++)
-                SPM_units[pe_idx]->buffer[buffer_offset + j] = 0;
+                SPM_units[pe_idx]->buffer[buffer_offset + j] = -99;
         };
 
         for (int i = 0; i < 4; i++) {
