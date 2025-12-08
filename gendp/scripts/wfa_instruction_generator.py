@@ -59,7 +59,8 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 7, addi))                   # out = gr[7] + 1
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 7, addi))                   # out = gr[7] + 1
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 7, addi))                   # out = gr[7] + 1
-    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                     # out = gr[7]
+    #f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                     # out = gr[7]
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 7, addi))                   # out = gr[7] + 1 TODO tmp for single pe test
   #endif
     f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, 1, 8, addi))                         # gr[8]+=1 (ed+=1)
     #JMP ALIGN_LOOP
@@ -126,6 +127,8 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
 
 #PE_NEXT = (2 INIT)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     #mark as busy
     # gr[7] holds the number of iterations for this pe in this step of next
     f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
