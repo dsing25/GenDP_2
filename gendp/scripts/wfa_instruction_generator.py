@@ -8,6 +8,7 @@ SPM_BANDWIDTH = 2 # in words
 PE_ALIGN_SYNC = 9 + 5
 COMPUTE_LOOP_NEXT = 0
 N_PES = 4
+MIN_INT = -99
 #locations in PE ctrl
 INIT_PE_NEXT = 2
 PE_ALIGN_SYNC = INIT_PE_NEXT + 6
@@ -25,6 +26,11 @@ def wfa_main_instruction():
     
     f = InstructionWriter("instructions/wfa/main_instruction.txt");
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # bne 1 gr[13] 0
+
+    #TODO initialize somehow
+    #This will require doing extend at score=8 after two matches on center diag, and 2 
+    #extend/open on left and right diags. At the end we set gr8 to 2 because 2*2 + 1 = 5 = wf len
+    f.write(data_movement_instruction(gr, 0, 0, 0, 8, 0, 0, 0, 2, 0, si))                           # gr[8] = 2
 
     #ALIGN_LOOP
     #TODO this line can be optimized out. We don't really need gr5
@@ -65,7 +71,7 @@ def wfa_compute():
     ##############################NEXT STEP#########################################################
     #Register mapping. We have one tile being loaded while the other is being worked on. If you
     #add 16, then you'll get the mappings for second tile.
-    #Each val has 4 regs. for example, 
+    #Each val has 4 regs. Affine is e=2, o=6, m=4
     # nah make em 0,1,2,3
     # |m_r0 |     |m_r1 | Score -4E Reg 123. cursor in gr11
     # |-----|-----|-----| 
@@ -133,9 +139,9 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(gr, 0, 0, 0, 4, 0, 0, 0, 4*MEM_BLOCK_SIZE, 0, si))             # gr[4] m write
     f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 5*MEM_BLOCK_SIZE, 0, si))             # gr[5] d write
     f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, 6*MEM_BLOCK_SIZE, 0, si))             # gr[6] i write
-    #initialize H_right to 0, so when it is used to initialize H_left, those will be 0
-    f.write(data_movement_instruction(reg, 0, 0, 0, 4, 0, 0, 0, 0, 0, si))                         # reg[4] = 0
-    f.write(data_movement_instruction(reg, 0, 0, 0, 5, 0, 0, 0, 0, 0, si))                         # reg[5] = 0
+    #initialize H_right to MIN_INT, so when it is used to initialize H_left, those will be MIN_INT
+    f.write(data_movement_instruction(reg, 0, 0, 0, 4, 0, 0, 0, MIN_INT, 0, si))                     # reg[4] = MIN_INT
+    f.write(data_movement_instruction(reg, 0, 0, 0, 5, 0, 0, 0, MIN_INT, 0, si))                     # reg[5] = MIN_INT
 
 #BLOCK_LOOP NEXT
     #Load I; No-op
@@ -158,17 +164,17 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, COMPUTE_H, 0, 0, 0, 0, 0, set_PC))                 # PE_PC = COMPUTE_H
     #Write I; compute H
-    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 6, 0, 0, 28, 0, mvd))                       # SPM[gr[6]]=reg[28] //I
+    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 6, 0, 0, 24, 0, mvd))                       # SPM[gr[6]]=reg[24] //I
     f.write(data_movement_instruction(gr, gr, 1, 0, 6, 0, 0, 0, SPM_BANDWIDTH, 6, addi))             # gr[6] = gr[6] + SPM_BANDWIDTH
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     #write D; No-op
-    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 5, 0, 0, 24, 0, mvd))                       # SPM[gr[5]]=reg[24] //D
+    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 5, 0, 0, 20, 0, mvd))                       # SPM[gr[5]]=reg[20] //D
     f.write(data_movement_instruction(gr, gr, 1, 0, 5, 0, 0, 0, SPM_BANDWIDTH, 5, addi))             # gr[5] = gr[5] + SPM_BANDWIDTH
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(gr, gr, 1, 0, 9, 0, 0, 0, SPM_BANDWIDTH, 9, addi))             #gr[9] = gr[9] + SPM_BANDWIDTH
     #Write H; No-op
-    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 4, 0, 0, 20, 0, mvd))                       # SPM[gr[4]]=reg[20] //M
+    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 4, 0, 0, 28, 0, mvd))                       # SPM[gr[4]]=reg[28] //M
     f.write(data_movement_instruction(gr, gr, 1, 0, 4, 0, 0, 0, SPM_BANDWIDTH, 4, addi))             # gr[4] = gr[4] + SPM_BANDWIDTH
     #TODO these noops are not necessary
     f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 9, 7, blt))                          # blt gr[9] gr[7] -13 
