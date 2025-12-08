@@ -94,7 +94,7 @@ def wfa_compute():
 
 #COMPUTE H SCORES [0]
     for i in range(SPM_BANDWIDTH):
-        f.write(compute_instruction(ADD_I, MAXIMUM, MAXIMUM, 8+i, 1, 0, 0, 20+i, 24+i, 28+i))
+        f.write(compute_instruction(ADD_I, MAXIMUM, MAXIMUM, 1, 8+i, 0, 0, 20+i, 24+i, 28+i))
     #free reg8,9 also free dest reg post write 24+,20+,28+
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
@@ -151,37 +151,37 @@ def pe_instruction(pe_id):
 
 #BLOCK_LOOP NEXT
     #Load I; No-op
-    f.write(data_movement_instruction(reg, SPM, 0, 0, 12, 0, 0, 0, 0, 2, mvd))                       # reg[12]=SPM[gr[2]]
     f.write(data_movement_instruction(gr, gr, 1, 0, 2, 0, 0, 0, SPM_BANDWIDTH, 2, addi))             # gr[2] = gr[2] + SPM_BANDWIDTH
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 12, 0, 0, 0, 0, 2, mvd))                       # reg[12]=SPM[gr[2]]
     f.write(data_movement_instruction(reg, reg, 0, 0, 1, 0, 0, 0, 4, 0, mv))                           # reg[1] = reg[4]
     f.write(data_movement_instruction(reg, reg, 0, 0, 2, 0, 0, 0, 5, 0, mv))                           # reg[2] = reg[5]
     #Load D; compute I
-    f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 0, 0, 11, mvd))                       # reg[4]=SPM[gr[11]]
     f.write(data_movement_instruction(gr, gr, 1, 0, 11, 0, 0, 0, SPM_BANDWIDTH, 11, addi))           # gr[11] = gr[11] + SPM_BANDWIDTH
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 0, 0, 11, mvd))                       # reg[4]=SPM[gr[11]]
     f.write(data_movement_instruction(0, 0, 0, 0, COMPUTE_I, 0, 0, 0, 0, 0, set_PC))      # PE_PC = COMPUTE_I
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
-    f.write(data_movement_instruction(reg, SPM, 0, 0, 16, 0, 0, 0, 0, 3, mvd))                       # reg[16]=SPM[gr[3]]
     f.write(data_movement_instruction(gr, gr, 1, 0, 3, 0, 0, 0, SPM_BANDWIDTH, 3, addi))             # gr[3] = gr[3] + SPM_BANDWIDTH
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 16, 0, 0, 0, 0, 3, mvd))                       # reg[16]=SPM[gr[3]]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, COMPUTE_D, 0, 0, 0, 0, 0, set_PC))                 # PE_PC = COMPUTE_D
     #Load H; compute D
-    f.write(data_movement_instruction(reg, SPM, 0, 0, 8, 0, 0, 0, 0, 1, mvd))                        # reg[8]=SPM[gr[1]]
     f.write(data_movement_instruction(gr, gr, 1, 0, 1, 0, 0, 0, SPM_BANDWIDTH, 1, addi))             # gr[1] = gr[1] + SPM_BANDWIDTH
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 8, 0, 0, 0, 0, 1, mvd))                        # reg[8]=SPM[gr[1]]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, COMPUTE_H, 0, 0, 0, 0, 0, set_PC))                 # PE_PC = COMPUTE_H
     #Write I; compute H
-    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 6, 0, 0, 24, 0, mvd))                       # SPM[gr[6]]=reg[24] //I
     f.write(data_movement_instruction(gr, gr, 1, 0, 6, 0, 0, 0, SPM_BANDWIDTH, 6, addi))             # gr[6] = gr[6] + SPM_BANDWIDTH
+    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 6, 0, 0, 24, 0, mvd))                       # SPM[gr[6]]=reg[24] //I
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     #write D; No-op
-    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 5, 0, 0, 20, 0, mvd))                       # SPM[gr[5]]=reg[20] //D
     f.write(data_movement_instruction(gr, gr, 1, 0, 5, 0, 0, 0, SPM_BANDWIDTH, 5, addi))             # gr[5] = gr[5] + SPM_BANDWIDTH
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 5, 0, 0, 20, 0, mvd))                       # SPM[gr[5]]=reg[20] //D
     f.write(data_movement_instruction(gr, gr, 1, 0, 9, 0, 0, 0, SPM_BANDWIDTH, 9, addi))             #gr[9] = gr[9] + SPM_BANDWIDTH
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     #Write H; No-op
-    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 4, 0, 0, 28, 0, mvd))                       # SPM[gr[4]]=reg[28] //M
     f.write(data_movement_instruction(gr, gr, 1, 0, 4, 0, 0, 0, SPM_BANDWIDTH, 4, addi))             # gr[4] = gr[4] + SPM_BANDWIDTH
+    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 4, 0, 0, 28, 0, mvd))                       # SPM[gr[4]]=reg[28] //M
     #TODO these noops are not necessary
     f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 9, 7, blt))                          # blt gr[9] gr[7] -13 
     f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 9, 7, blt))                          # blt gr[9] gr[7] -13 
