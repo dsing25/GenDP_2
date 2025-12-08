@@ -36,7 +36,9 @@ def wfa_main_instruction():
     #TODO this line can be optimized out. We don't really need gr5
     f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 1, 8, shifti_l))                     # gr[5] = gr[8] * 2 = gr[8] << 1
     f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0, 0x3, 5, ANDI))                      # gr[6] = gr[5] % 4 = gr[5] & 0x3
-    f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 2, 5, shifti_r))                     # gr[7] = gr[5] // 4
+    #TODO taking full gr[5] to test single PE
+    #f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 2, 5, shifti_r))                     # gr[7] = gr[5] // 4
+    f.write(data_movement_instruction(gr, gr, 1, 0, 7, 0, 0, 0, 0, 5, addi))                          # gr[7] = gr[5]
 
     f.write(data_movement_instruction(gr, gr, 0, 0, 8+1, 0, 0, 0, 0, 6, bne))                        # bne 0 gr[6] 8 DEBUG+1
   #if wf_len % 4 == 1:
@@ -59,7 +61,7 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 7, addi))                   # out = gr[7] + 1
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                     # out = gr[7]
   #endif
-    f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, 1, 8, addi))                         # gr[8]++ (ed++)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, 1, 8, addi))                         # gr[8]+=1 (ed+=1)
     #JMP ALIGN_LOOP
     f.write(data_movement_instruction(gr, gr, 0, 0, -20, 0, 0, 0, 0, 0, beq))                        # beq 0 0 -20
 
@@ -72,6 +74,7 @@ def wfa_compute():
     #Register mapping. We have one tile being loaded while the other is being worked on. If you
     #add 16, then you'll get the mappings for second tile.
     #Each val has 4 regs. Affine is e=2, o=6, m=4
+    #NOTE reg 0 is a permanent zero reg, so we start at reg 1
     # nah make em 0,1,2,3
     # |m_r0 |     |m_r1 | Score -4E Reg 123. cursor in gr11
     # |-----|-----|-----| 
@@ -105,7 +108,7 @@ def wfa_compute():
 #COMPUTE INSERTIONS AND LOAD H_left [8]
     for i in range(SPM_BANDWIDTH): #[9,12]
         #reg[31] = max(reg[0], reg[12]) + 1
-        f.write(compute_instruction(COPY_I, MAXIMUM, ADD, 1, 0, 0, 0, 0+i, 12+i, 24+i)) 
+        f.write(compute_instruction(COPY_I, MAXIMUM, ADD, 1, 0, 0, 0, 1+i, 12+i, 24+i)) 
     #free reg 0+,12+
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
@@ -147,8 +150,8 @@ def pe_instruction(pe_id):
     #Load I; No-op
     f.write(data_movement_instruction(reg, SPM, 0, 0, 12, 0, 0, 0, 0, 2, mvd))                       # reg[12]=SPM[gr[2]]
     f.write(data_movement_instruction(gr, gr, 1, 0, 2, 0, 0, 0, SPM_BANDWIDTH, 2, addi))             # gr[2] = gr[2] + SPM_BANDWIDTH
-    f.write(data_movement_instruction(reg, reg, 0, 0, 0, 0, 0, 0, 4, 0, mv))                           # gr[0] = gr[4]
-    f.write(data_movement_instruction(reg, reg, 0, 0, 1, 0, 0, 0, 5, 0, mv))                           # gr[1] = gr[5]
+    f.write(data_movement_instruction(reg, reg, 0, 0, 1, 0, 0, 0, 4, 0, mv))                           # reg[1] = reg[4]
+    f.write(data_movement_instruction(reg, reg, 0, 0, 2, 0, 0, 0, 5, 0, mv))                           # reg[2] = reg[5]
     #Load D; compute I
     f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 0, 0, 11, mvd))                       # reg[4]=SPM[gr[11]]
     f.write(data_movement_instruction(gr, gr, 1, 0, 11, 0, 0, 0, SPM_BANDWIDTH, 11, addi))           # gr[11] = gr[11] + SPM_BANDWIDTH
