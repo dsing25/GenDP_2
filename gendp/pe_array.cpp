@@ -356,7 +356,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
             //write results to memory
             current_wf_i++;
-            for (int i = 0; i < 4; i++) {
+            //TMP only doing pe 0 FIXME
+            for (int i = 0; i < 1; i++) {
                 for (int j = 0; j < current_wf_size; j++) //set d write
                     past_wfs[current_wf_i.val][0][j] = SPM_units[i]->buffer[5 * MEM_BLOCK_SIZE + j];
                 for (int j = 0; j < current_wf_size; j++) //set i write
