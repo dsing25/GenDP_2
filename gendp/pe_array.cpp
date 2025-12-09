@@ -3,6 +3,7 @@
 #include "sys_def.h"
 #include "data_buffer.h"
 #include "simulator.h"
+#include <iomanip>
 
 #define NUM_FRACTION_BITS 16
 #define MAX_RANGE NUM_FRACTION_BITS
@@ -299,10 +300,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
     if (is_magic) {
         constexpr int MEM_BLOCK_SIZE = 32;
+        constexpr int EXTRA_O_LOAD_ADDR = 7*MEM_BLOCK_SIZE;
         //4 previous scores, 3 affine wavefronts, each wavefront MEM_BLOCK entries. Rotating buffer
         static int past_wfs[4][3][MEM_BLOCK_SIZE];
         static int past_wf_sizes[4];
         static int current_wf_size = 0;
+        static std::ofstream magic_wfs_out("magic_wfs_out.txt");
         static ModInt current_wf_i(4);
         if (current_wf_size == 0){
             //initialization logic
@@ -349,54 +352,112 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             current_wf_size = 5;
         } else {
             //first display the SPM. Then write the results back to the past_wfs
-            int n_pes_to_show = 1;
-            for (int i = 0; i < n_pes_to_show; i++) {
-                printf("\nSPM of PE[%d] at score %d:\n", i, current_wf_size - 1);
-                SPM_units[i]->show_data(0, MEM_BLOCK_SIZE*7, 32);
-            }
+            //int n_pes_to_show = 1;
+            //for (int i = 0; i < n_pes_to_show; i++) {
+            //    printf("\nSPM of PE[%d] at score %d:\n", i, current_wf_size - 1);
+            //    SPM_units[i]->show_data(0, MEM_BLOCK_SIZE*7, 32);
+            //}
+            printf("\nSPM of PE[1] at score %d:\n", current_wf_size - 1);
+            SPM_units[1]->show_data(0, MEM_BLOCK_SIZE*7, 32);
+
+
             //write results to memory
             current_wf_i++;
-            //TMP only doing pe 0 FIXME
-            for (int i = 0; i < 1; i++) {
-                for (int j = 0; j < current_wf_size; j++) //set d write
-                    past_wfs[current_wf_i.val][0][j] = SPM_units[i]->buffer[5 * MEM_BLOCK_SIZE + j];
-                for (int j = 0; j < current_wf_size; j++) //set i write
-                    past_wfs[current_wf_i.val][1][j] = SPM_units[i]->buffer[6 * MEM_BLOCK_SIZE + j];
-                for (int j = 0; j < current_wf_size; j++) //set m write
-                    past_wfs[current_wf_i.val][2][j] = SPM_units[i]->buffer[4 * MEM_BLOCK_SIZE + j];
+            //TILE across PES
+            int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
+            for (int i = 0; i < 4; i++) {
+                int start = i*n_diags_per_pe;
+                int end   = std::min(start + n_diags_per_pe, current_wf_size);
+                for (int j = start; j < end; j++) {
+                    past_wfs[current_wf_i.val][0][j] = SPM_units[i]->buffer[5 * MEM_BLOCK_SIZE + j - start]; //set d write
+                    past_wfs[current_wf_i.val][1][j] = SPM_units[i]->buffer[6 * MEM_BLOCK_SIZE + j - start]; //set i write
+                    past_wfs[current_wf_i.val][2][j] = SPM_units[i]->buffer[4 * MEM_BLOCK_SIZE + j - start]; //set m write
+                }
             }
             past_wf_sizes[current_wf_i.val] = current_wf_size;
+
+            //display the last computed wavefront
+            int i = 0;
+            int width = 3;
+            for (int affine_id : {2,0,1}) {
+                for (i = 0; i < past_wf_sizes[current_wf_i.val]; i++) {
+                    magic_wfs_out << std::setw(width) << past_wfs[current_wf_i.val][affine_id][i];
+                }
+                for (; i  < MEM_BLOCK_SIZE; i++) {
+                    magic_wfs_out << std::setw(width) << 0; //lines up for easy comparison
+                }
+                magic_wfs_out << std::endl;
+            }
+            magic_wfs_out << std::endl;
+
             current_wf_size += 2;
         }
         //print the wavefront size to std err
         fprintf(stderr, "Magic instruction at PE array PC=%d cycle=%d. Current wavefront size=%d\n", *PC, cycle, current_wf_size);
 
 
-        auto writeRow = [&](int pe_idx, int prepad, int postpad, int wf_i,
-                            int affine_ind, int buffer_offset) {
+        //Rest is about writing the inputs to the SPM for each pe
+        auto getInputVec = [&](int prepad, int postpad, int wf_i,
+                            int affine_ind) {
+            std::vector<int>* vec = new std::vector<int>();
             int j = 0;
             // Write prepadding zeros
             for (; j < prepad; j++)
-                SPM_units[pe_idx]->buffer[buffer_offset + j] = -99;
+                vec->push_back(-99);
             // Copy data from past_wfs
             for (; j < prepad + past_wf_sizes[wf_i]; j++)
-                SPM_units[pe_idx]->buffer[buffer_offset + j] =
-                    past_wfs[wf_i][affine_ind][j - prepad];
+                vec->push_back(past_wfs[wf_i][affine_ind][j - prepad]);
             // Write postpadding zeros
             for (; j < prepad + past_wf_sizes[wf_i] + postpad; j++)
-                SPM_units[pe_idx]->buffer[buffer_offset + j] = -99;
+                vec->push_back(-99);
+            return vec;
         };
+        std::vector<int>* fullO = getInputVec(3, 5, current_wf_i - 3, 2);
+        std::vector<int>* fullM = getInputVec(2, 2, current_wf_i - 1, 2);
+        std::vector<int>* fullI = getInputVec(2, 0, current_wf_i, 1);
+        std::vector<int>* fullD = getInputVec(0, 2, current_wf_i, 0);
+
+        //Now write to SPMs
+        int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
+        for (int i = 0; i < 4; i++) {
+            int start = i*n_diags_per_pe;
+            int end   = std::min(start + n_diags_per_pe, current_wf_size);
+            for (int j = start; j < end; j++) {
+                //SET O
+                SPM_units[i]->buffer[0 * MEM_BLOCK_SIZE + j - start] = (*fullO)[j];
+                //SET M
+                SPM_units[i]->buffer[1 * MEM_BLOCK_SIZE + j - start] = (*fullM)[j];
+                //SET I
+                SPM_units[i]->buffer[2 * MEM_BLOCK_SIZE + j - start] = (*fullI)[j];
+                //SET D
+                SPM_units[i]->buffer[3 * MEM_BLOCK_SIZE + j - start] = (*fullD)[j];
+
+            }
+            //fix up the extra two Os needed from previous tile
+            if (i == 0){
+                SPM_units[i]->buffer[EXTRA_O_LOAD_ADDR]   = MIN_INT;
+                SPM_units[i]->buffer[EXTRA_O_LOAD_ADDR+1] = MIN_INT;
+            } else {
+                SPM_units[i]->buffer[EXTRA_O_LOAD_ADDR]   = (*fullO)[start - 2];
+                SPM_units[i]->buffer[EXTRA_O_LOAD_ADDR+1] = (*fullO)[start - 1];
+            }
+        }
+
+        //display input vectors
+        magic_wfs_out << "Score " << current_wf_size - 1 << ":" << std::endl << std::endl;
+        int i = 0;
+        int width = 3;
+        for (std::vector<int>* vec : {fullO, fullM, fullI, fullD}) {
+            for (i = 0; i < current_wf_size; i++) {
+                magic_wfs_out << std::setw(width) << (*vec)[i];
+            }
+            for (; i  < MEM_BLOCK_SIZE; i++) {
+                magic_wfs_out << std::setw(width) << 0; //lines up for easy comparison
+            }
+            magic_wfs_out << std::endl;
+        }
 
         for (int i = 0; i < 4; i++) {
-            //SET O
-            writeRow(i, 3, 5, current_wf_i - 3, 2, 0);
-            //SET M
-            writeRow(i, 2, 2, current_wf_i - 1, 2, 1*MEM_BLOCK_SIZE);
-            //SET I;
-            writeRow(i, 2, 0, current_wf_i, 1, 2*MEM_BLOCK_SIZE);
-            //SET D
-            writeRow(i, 0, 2, current_wf_i, 0, 3*MEM_BLOCK_SIZE);
-
             //Clear write buffers (for programmability)
             for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set m write
                 SPM_units[i]->buffer[4 * MEM_BLOCK_SIZE + j] = 0;
@@ -405,6 +466,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set i write
                 SPM_units[i]->buffer[6 * MEM_BLOCK_SIZE + j] = 0;
         }
+
+        delete fullO;
+        delete fullM;
+        delete fullI;
+        delete fullD;
         (*PC)++;
     } else if (opcode == 0) {              // add rd rs1 rs2
         rd = reg_imm_0;
