@@ -152,20 +152,21 @@ std::pair<bool, std::list<Event>*> SPM::tick(){
     for(int i = 0; i < PE_4_SETTING; i++){
         OutstandingRequest* req = requests[i];
         if (req == nullptr) continue;
+        int phys_addr = i * SPM_BANK_SIZE + req->addr;
         req->cycles_left--;
         if(req->cycles_left == 0){
             if(req->access_t == SpmAccessT::WRITE){
                 // write data to SPM
                 int n_writes = req->single_data ? 1 : SPM_BANDWIDTH;
                 for (int j = 0; j < n_writes; j++){
-                    buffer[req->addr+j] = req->data.data[j];
+                    buffer[phys_addr + j] = req->data.data[j];
 #ifdef PROFILE
                     printf("PE[%d]@%d write SPM[%d] = %d\n", i, cycle, req->addr+j, req->data.data[j]);
 #endif
                 }
             } else if (req->access_t == SpmAccessT::READ){
                 // generate SpmDataReadyEv
-                void* data = static_cast<void*>(new SpmDataReadyData(i, &buffer[req->addr]));
+                void* data = static_cast<void*>(new SpmDataReadyData(i, &buffer[phys_addr]));
                 events->push_back(Event(EventType::SPM_DATA_READY, data));
             } else {
                 fprintf(stderr, "SPM tick error: unknown access type.\n");

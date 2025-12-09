@@ -20,11 +20,10 @@ pe_array::pe_array(int input_size, int output_size) {
 
     main_addressing_register[0] = 0;
     main_PC = 0;
+    //+1 allows addressing full range. 1 is dummy data. Not legal in real hardware
+    SPM_unit = new SPM(SPM_ADDR_NUM+1, &active_event_producers);
     for (i = 0; i < PE_NUM; i++)
-        //+1 allows addressing full range. 1 is dummy data. Not legal in real hardware
-        SPM_units[i] = new SPM(SPM_ADDR_NUM+1, &active_event_producers);
-    for (i = 0; i < PE_NUM; i++)
-        pe_unit[i] = new pe(i, SPM_units[i]);
+        pe_unit[i] = new pe(i, SPM_unit);
     load_data = 0;
     store_data = 0;
     from_fifo = 0;
@@ -34,10 +33,9 @@ pe_array::~pe_array() {
     int i;
     free(input_buffer);
     free(output_buffer);
-    for (i = 0; i < PE_NUM; i++){
+    for (i = 0; i < PE_NUM; i++)
         delete pe_unit[i];
-        delete SPM_units[i];
-    }
+    delete SPM_unit;
 }
 
 void pe_array::buffer_reset(int* buffer, int num) {
@@ -358,7 +356,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //    SPM_units[i]->show_data(0, MEM_BLOCK_SIZE*7, 32);
             //}
             printf("\nSPM of PE[1] at score %d:\n", current_wf_size - 1);
-            SPM_units[1]->show_data(0, MEM_BLOCK_SIZE*7, 32);
+            SPM_unit->show_data(0, MEM_BLOCK_SIZE*7, 32);
 
 
             //write results to memory
@@ -369,9 +367,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int start = i*n_diags_per_pe;
                 int end   = std::min(start + n_diags_per_pe, current_wf_size);
                 for (int j = start; j < end; j++) {
-                    past_wfs[current_wf_i.val][0][j] = SPM_units[i]->buffer[5 * MEM_BLOCK_SIZE + j - start]; //set d write
-                    past_wfs[current_wf_i.val][1][j] = SPM_units[i]->buffer[6 * MEM_BLOCK_SIZE + j - start]; //set i write
-                    past_wfs[current_wf_i.val][2][j] = SPM_units[i]->buffer[4 * MEM_BLOCK_SIZE + j - start]; //set m write
+                    past_wfs[current_wf_i.val][0][j] = SPM_unit->access_magic(i, 5 * MEM_BLOCK_SIZE + j - start); //set d write
+                    past_wfs[current_wf_i.val][1][j] = SPM_unit->access_magic(i, 6 * MEM_BLOCK_SIZE + j - start); //set i write
+                    past_wfs[current_wf_i.val][2][j] = SPM_unit->access_magic(i, 4 * MEM_BLOCK_SIZE + j - start); //set m write
                 }
             }
             past_wf_sizes[current_wf_i.val] = current_wf_size;
@@ -424,22 +422,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int end   = std::min(start + n_diags_per_pe, current_wf_size);
             for (int j = start; j < end; j++) {
                 //SET O
-                SPM_units[i]->buffer[0 * MEM_BLOCK_SIZE + j - start] = (*fullO)[j];
+                SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + j - start) = (*fullO)[j];
                 //SET M
-                SPM_units[i]->buffer[1 * MEM_BLOCK_SIZE + j - start] = (*fullM)[j];
+                SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + j - start) = (*fullM)[j];
                 //SET I
-                SPM_units[i]->buffer[2 * MEM_BLOCK_SIZE + j - start] = (*fullI)[j];
+                SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + j - start) = (*fullI)[j];
                 //SET D
-                SPM_units[i]->buffer[3 * MEM_BLOCK_SIZE + j - start] = (*fullD)[j];
+                SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + j - start) = (*fullD)[j];
 
             }
             //fix up the extra two Os needed from previous tile
             if (i == 0){
-                SPM_units[i]->buffer[EXTRA_O_LOAD_ADDR]   = MIN_INT;
-                SPM_units[i]->buffer[EXTRA_O_LOAD_ADDR+1] = MIN_INT;
+                SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR)   = MIN_INT;
+                SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+1) = MIN_INT;
             } else {
-                SPM_units[i]->buffer[EXTRA_O_LOAD_ADDR]   = (*fullO)[start - 2];
-                SPM_units[i]->buffer[EXTRA_O_LOAD_ADDR+1] = (*fullO)[start - 1];
+                SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR)   = (*fullO)[start - 2];
+                SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+1) = (*fullO)[start - 1];
             }
         }
 
@@ -460,11 +458,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         for (int i = 0; i < 4; i++) {
             //Clear write buffers (for programmability)
             for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set m write
-                SPM_units[i]->buffer[4 * MEM_BLOCK_SIZE + j] = 0;
+                SPM_unit->access_magic(i, 4 * MEM_BLOCK_SIZE + j) = 0;
             for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set d write
-                SPM_units[i]->buffer[5 * MEM_BLOCK_SIZE + j] = 0;
+                SPM_unit->access_magic(i, 5 * MEM_BLOCK_SIZE + j) = 0;
             for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set i write
-                SPM_units[i]->buffer[6 * MEM_BLOCK_SIZE + j] = 0;
+                SPM_unit->access_magic(i, 6 * MEM_BLOCK_SIZE + j) = 0;
         }
 
         delete fullO;

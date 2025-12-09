@@ -278,9 +278,9 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
         SPM_unit->access(source_addr, id, SpmAccessT::READ, single_data);
 #ifdef PROFILE
     if (simd)
-        printf("%lx from SPM[%d] to ", SPM_unit->buffer[source_addr], source_addr);
+        printf("%lx from SPM[%d] to ", SPM_unit->access_magic(id, source_addr), source_addr);
     else
-        printf("%d from SPM[%d] to ", SPM_unit->buffer[source_addr], source_addr);
+        printf("%d from SPM[%d] to ", SPM_unit->access_magic(id, source_addr), source_addr);
 #endif
     } else if (source_pos == CTRL_COMP_IB) {
         assert(single_data); //only support single instruction load from comp instr buffer
