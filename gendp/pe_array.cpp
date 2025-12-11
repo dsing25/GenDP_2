@@ -721,6 +721,18 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #ifdef PROFILE
         printf("andi gr[%d] = gr[%d] & %d (%d) \n", rd, rs2, reg_imm_1, operand1);
 #endif
+    } else if (opcode == CTRL_SUBI) {       // subi rd rs2 imm
+        rd = reg_imm_0;
+        imm = sext_imm_1;
+        rs2 = reg_1;
+        add_a = main_addressing_register[rs2];
+        add_b = imm;
+        sum = add_a - add_b;
+        *get_output_dest(dest,rd) = sum;
+#ifdef PROFILE
+        printf("subi gr[%d] gr[%d] %d (%d %d %d)\n", rd, rs2, imm, sum, add_a, add_b);
+#endif
+        (*PC)++;
     } else {
         fprintf(stderr, "main control instruction opcode error. opcode = %d\n", opcode);
         exit(-1);

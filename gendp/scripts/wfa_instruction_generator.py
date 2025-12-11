@@ -3,7 +3,6 @@ import os
 from utils import *
 from opcodes import *
 
-MEM_BLOCK_SIZE = 32 # in words
 SPM_BANDWIDTH = 2 # in words
 PE_ALIGN_SYNC = 9 + 5
 COMPUTE_LOOP_NEXT = 0
@@ -16,6 +15,12 @@ PE_ALIGN_SYNC = INIT_PE_NEXT + 6
 COMPUTE_H = 0
 COMPUTE_D = COMPUTE_H + SPM_BANDWIDTH // 2 + 1 #1 is halts
 COMPUTE_I = COMPUTE_D + SPM_BANDWIDTH // 2 + 1 #1 is halts
+#MEMORY LOCATIONS
+SPM_UNIFIED_SIZE = 2048
+MEM_BLOCK_SIZE = 32 # in words
+PATTERN_START = MEM_BLOCK_SIZE*32 + 2
+SEQ_LEN_ALLOC = (SPM_UNIFIED_SIZE-PATTERN_START) // 2
+TEXT_START = PATTERN_START + SEQ_LEN_ALLOC
 
 
 
@@ -164,10 +169,45 @@ def pe_instruction(pe_id):
     #Write H; No-op
     f.write(data_movement_instruction(gr, gr, 1, 0, 4, 0, 0, 0, SPM_BANDWIDTH, 4, addi))             # gr[4] = gr[4] + SPM_BANDWIDTH
     f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 4, 0, 0, 28, 0, mvd))                       # SPM[gr[4]]=reg[28] //M
-    #TODO these noops are not necessary
     f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 9, 7, blt))                          # blt gr[9] gr[7] -13 
     f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 9, 7, blt))                          # blt gr[9] gr[7] -13 
 
+#EXTEND INIT
+    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 1, 0, si))                            # gr[2] = 0
+    f.write(data_movement_instruction(gr, gr, 0, 0, 15, 0, 0, 0, 1, 12, shifti_r))                   # gr[15] = gr[12] // 2
+#EXTEND DIAG LOOP
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, 0, 2, mv))                          # gr[1]=SPM[gr[2]]
+    f.write(data_movement_instruction(gr, gr, 0, 0, 14, 0, 0, 0, 2, 15, sub))                        # gr[14] = gr[2] - gr[15]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(gr, gr, 0, 0, 14, 0, 0, 0, 1, 14, sub))                        # gr[14] = gr[1] - gr[14]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    #early exits: offset < 0 || v >= pattern len || h >= text end
+    f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 1, 0, 1, 0, blt))                         # blt gr[1] gr[0] 8
+    f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 1, 0, 1, 0, blt))                         # blt gr[1] gr[0] 8
+    f.write(data_movement_instruction(0, 0, 0, 0, 7, 0, 1, 0, 14, 8, bge))                        # bge gr[14] gr[8] 7
+    f.write(data_movement_instruction(0, 0, 0, 0, 7, 0, 1, 0, 14, 8, bge))                        # bge gr[14] gr[8] 7
+    f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 1, 0, 1, 13, bge))                        # bge gr[1] gr[13] 6
+    f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 1, 0, 1, 13, bge))                        # bge gr[1] gr[13] 6
+#EXTEND MATCH LOOP
+    f.write(data_movement_instruction(gr, gr, 1, 0, 14, 0, 0, 0, 1, 14, addi))                       # gr[14] = gr[14] + 1
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 3, 0, 0, 0, PATTERN_START, 14, mv))             # gr[3] = SPM[gr[14]+PATTERN_START]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(gr, gr, 1, 0, 1, 0, 0, 0, 1, 1, addi))                         # gr[1] = gr[1] + 1
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 5, 0, 0, 0, TEXT_START, 1, mv))                 # gr[5] = SPM[gr[1]+TEXT_START]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, -4, 0, 1, 0, 3, 5, beq))                           # beq gr[3] gr[5] -4
+    f.write(data_movement_instruction(0, 0, 0, 0, -4, 0, 1, 0, 3, 5, beq))                           # beq gr[3] gr[5] -4
+#FINISH EXTEND MATCH LOOP
+    f.write(data_movement_instruction(gr, gr, 1, 0, 1, 0, 0, 0, 1, 1, subi))                         # gr[1] = gr[1] - 1
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(gr, gr, 1, 0, 2, 0, 0, 0, 1, 2, addi))                         # gr[2] = gr[2] + 1
+    f.write(data_movement_instruction(SPM, gr, 0, 0, 0, 2, 0, 0, 1, 0, mv))                          # SPM[gr[2]]=gr[1] //M
+    f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 2, 7, blt))                          # blt gr[2] gr[7] -13 
+    f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 2, 7, blt))                          # blt gr[2] gr[7] -13 
+    
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                           # gr[10] = 0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
