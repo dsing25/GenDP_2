@@ -147,4 +147,8 @@ inline int get_base_opcode(int opcode) {
 #define N_SWIZZLE_BITS 2
 #define ADDR_LEN 11
 
+// DNA sequence start addresses for magic instruction initialization
+#define PATTERN_START 226
+#define TEXT_START 369
+
 #endif

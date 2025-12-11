@@ -348,6 +348,26 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //the correct middle m for last two. The score is 2. The size was 3.
 
             current_wf_size = 5;
+
+            // Initialize DNA sequences into SPM
+            const char* text_seq = "GACACCTGGD";
+            const char* pattern_seq = "GTCCGCTGGL";
+            int text_len = 10;
+            int pattern_len = 10;
+
+            // Write TEXT sequence with round-robin interleaving across PEs
+            for (int i = 0; i < text_len; i++) {
+                int pe_id = i % 4;
+                int local_addr = TEXT_START + (i / 4);
+                SPM_unit->access_magic(pe_id, local_addr) = (int)text_seq[i];
+            }
+
+            // Write PATTERN sequence with round-robin interleaving across PEs
+            for (int i = 0; i < pattern_len; i++) {
+                int pe_id = i % 4;
+                int local_addr = PATTERN_START + (i / 4);
+                SPM_unit->access_magic(pe_id, local_addr) = (int)pattern_seq[i];
+            }
         } else {
             //first display the SPM. Then write the results back to the past_wfs
             //int n_pes_to_show = 1;
