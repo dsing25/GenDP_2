@@ -46,7 +46,10 @@ class pe {
         // ld/st data
         int load_data, store_data;
         unsigned long store_instruction[COMP_INSTR_BUFFER_GROUP_SIZE], load_instruction[COMP_INSTR_BUFFER_GROUP_SIZE];
-        
+
+        // public for magic instruction initialization
+        addr_regfile *addr_regfile_unit = new addr_regfile(ADDR_REGISTER_NUM);
+
     private:
         //helper
         int* get_output_dest(int dest, int rd);
@@ -63,7 +66,6 @@ class pe {
         comp_instr_buffer *comp_instr_buffer_unit = new comp_instr_buffer(COMP_INSTR_BUFFER_GROUP_NUM);
         ctrl_instr_buffer *ctrl_instr_buffer_unit = new ctrl_instr_buffer(CTRL_INSTR_BUFFER_NUM);
         SPM *SPM_unit;
-        addr_regfile *addr_regfile_unit = new addr_regfile(ADDR_REGISTER_NUM);
         //write buffer to send to addr_regfile
         int ctrl_write_addrs[CTRL_REGFILE_WRITE_PORTS];
         int ctrl_write_data[CTRL_REGFILE_WRITE_PORTS];

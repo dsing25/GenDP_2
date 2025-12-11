@@ -368,6 +368,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int local_addr = PATTERN_START + (i / 4);
                 SPM_unit->access_magic(pe_id, local_addr) = (int)pattern_seq[i];
             }
+
+            // Initialize register values for each PE
+            for (int i = 0; i < 4; i++) {
+                pe_unit[i]->addr_regfile_unit->buffer[13] = 9;
+                pe_unit[i]->addr_regfile_unit->buffer[8] = 9;
+            }
         } else {
             //first display the SPM. Then write the results back to the past_wfs
             //int n_pes_to_show = 1;
