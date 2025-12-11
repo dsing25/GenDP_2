@@ -32,8 +32,8 @@ class pe {
         void run(int simd);
 
         int decode(unsigned long instruction, int* PC, int src_dest[], int* op, int simd, int* ctrl_write_addr, int* ctrl_write_datum);
-        LoadResult load(int pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data=true);
-        void store(int pos, int src, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_datak=true);
+        LoadResult load(int pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data=true, bool swizzle=false);
+        void store(int pos, int src, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_datak=true, bool swizzle=false);
         void ctrl_instr_load_from_ddr(int addr, unsigned long data[]);
         void comp_instr_load_from_ddr(int n_instr, unsigned long data[]);
         int get_gr_10();

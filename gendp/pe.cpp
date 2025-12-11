@@ -2,6 +2,21 @@
 #include "sys_def.h"
 #include <cassert>
 #include "simulator.h"
+
+// Apply address swizzling for mvi instruction
+// Moves lower N_SWIZZLE_BITS to high positions of address
+inline int apply_address_swizzle(int addr) {
+    if (addr < 0 || addr > SPM_ADDR_NUM) {
+        fprintf(stderr, "Error: address %d out of bound for swizzling\n", addr);
+        exit(-1);
+    }
+    int addr_masked = addr & ((1u << ADDR_LEN) - 1);
+    int lower_bits = addr_masked & ((1u << N_SWIZZLE_BITS) - 1);
+    int upper_bits = addr_masked >> N_SWIZZLE_BITS;
+    int new_addr = upper_bits | (lower_bits << (ADDR_LEN - N_SWIZZLE_BITS));
+    return new_addr;
+}
+
 bool check_legal_mv(int src, int dest) {
     //TODO come back and add this. Right now some traces (cough cough poa) are illegal
     //can't move between SPM and out or in ports
@@ -220,7 +235,7 @@ void pe::comp_instr_load_from_ddr(int n_instr, unsigned long* data) {
 }
 
 
-LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data) {
+LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data, bool swizzle) {
 
     LoadResult data{};
     data.data[0] = 0;
@@ -275,12 +290,13 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
         printf(" to ");
 #endif
     } else if (source_pos == CTRL_SPM) {
-        SPM_unit->access(source_addr, id, SpmAccessT::READ, single_data);
+        int access_addr = swizzle ? apply_address_swizzle(source_addr) : source_addr;
+        SPM_unit->access(access_addr, id, SpmAccessT::READ, single_data);
 #ifdef PROFILE
     if (simd)
-        printf("%lx from SPM[%d] to ", SPM_unit->access_magic(id, source_addr), source_addr);
+        printf("%lx from SPM[%d]%s to ", SPM_unit->access_magic(id, access_addr), source_addr, swizzle ? " (swizzled)" : "");
     else
-        printf("%d from SPM[%d] to ", SPM_unit->access_magic(id, source_addr), source_addr);
+        printf("%d from SPM[%d]%s to ", SPM_unit->access_magic(id, access_addr), source_addr, swizzle ? " (swizzled)" : "");
 #endif
     } else if (source_pos == CTRL_COMP_IB) {
         assert(single_data); //only support single instruction load from comp instr buffer
@@ -313,7 +329,7 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
     return data;
 }
 
-void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_data) {
+void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_data, bool swizzle) {
 
     int dest_addr = 0;
 
@@ -371,10 +387,11 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
                 exit(-1);
             }
         } else if (dest_pos == 2) {
-            if (dest_addr >= 0 && dest_addr < SPM_ADDR_NUM) {
-                SPM_unit->access(dest_addr, id, SpmAccessT::WRITE, single_data, data);
+            int access_addr = swizzle ? apply_address_swizzle(dest_addr) : dest_addr;
+            if (access_addr >= 0 && access_addr < SPM_ADDR_NUM) {
+                SPM_unit->access(access_addr, id, SpmAccessT::WRITE, single_data, data);
 #ifdef PROFILE
-                printf("SPM[%d].\t", dest_addr);
+                printf("SPM[%d]%s.\t", dest_addr, swizzle ? " (swizzled)" : "");
 #endif
             //if (id == 0){
             //    printf("\nzkn w%d:%d\n", cycle, data);
@@ -737,6 +754,26 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         bool leagal_mv = check_legal_mv(src, dest);
         if (!leagal_mv) {
             fprintf(stderr, "PE[%d] PC=%d illegal mv from %d to %d\n", id, *PC, src, dest);
+            exit(-1);
+        }
+
+        if (reg_auto_increasement_flag_0)
+            addr_regfile_unit->buffer[reg_0]++;
+        if (reg_auto_increasement_flag_1)
+            addr_regfile_unit->buffer[reg_1]++;
+        (*PC)++;
+    } else if (opcode == CTRL_MVI) {
+#ifdef PROFILE
+        printf("Move with Index Swizzle ");
+#endif
+        // mvi requires source or destination to be SPM
+        assert(src == CTRL_SPM || dest == CTRL_SPM);
+        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, true, true);
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, true, true);
+
+        bool legal_mv = check_legal_mv(src, dest);
+        if (!legal_mv) {
+            fprintf(stderr, "PE[%d] PC=%d illegal mvi from %d to %d\n", id, *PC, src, dest);
             exit(-1);
         }
 
