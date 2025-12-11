@@ -34,7 +34,7 @@ def wfa_main_instruction():
     #gr8 is the wavefront len, which is also the score + 1. We start with wf_len = 5; score = 4
     f.write(data_movement_instruction(gr, 0, 0, 0, 8, 0, 0, 0, 5, 0, si))                           # gr[8] = 2
 
-    #ALIGN_LOOP
+#FOR EACH WAVEFRONT
     # calculate number of iterations
     f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 2, 8, shifti_r))                     # gr[7] = gr[8] // 4
     f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 1, 7, addi))                         # gr[7] += 1
@@ -47,6 +47,10 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                     # out = gr[7]
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                     # out = gr[7]
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                     # out = gr[7]
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 8, subi))                   # out = gr[8]-1 //wflen
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 8, subi))                   # out = gr[8]-1 //wflen
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 8, subi))                   # out = gr[8]-1 //wflen
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 8, subi))                   # out = gr[8]-1 //wflen
     # increment wf_len
     f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, 2, 8, addi))                         # gr[8]+=2
     #JMP ALIGN_LOOP
@@ -124,6 +128,10 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
     f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 1*MEM_BLOCK_SIZE, 0, si))             # gr[1] match          
     f.write(data_movement_instruction(gr, in_port, 0, 0, 7, 0, 0, 0, 0, 0, mv))                      # gr[7] = in
+    for i in range(3):
+        f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 12, 0, 0, 0, 0, 0, mv))                     # gr[12] = in
     f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 2*MEM_BLOCK_SIZE, 0, si))             # gr[2] i
     f.write(data_movement_instruction(gr, 0, 0, 0, 9, 0, 0, 0, 0, 0, si))                            # gr[9] = 0 (loop counter)
     #this loads the leftmost Os from previous tile
