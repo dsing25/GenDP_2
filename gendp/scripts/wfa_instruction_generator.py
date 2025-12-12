@@ -47,14 +47,14 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                     # out = gr[7]
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                     # out = gr[7]
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 7, 0, mv))                     # out = gr[7]
-    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 8, subi))                   # out = gr[8]-1 //wflen
-    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 8, subi))                   # out = gr[8]-1 //wflen
-    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 8, subi))                   # out = gr[8]-1 //wflen
-    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 8, subi))                   # out = gr[8]-1 //wflen
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 8, addi))                   # out = gr[8]+1 //wflen
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 8, addi))                   # out = gr[8]+1 //wflen
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 8, addi))                   # out = gr[8]+1 //wflen
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 8, addi))                   # out = gr[8]+1 //wflen
     # increment wf_len
     f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, 2, 8, addi))                         # gr[8]+=2
     #JMP ALIGN_LOOP
-    f.write(data_movement_instruction(gr, gr, 0, 0, -9, 0, 0, 0, 0, 0, beq))                        # beq 0 0 -9
+    f.write(data_movement_instruction(gr, gr, 0, 0, -13, 0, 0, 0, 0, 0, beq))                        # beq 0 0 -13
 
     f.close()
 
@@ -128,14 +128,15 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
     f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 1*MEM_BLOCK_SIZE, 0, si))             # gr[1] match          
     f.write(data_movement_instruction(gr, in_port, 0, 0, 7, 0, 0, 0, 0, 0, mv))                      # gr[7] = in
+    #this loads the leftmost Os from previous tile
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 0, 7*MEM_BLOCK_SIZE, 0, mvd))         # reg[4] = SPM[7*MEM_BLOCK_SIZE]
     for i in range(3):
         f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(gr, in_port, 0, 0, 12, 0, 0, 0, 0, 0, mv))                     # gr[12] = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 2*MEM_BLOCK_SIZE, 0, si))             # gr[2] i
     f.write(data_movement_instruction(gr, 0, 0, 0, 9, 0, 0, 0, 0, 0, si))                            # gr[9] = 0 (loop counter)
-    #this loads the leftmost Os from previous tile
-    f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 0, 7*MEM_BLOCK_SIZE, 0, mvd))         # reg[4] = SPM[7*MEM_BLOCK_SIZE]
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 3*MEM_BLOCK_SIZE, 0, si))             # gr[3] d
     f.write(data_movement_instruction(gr, 0, 0, 0, 4, 0, 0, 0, 4*MEM_BLOCK_SIZE, 0, si))             # gr[4] m write
     f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 5*MEM_BLOCK_SIZE, 0, si))             # gr[5] d write
@@ -196,11 +197,11 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 1, 0, 1, 13, bge))                        # bge gr[1] gr[13] 6
 #EXTEND MATCH LOOP
     f.write(data_movement_instruction(gr, gr, 1, 0, 14, 0, 0, 0, 1, 14, addi))                       # gr[14] = gr[14] + 1
-    f.write(data_movement_instruction(gr, SPM, 0, 0, 3, 0, 0, 0, PATTERN_START, 14, mv))             # gr[3] = SPM[gr[14]+PATTERN_START]
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 3, 0, 0, 0, PATTERN_START, 14, mvi))             # gr[3] = SPM[gr[14]+PATTERN_START]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(gr, gr, 1, 0, 1, 0, 0, 0, 1, 1, addi))                         # gr[1] = gr[1] + 1
-    f.write(data_movement_instruction(gr, SPM, 0, 0, 5, 0, 0, 0, TEXT_START, 1, mv))                 # gr[5] = SPM[gr[1]+TEXT_START]
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 5, 0, 0, 0, TEXT_START, 1, mvi))                 # gr[5] = SPM[gr[1]+TEXT_START]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, -4, 0, 1, 0, 3, 5, beq))                           # beq gr[3] gr[5] -4
@@ -213,7 +214,7 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 2, 7, blt))                          # blt gr[2] gr[7] -13 
     f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 2, 7, blt))                          # blt gr[2] gr[7] -13 
     
-    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                           # gr[10] = 0
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                           # gr[10] = 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt

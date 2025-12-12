@@ -2,6 +2,7 @@
 #include "sys_def.h"
 #include <cassert>
 #include "simulator.h"
+#include <iostream>
 
 // Apply address swizzling for mvi instruction
 // Moves lower N_SWIZZLE_BITS to high positions of address
@@ -291,12 +292,17 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
 #endif
     } else if (source_pos == CTRL_SPM) {
         int access_addr = swizzle ? apply_address_swizzle(source_addr) : source_addr;
-        SPM_unit->access(access_addr, id, SpmAccessT::READ, single_data);
+        bool isVirtualAddr = !swizzle;
+        SPM_unit->access(access_addr, id, SpmAccessT::READ, single_data, LoadResult(), isVirtualAddr);
 #ifdef PROFILE
     if (simd)
         printf("%lx from SPM[%d]%s to ", SPM_unit->access_magic(id, access_addr), source_addr, swizzle ? " (swizzled)" : "");
     else
-        printf("%d from SPM[%d]%s to ", SPM_unit->access_magic(id, access_addr), source_addr, swizzle ? " (swizzled)" : "");
+        if (isVirtualAddr) {
+            printf("%d from SPM[%d]%s to ", SPM_unit->access_magic(id, access_addr), source_addr, swizzle ? " (swizzled)" : "");
+        } else {
+            printf("%d from SPM[%d]%s to ", SPM_unit->buffer[access_addr], source_addr, swizzle ? " (swizzled)" : "");
+        }
 #endif
     } else if (source_pos == CTRL_COMP_IB) {
         assert(single_data); //only support single instruction load from comp instr buffer
@@ -388,19 +394,15 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
             }
         } else if (dest_pos == 2) {
             int access_addr = swizzle ? apply_address_swizzle(dest_addr) : dest_addr;
-            if (access_addr >= 0 && access_addr < SPM_ADDR_NUM) {
-                SPM_unit->access(access_addr, id, SpmAccessT::WRITE, single_data, data);
+            bool isVirtualAddr = !swizzle;
+            SPM_unit->access(access_addr, id, SpmAccessT::WRITE, single_data, data, isVirtualAddr);
 #ifdef PROFILE
-                printf("SPM[%d]%s.\t", dest_addr, swizzle ? " (swizzled)" : "");
+            printf("SPM[%d]%s.\t", dest_addr, swizzle ? " (swizzled)" : "");
 #endif
-            //if (id == 0){
-            //    printf("\nzkn w%d:%d\n", cycle, data);
-            //}
+        //if (id == 0){
+        //    printf("\nzkn w%d:%d\n", cycle, data);
+        //}
 
-            } else {
-                fprintf(stderr, "PE[%d] store SPM addr %d error.\n", id, dest_addr);
-                exit(-1);
-            }
         } else if (dest_pos == 3) {
             comp_instr_store = 1;
             comp_instr_store_addr = dest_addr;
