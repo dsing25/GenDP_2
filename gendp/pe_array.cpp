@@ -258,13 +258,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
     int reg_auto_increasement_flag_0 = (instruction & reg_auto_increasement_flag_0_mask) >> (INSTRUCTION_WIDTH - 2*MEMORY_COMPONENTS_ADDR_WIDTH - 2);
     int reg_imm_0 = (instruction & reg_imm_0_mask) >> (2 + IMMEDIATE_WIDTH + 2 * GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_imm_0_sign_bit = (instruction & reg_imm_0_sign_bit_mask) >> (INSTRUCTION_WIDTH - 2*MEMORY_COMPONENTS_ADDR_WIDTH - 3);
-    int sext_imm_0 = reg_imm_0 | (reg_imm_0_sign_bit ? 0xFFFFFC00 : 0);
+    int sext_imm_0 = reg_imm_0 | (reg_imm_0_sign_bit ? 0xFFFFC000 : 0);
     int reg_0 = (instruction & reg_0_mask) >> (2 + IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_immBar_flag_1 = (instruction & reg_immBar_flag_1_mask) >> (1 + IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_auto_increasement_flag_1 = (instruction & reg_auto_increasement_flag_1_mask) >> (IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_imm_1 = (instruction & reg_imm_1_mask) >> (GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_imm_1_sign_bit = (instruction & reg_imm_1_sign_bit_mask) >> (IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH - 1);
-    int sext_imm_1 = reg_imm_1 | (reg_imm_1_sign_bit ? 0xFFFFFC00 : 0);
+    int sext_imm_1 = reg_imm_1 | (reg_imm_1_sign_bit ? 0xFFFFC000 : 0);
     int reg_1 = (instruction & reg_1_mask) >> CTRL_OPCODE_WIDTH;
     int opcode = instruction & opcode_mask;
 
@@ -333,7 +333,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             past_wf_sizes[current_wf_i] = 1;
             //TODO typically you would call an extend here, but since there's nothing to extend, it's
             //just 0
-            past_wfs[current_wf_i][2][0] = 0; //middle m wavefront
+            past_wfs[current_wf_i][2][0] = 1; //middle m wavefront
             current_wf_i++; //4 should have a 1, but it's never used
             //WF 3
             for (int j = 0; j < MEM_BLOCK_SIZE; j++) {
@@ -342,7 +342,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
             }
             past_wf_sizes[current_wf_i] = 3;
-            past_wfs[current_wf_i][2][1] = 0; //middle m wavefront
+            //TODO magically know the first extend
+            past_wfs[current_wf_i][2][1] = 1; //middle m wavefront
 
             //at this point the first four wavefronts have been defined initialized with dummy, and 
             //the correct middle m for last two. The score is 2. The size was 3.
@@ -350,10 +351,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             current_wf_size = 5;
 
             // Initialize DNA sequences into SPM
-            //const char* text_seq = "GACACCTGGD";
-            //const char* pattern_seq = "GTCCGCTGGL";
-            const char* text_seq = "GGGGGGGGGD";
-            const char* pattern_seq = "TTTTTTTTTL";
+            const char* text_seq = "GACACCTGGD";
+            const char* pattern_seq = "GTCCGCTGGL";
+            //const char* text_seq = "GGGGGGGGGD";
+            //const char* pattern_seq = "TTTTTTTTTL";
             int text_len = 10;
             int pattern_len = 10;
 
@@ -812,13 +813,13 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
     int reg_auto_increasement_flag_0 = (instruction & reg_auto_increasement_flag_0_mask) >> (INSTRUCTION_WIDTH - 2*MEMORY_COMPONENTS_ADDR_WIDTH - 2);
     int reg_imm_0 = (instruction & reg_imm_0_mask) >> (2 + IMMEDIATE_WIDTH + 2 * GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_imm_0_sign_bit = (instruction & reg_imm_0_sign_bit_mask) >> (INSTRUCTION_WIDTH - 2*MEMORY_COMPONENTS_ADDR_WIDTH - 3);
-    int sext_imm_0 = reg_imm_0 | (reg_imm_0_sign_bit ? 0xFFFFFC00 : 0);
+    int sext_imm_0 = reg_imm_0 | (reg_imm_0_sign_bit ? 0xFFFFC000 : 0);
     int reg_0 = (instruction & reg_0_mask) >> (2 + IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_immBar_flag_1 = (instruction & reg_immBar_flag_1_mask) >> (1 + IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_auto_increasement_flag_1 = (instruction & reg_auto_increasement_flag_1_mask) >> (IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_imm_1 = (instruction & reg_imm_1_mask) >> (GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_imm_1_sign_bit = (instruction & reg_imm_1_sign_bit_mask) >> (IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH - 1);
-    int sext_imm_1 = reg_imm_1 | (reg_imm_1_sign_bit ? 0xFFFFFC00 : 0);
+    int sext_imm_1 = reg_imm_1 | (reg_imm_1_sign_bit ? 0xFFFFC000 : 0);
     int reg_1 = (instruction & reg_1_mask) >> CTRL_OPCODE_WIDTH;
     int opcode = instruction & opcode_mask;
 

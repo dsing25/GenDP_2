@@ -21,6 +21,9 @@ MEM_BLOCK_SIZE = 32 # in words
 PATTERN_START = MEM_BLOCK_SIZE*7 + 2
 SEQ_LEN_ALLOC = (BANK_SIZE-PATTERN_START) // 2
 TEXT_START = PATTERN_START + SEQ_LEN_ALLOC
+SWIZZLED_PATTERN_START = PATTERN_START << 2 # need to reverse swizzle to hit 226 at the start
+SWIZZLED_TEXT_START = TEXT_START << 2 
+
 
 
 # dest, src, flag_0, flag_1, imm/reg_0, reg_0(++), flag_2, flag_3, imm/reg_1, reg_1(++), opcode
@@ -197,11 +200,11 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 1, 0, 1, 13, bge))                        # bge gr[1] gr[13] 6
 #EXTEND MATCH LOOP
     f.write(data_movement_instruction(gr, gr, 1, 0, 14, 0, 0, 0, 1, 14, addi))                       # gr[14] = gr[14] + 1
-    f.write(data_movement_instruction(gr, SPM, 0, 0, 3, 0, 0, 0, PATTERN_START, 14, mvi))             # gr[3] = SPM[gr[14]+PATTERN_START]
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 3, 0, 0, 0, SWIZZLED_PATTERN_START, 14, mvi))   # gr[3] = SPM[gr[14]+PATTERN_START]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(gr, gr, 1, 0, 1, 0, 0, 0, 1, 1, addi))                         # gr[1] = gr[1] + 1
-    f.write(data_movement_instruction(gr, SPM, 0, 0, 5, 0, 0, 0, TEXT_START, 1, mvi))                 # gr[5] = SPM[gr[1]+TEXT_START]
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 5, 0, 0, 0, SWIZZLED_TEXT_START, 1, mvi))       # gr[5] = SPM[gr[1]+TEXT_START]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, -4, 0, 1, 0, 3, 5, beq))                           # beq gr[3] gr[5] -4
