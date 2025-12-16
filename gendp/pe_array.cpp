@@ -351,8 +351,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             current_wf_size = 5;
 
             // Initialize DNA sequences into SPM
-            const char* text_seq = "GACACCTGGD";
-            const char* pattern_seq = "GTCCGCTGGL";
+            const char* pattern_seq = "GTTTAAAAGD";
+            const char* text_seq = "GAAAAAAATL";
             //const char* text_seq = "GGGGGGGGGD";
             //const char* pattern_seq = "TTTTTTTTTL";
             int text_len = 10;

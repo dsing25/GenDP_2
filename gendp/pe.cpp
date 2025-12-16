@@ -292,8 +292,6 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
 #endif
     } else if (source_pos == CTRL_SPM) {
         int access_addr = swizzle ? apply_address_swizzle(source_addr) : source_addr;
-        if (swizzle && id == 0)
-            std::cerr << "swizzle access " << access_addr << std::endl;
         bool isVirtualAddr = !swizzle;
         SPM_unit->access(access_addr, id, SpmAccessT::READ, single_data, LoadResult(), isVirtualAddr);
 #ifdef PROFILE
