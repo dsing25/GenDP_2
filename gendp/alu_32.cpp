@@ -180,15 +180,16 @@ int alu_32::execute(int input_0, int input_1, int op) {
 			out = ~input_0;
 			break;
 		}
-        case INVALID: {
-			out = 0;
-			break;
-		}
+		case INVALID: {
+				out = 0;
+				break;
+			}
 		case POPCOUNT: {
-            out = __builtin_popcount(static_cast<unsigned int>(input_0));
-            break;
-        }
+		    out = __builtin_popcount(static_cast<unsigned int>(input_0));
+		    break;
+		}
 		default: {
+			fprintf(stderr, "ALU32: Invalid operation code %d\n", op);
 			out = 0;
 			break;
 		}

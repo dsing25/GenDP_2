@@ -32,9 +32,10 @@ class pe {
         void run(int simd);
 
         int decode(unsigned long instruction, int* PC, int src_dest[], int* op, int simd, int* ctrl_write_addr, int* ctrl_write_datum);
-        LoadResult load(int pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data=true);
-        void store(int pos, int src, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_datak=true);
+        LoadResult load(int pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data=true, bool swizzle=false);
+        void store(int pos, int src, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_datak=true, bool swizzle=false);
         void ctrl_instr_load_from_ddr(int addr, unsigned long data[]);
+        void comp_instr_load_from_ddr(int n_instr, unsigned long data[]);
         int get_gr_10();
         void reset();
 
@@ -45,7 +46,10 @@ class pe {
         // ld/st data
         int load_data, store_data;
         unsigned long store_instruction[COMP_INSTR_BUFFER_GROUP_SIZE], load_instruction[COMP_INSTR_BUFFER_GROUP_SIZE];
-        
+
+        // public for magic instruction initialization
+        addr_regfile *addr_regfile_unit = new addr_regfile(ADDR_REGISTER_NUM);
+
     private:
         //helper
         int* get_output_dest(int dest, int rd);
@@ -62,7 +66,6 @@ class pe {
         comp_instr_buffer *comp_instr_buffer_unit = new comp_instr_buffer(COMP_INSTR_BUFFER_GROUP_NUM);
         ctrl_instr_buffer *ctrl_instr_buffer_unit = new ctrl_instr_buffer(CTRL_INSTR_BUFFER_NUM);
         SPM *SPM_unit;
-        addr_regfile *addr_regfile_unit = new addr_regfile(ADDR_REGISTER_NUM);
         //write buffer to send to addr_regfile
         int ctrl_write_addrs[CTRL_REGFILE_WRITE_PORTS];
         int ctrl_write_data[CTRL_REGFILE_WRITE_PORTS];

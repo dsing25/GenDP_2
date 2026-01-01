@@ -37,16 +37,16 @@ def data_movement_instruction(dest, src, reg_immBar_0, reg_auto_increase_0, imm_
     9 reg_1
    10 opcode
     '''
-    instr = "0" * 18 \
+    instr = "0" * 10 \
             + "{:0>4b}".format(dest) \
             + "{:0>4b}".format(src) \
             + "{:0>1b}".format(reg_immBar_0) \
             + "{:0>1b}".format(reg_auto_increase_0) \
-            + "{:0>10b}".format(imm_0 & 0x3ff) \
+            + "{:0>14b}".format(imm_0 & 0x3fff) \
             + "{:0>4b}".format(reg_0) \
             + "{:0>1b}".format(reg_immBar_1) \
             + "{:0>1b}".format(reg_auto_increase_1) \
-            + "{:0>10b}".format(imm_1 & 0x3ff) \
+            + "{:0>14b}".format(imm_1 & 0x3fff) \
             + "{:0>4b}".format(reg_1) \
             + "{:0>6b}".format(opcode)
     value = int(instr, 2)
