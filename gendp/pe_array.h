@@ -40,6 +40,7 @@ class pe_array {
         void compute_instruction_buffer_write_from_ddr(int addr, unsigned long data[]);
         void main_instruction_buffer_write_from_ddr(int addr, unsigned long data[]);
         void pe_instruction_buffer_write_from_ddr(int addr, unsigned long data[], int id);
+        void pe_comp_instruction_buffer_write_from_ddr(int addr, unsigned long data[], int id);
 
         void buffer_reset(int* buffer, int num);
 
@@ -63,7 +64,7 @@ class pe_array {
 
         std::set<EventProducer*> active_event_producers;
 
-        SPM * SPM_units[PE_NUM];
+        SPM * SPM_unit;
 
 
 };

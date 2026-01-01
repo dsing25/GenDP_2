@@ -55,7 +55,9 @@ class SPM : EventProducer{
             int peid;
             int cycles_left;
             SpmAccessT access_t;
+            bool single_data;
             LoadResult data;
+            bool isVirtualAddr = true;
         };
         void mark_active_producer();
 
@@ -68,7 +70,8 @@ class SPM : EventProducer{
 
         void show_data(int addr);
         void show_data(int start_addr, int end_addr, int line_width=64);
-        void access(int addr, int peid, SpmAccessT accessT, LoadResult data=LoadResult());
+        void access(int addr, int peid, SpmAccessT accessT, bool single_data, LoadResult data=LoadResult(), bool isVirtualAddr=true);
+        int& access_magic(int peid, int addr) { return buffer[peid * SPM_BANK_SIZE + addr]; }
         std::pair<bool, std::list<Event>*> tick() override;
 
         int *buffer;

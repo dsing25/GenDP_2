@@ -28,7 +28,8 @@
 
 #define SPM_ACCESS_LATENCY 2
 #define SPM_BANDWIDTH 2
-#define SPM_ADDR_NUM 512
+#define SPM_ADDR_NUM 2048
+#define SPM_BANK_SIZE 512
 #define MAIN_ADDR_REGISTER_NUM 16
 #define CTRL_INSTR_BUFFER_NUM 512
 #define COMP_INSTR_BUFFER_GROUP_NUM 33
@@ -44,8 +45,8 @@
 #define REGFILE_READ_PORTS 13
 
 //This is CTRL regfile number of registers
-//TODO drop back to 12 
 #define ADDR_REGISTER_NUM 16
+//I think it's actually like 4 read now.
 #define CTRL_REGFILE_READ_PORTS 2
 #define CTRL_REGFILE_WRITE_PORTS 2
 
@@ -54,7 +55,7 @@
 
 #define COMP_OPCODE_WIDTH 5
 #define MEMORY_COMPONENTS_ADDR_WIDTH 4
-#define IMMEDIATE_WIDTH 10
+#define IMMEDIATE_WIDTH 14
 #define GLOBAL_REGISTER_ADDR_WIDTH 4
 #define CTRL_OPCODE_WIDTH 6
 #define INSTRUCTION_WIDTH ((MEMORY_COMPONENTS_ADDR_WIDTH + IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + 2) * 2 + CTRL_OPCODE_WIDTH)
@@ -63,6 +64,7 @@
 
 #define COMP_NOP_INSTRUCTION 0x1ef7800000000
 #define CTRL_NOP_INSTRUCTION 0xe
+#define MIN_INT -99
 
 // Opcode
 #define ADDITION 0
@@ -125,6 +127,8 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_ANDI 18
 //move double (so does two words)
 #define CTRL_MVD 19
+#define CTRL_SUBI 20
+#define CTRL_MVI 21
 
 // DEST/SRCS
 #define CTRL_REG 0
@@ -139,5 +143,13 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_OUT_PORT 9
 #define CTRL_OUT_INSTR 10
 //FIFO [11, 12, 13, 14]
+
+// Address swizzling parameters for mvi instruction
+#define N_SWIZZLE_BITS 2
+#define ADDR_LEN 11
+
+// DNA sequence start addresses for magic instruction initialization
+#define PATTERN_START 226
+#define TEXT_START 369
 
 #endif

@@ -2,6 +2,22 @@
 #include "sys_def.h"
 #include <cassert>
 #include "simulator.h"
+#include <iostream>
+
+// Apply address swizzling for mvi instruction
+// Moves lower N_SWIZZLE_BITS to high positions of address
+inline int apply_address_swizzle(int addr) {
+    if (addr < 0 || addr > SPM_ADDR_NUM) {
+        fprintf(stderr, "Error: address %d out of bound for swizzling\n", addr);
+        exit(-1);
+    }
+    int addr_masked = addr & ((1u << ADDR_LEN) - 1);
+    int lower_bits = addr_masked & ((1u << N_SWIZZLE_BITS) - 1);
+    int upper_bits = addr_masked >> N_SWIZZLE_BITS;
+    int new_addr = upper_bits | (lower_bits << (ADDR_LEN - N_SWIZZLE_BITS));
+    return new_addr;
+}
+
 bool check_legal_mv(int src, int dest) {
     //TODO come back and add this. Right now some traces (cough cough poa) are illegal
     //can't move between SPM and out or in ports
@@ -186,13 +202,15 @@ void pe::run(int simd) {
     printf("\n");
 #endif
 
-    if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][0] == src_dest[1][0] && src_dest[0][0] != CTRL_GR) {
-        fprintf(stderr, "PE[%d] PC[%d %d] source position confliction.\n", id, PC[0], PC[1]);
+    if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][0] == src_dest[1][0] && src_dest[0][0] != CTRL_GR && src_dest[0][0] != CTRL_REG) {
+        fprintf(stderr, "PE[%d] PC[%d %d] source position confliction on src %d.\n", id, PC[0], PC[1], src_dest[0][0]);
         exit(-1);
-    } else if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][1] == src_dest[1][1] && src_dest[0][1] != CTRL_GR) {
-        fprintf(stderr, "PE[%d] PC[%d %d] dest position confliction.\n", id, PC[0], PC[1]);
-        exit(-1);
-    }
+    } 
+    //not sure what this was supposed to be, but it's a repeat of above
+   // else if (ctrl_op[0] == 5 && ctrl_op[1] == 5 && src_dest[0][1] == src_dest[1][1] && src_dest[0][1] != CTRL_GR && src_dest[0][1] != CTRL_REG) {
+   //     fprintf(stderr, "PE[%d] PC[%d %d] dest position confliction.\n", id, PC[0], PC[1]);
+   //     exit(-1);
+   // }
 }
 
 void pe::ctrl_instr_load_from_ddr(int addr, unsigned long data[]) {
@@ -205,8 +223,20 @@ void pe::ctrl_instr_load_from_ddr(int addr, unsigned long data[]) {
     }
 }
 
+void pe::comp_instr_load_from_ddr(int n_instr, unsigned long* data) {
+    for (int i = 0; i < n_instr; i++){
+        if (i < COMP_INSTR_BUFFER_GROUP_NUM) {
+            comp_instr_buffer_unit->buffer[i][0] = data[2*i];
+            comp_instr_buffer_unit->buffer[i][1] = data[2*i+1];
+        } else {
+            fprintf(stderr, "PE[%d] comp instr buffer write addr %d is out of bound\n", id, i);
+            exit(-1);
+        }
+    }
+}
 
-LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data) {
+
+LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data, bool swizzle) {
 
     LoadResult data{};
     data.data[0] = 0;
@@ -232,11 +262,14 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
             }
 #ifdef PROFILE
         if (simd)
-            printf("%lx from reg[%d] to ", data.data[i], source_addr);
+            printf("%lx from reg[%d]", data.data[i], source_addr);
         else
-            printf("%d from reg[%d] to ", data.data[i], source_addr);
+            printf("%d from reg[%d]", data.data[i], source_addr);
 #endif
         }
+#ifdef PROFILE
+        printf(" to ");
+#endif
     } else if (source_pos == CTRL_GR) {
         int n_loads = single_data ? 1 : SPM_BANDWIDTH;
         for (int i = 0; i < n_loads; i++) {
@@ -255,15 +288,21 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
 #endif
         }
 #ifdef PROFILE
-        printf("to ", data.data[i], addr);
+        printf(" to ");
 #endif
     } else if (source_pos == CTRL_SPM) {
-        SPM_unit->access(source_addr, id, SpmAccessT::READ);
+        int access_addr = swizzle ? apply_address_swizzle(source_addr) : source_addr;
+        bool isVirtualAddr = !swizzle;
+        SPM_unit->access(access_addr, id, SpmAccessT::READ, single_data, LoadResult(), isVirtualAddr);
 #ifdef PROFILE
     if (simd)
-        printf("%lx from SPM[%d] to ", SPM_unit->buffer[source_addr], source_addr);
+        printf("%lx from SPM[%d]%s to ", SPM_unit->access_magic(id, access_addr), source_addr, swizzle ? " (swizzled)" : "");
     else
-        printf("%d from SPM[%d] to ", SPM_unit->buffer[source_addr], source_addr);
+        if (isVirtualAddr) {
+            printf("%d from SPM[%d]%s to ", SPM_unit->access_magic(id, access_addr), source_addr, swizzle ? " (swizzled)" : "");
+        } else {
+            printf("%d from SPM[%d]%s to ", SPM_unit->buffer[access_addr], source_addr, swizzle ? " (swizzled)" : "");
+        }
 #endif
     } else if (source_pos == CTRL_COMP_IB) {
         assert(single_data); //only support single instruction load from comp instr buffer
@@ -296,9 +335,7 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
     return data;
 }
 
-void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_data) {
-    assert(single_data); //Right now only support single data store because multidata store is 
-                         //handled in the recv function after SPM load
+void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_data, bool swizzle) {
 
     int dest_addr = 0;
 
@@ -356,19 +393,16 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
                 exit(-1);
             }
         } else if (dest_pos == 2) {
-            if (dest_addr >= 0 && dest_addr < SPM_ADDR_NUM) {
-                SPM_unit->access(dest_addr, id, SpmAccessT::WRITE, data);
+            int access_addr = swizzle ? apply_address_swizzle(dest_addr) : dest_addr;
+            bool isVirtualAddr = !swizzle;
+            SPM_unit->access(access_addr, id, SpmAccessT::WRITE, single_data, data, isVirtualAddr);
 #ifdef PROFILE
-                printf("SPM[%d].\t", dest_addr);
+            printf("SPM[%d]%s.\t", dest_addr, swizzle ? " (swizzled)" : "");
 #endif
-            //if (id == 0){
-            //    printf("\nzkn w%d:%d\n", cycle, data);
-            //}
+        //if (id == 0){
+        //    printf("\nzkn w%d:%d\n", cycle, data);
+        //}
 
-            } else {
-                fprintf(stderr, "PE[%d] store SPM addr %d error.\n", id, dest_addr);
-                exit(-1);
-            }
         } else if (dest_pos == 3) {
             comp_instr_store = 1;
             comp_instr_store_addr = dest_addr;
@@ -439,13 +473,13 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     int reg_auto_increasement_flag_0 = (instruction & reg_auto_increasement_flag_0_mask) >> (INSTRUCTION_WIDTH - 2*MEMORY_COMPONENTS_ADDR_WIDTH - 2);
     int reg_imm_0 = (instruction & reg_imm_0_mask) >> (2 + IMMEDIATE_WIDTH + 2 * GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_imm_0_sign_bit = (instruction & reg_imm_0_sign_bit_mask) >> (INSTRUCTION_WIDTH - 2*MEMORY_COMPONENTS_ADDR_WIDTH - 3);
-    int sext_imm_0 = reg_imm_0 | (reg_imm_0_sign_bit ? 0xFFFFFC00 : 0);
+    int sext_imm_0 = reg_imm_0 | (reg_imm_0_sign_bit ? 0xFFFFC000 : 0);
     int reg_0 = (instruction & reg_0_mask) >> (2 + IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_immBar_flag_1 = (instruction & reg_immBar_flag_1_mask) >> (1 + IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_auto_increasement_flag_1 = (instruction & reg_auto_increasement_flag_1_mask) >> (IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_imm_1 = (instruction & reg_imm_1_mask) >> (GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_imm_1_sign_bit = (instruction & reg_imm_1_sign_bit_mask) >> (IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH - 1);
-    int sext_imm_1 = reg_imm_1 | (reg_imm_1_sign_bit ? 0xFFFFFC00 : 0);
+    int sext_imm_1 = reg_imm_1 | (reg_imm_1_sign_bit ? 0xFFFFC000 : 0);
     int reg_1 = (instruction & reg_1_mask) >> CTRL_OPCODE_WIDTH;
     int opcode = instruction & opcode_mask;
 
@@ -698,6 +732,18 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 #ifdef PROFILE
         printf("andi gr[%d] = gr[%d] & %d (%d) \n", rd, rs2, reg_imm_1, operand1);
 #endif
+    } else if (opcode == CTRL_SUBI) {       // subi rd rs2 imm
+        rd = reg_imm_0;
+        imm = sext_imm_1;
+        rs2 = reg_1;
+        add_a = addr_regfile_unit->buffer[rs2];
+        add_b = imm;
+        sum = add_a - add_b;
+        *get_output_dest(dest, rd) = sum;
+#ifdef PROFILE
+        printf("subi gr[%d] gr[%d] %d (%d %d %d)\t", rd, rs2, imm, sum, add_a, add_b);
+#endif
+        (*PC)++;
     } else if (opcode == CTRL_MVD) {      // AND
 #ifdef PROFILE
         printf("MoveDouble ");
@@ -705,11 +751,31 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         assert(src == CTRL_SPM || dest == CTRL_SPM); //only support to/from spm
         bool single_data = false;
         data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, single_data);
-        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, true);
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, single_data);
 
         bool leagal_mv = check_legal_mv(src, dest);
         if (!leagal_mv) {
             fprintf(stderr, "PE[%d] PC=%d illegal mv from %d to %d\n", id, *PC, src, dest);
+            exit(-1);
+        }
+
+        if (reg_auto_increasement_flag_0)
+            addr_regfile_unit->buffer[reg_0]++;
+        if (reg_auto_increasement_flag_1)
+            addr_regfile_unit->buffer[reg_1]++;
+        (*PC)++;
+    } else if (opcode == CTRL_MVI) {
+#ifdef PROFILE
+        printf("Move with Index Swizzle ");
+#endif
+        // mvi requires source or destination to be SPM
+        assert(src == CTRL_SPM || dest == CTRL_SPM);
+        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, true, true);
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, true, true);
+
+        bool legal_mv = check_legal_mv(src, dest);
+        if (!legal_mv) {
+            fprintf(stderr, "PE[%d] PC=%d illegal mvi from %d to %d\n", id, *PC, src, dest);
             exit(-1);
         }
 
