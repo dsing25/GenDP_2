@@ -221,49 +221,254 @@ def gbv_compute_v2(): # 16 instruction trace
 
 def gbv_compute_v3():
 
-f = open("instructions/gbv/compute_instruction_v2.txt", "w")
+    f = InstructionWriter("instructions/gbv/comp_v3.txt", "w")
 
-    f.write(compute_instruction(alu1, alu2, alu3, reg1, reg2, reg3, reg4, reg5, reg6, output))
+    # getScoreBeforeStart (2)
+    f.write(compute_instruction(COPY, POPCOUNT, SUBTRACTION, 11, 0, 0, 0, 23, 0, 25)) # scoreEnd - pc(VP) = temp6
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) 
 
-    # getScoreBeforeStart
-    f.write(compute_instruction(COPY, POPCOUNT, SUBTRACTION, scoreEnd, 0, 0, 0, VP, 0, temp5))
+    f.write(compute_instruction(COPY, POPCOUNT, ADDITION, 25, 0, 0, 0, 24, 0, 25)) # temp6 + pc(VN) = temp6 
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    # end of getScoreBeforeStart
+
+    # mergeTwoSlices - 2 Input (12)
+    # set reg14 to left.getscore
+    f.write(compute_instruction(COPY, POPCOUNT, SUBTRACTION, 15, 0, 0, 0, 13, 0, 25)) # scoreEnd - pc(VP) = temp6
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
-    f.write(compute_instruction(COPY, POPCOUNT, ADDITION, temp5, 0, 0, 0, VN, 0, temp5))
+    f.write(compute_instruction(COPY, POPCOUNT, ADDITION, 25, 0, 0, 0, 12, 0, 14)) # temp6 + pc(VN) = reg14
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
-    # mergeSlices
+    # set reg18 to right.getscore
+    f.write(compute_instruction(COPY, POPCOUNT, SUBTRACTION, 19, 0, 0, 0, 17, 0, 25)) # scoreEnd - pc(VP) = temp6
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(COPY, POPCOUNT, ADDITION, 25, 0, 0, 0, 16, 0, 18)) # temp6 + pc(VN) = reg18
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    #do the swap(left,right)
     f.write(compute_instruction(COPY, INVALID, COPY, child_sbefore, 0, 0, 0, 0, 0, temp7)) # Copy so you can swap without worrying
     f.write(compute_instruction(COPY, INVALID, COPY, merged_sbef, 0, 0, 0, 0, 0, temp8))
 
-    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, child_vn, temp3, 0, 0, temp3))
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, child_vn, temp3, 0, 0, temp3)) # temp3 = child_sb > merge_sb ? child_vn : temp3
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, child_vp, temp4, 0, 0, temp4)) # temp4 = child_sb > merge_sb ? child_vp : temp4
+
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, child_send, temp5, 0, 0, temp5)) # temp5 = child_sb > merge_sb ? child_send : temp5
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, child_sbefore, temp6, 0, 0, temp6)) # temp6 = child_sb > merge_sb ? child_sb : temp6
+
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, merged_vn, child_vn, 0, 0, child_vn)) # child_vn = child_sb > merge_sb ? merged_vn : child_vn
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, merged_vp, child_vp, 0, 0, child_vp)) # child_vp = child_sb > merge_sb ? merged_vp : child_vp
+
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, merged_send, child_send, 0, 0, child_send)) # child_send = child_sb > merge_sb ? merged_send : child_send
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, merged_sbef, child_sbefore, 0, 0, child_sbefore)) # child_sb = child_sb > merge_sb ? merged_sb : child_sb
+
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, temp3, merged_vn, 0, 0, merged_vn)) # merged_vn = child_sb > merge_sb ? temp3 : merged_vn
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, temp4, merged_vp, 0, 0, merged_vp)) # merged_vp = child_sb > merge_sb ? temp4 : merged_vp
+    
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, temp5, merged_send, 0, 0, merged_send)) # merged_send = child_sb > merge_sb ? temp5 : merged_send
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, temp6, merged_sbef, 0, 0, merged_sbef)) # merged_sb = child_sb > merge_sb ? temp6 : merged_sb
+
+    f.write(compute_instruction(SUBTRACTION, INVALID, COPY, 18, 14, 0, 0, 0, 0, 31)) # reg31 = reg18 - reg14
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, child_vp, temp4, 0, 0, temp4))
-    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, child_send, temp5, 0, 0, temp5))
-    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, child_sbefore, temp6, 0, 0, temp6))
+    # BE CAREFUL ON DATA MOVEMENT HERE AND REGISTER MOVEMENTS
+
+    # differenceMasks (34)
+    f.write(compute_instruction(BWISE_AND, INVALID, BWISE_NOT, 13, 17, 0, 0, 0, 0, 23)) # VPcommon = ~(leftVP & rightVP)
+    f.write(compute_instruction(BWISE_AND, INVALID, BWISE_NOT, 12, 16, 0, 0, 0, 0, 24)) # VNcommon = ~(leftVN & rightVN)
+
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 13, 23, 0, 0, 0, 0, 13)) # leftVP &= VPcommon
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 12, 24, 0, 0, 0, 0, 12)) # leftVN &= VNcommon
+
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 17, 23, 0, 0, 0, 0, 17)) # rightVP = rightVP & VPcommon
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 16, 24, 0, 0, 0, 0, 16)) # rightVN = rightVN & VNcommon
+
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 12, 17, 0, 0, 0, 0, 25)) # twosmaller = leftVN & rightVP
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
-    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, merged_vn, child_vn, 0, 0, child_vn))
-    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, merged_vp, child_vp, 0, 0, child_vp))
-    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, merged_send, child_send, 0, 0, child_send))
-    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, merged_sbef, child_sbefore, 0, 0, child_sbefore))
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 12, 0, 0, 0, 17, 0, 26)) # reg26 = ~leftVN & rightVP
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 17, 0, 0, 0, 12, 0, 27)) # reg27 = ~rightVP & leftVN
+
+    f.write(compute_instruction(BWISE_OR, INVALID, COPY, 26, 27, 0, 0, 0, 0, 26)) # onesmaller = reg26 | reg27
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 16, 0, 0, 0, 13, 0, 27)) # reg27 = ~rightVN & leftVP
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 13, 0, 0, 0, 16, 0, 28)) # reg28 = ~leftVP & rightVN
 
-    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, temp3, merged_vn, 0, 0, merged_vn))
+    f.write(compute_instruction(BWISE_OR, INVALID, COPY, 27, 28, 0, 0, 0, 0, 27)) # onebigger = reg27 | reg28
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 16, 13, 0, 0, 0, 0, 28)) # twobigger = rightVN & leftVP
+
+    f.write(compute_instruction(BWISE_OR, INVALID, COPY, 27, 28, 0, 0, 0, 0, 27)) # onebigger |= twobigger
+    f.write(compute_instruction(BWISE_OR, INVALID, COPY, 26, 25, 0, 0, 0, 0, 26)) # onesmaller |= twosmaller
+
+    # ADD THE DATA MOVEMENT scoreDifference checks for these (if regfile(22) > 0)
+    # do a for loop for the scoreDifference here
+
+    f.write(compute_instruction(ADD_I, INVALID, BWISE_NOT, 27, -1, 0, 0, 0, 0, 23)) # reg23 = ~(onebigger - 1)
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, temp4, merged_vp, 0, 0, merged_vp))
+
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 23, 27, 0, 0, 0, 0, 23)) # leastSignificant = onebigger & reg23
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, temp5, merged_send, 0, 0, merged_send))
+
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 28, 0, 0, 0, 23, 0, 24)) # reg24 = ~twoBigger & leastSignificant
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, temp7, temp8, temp6, merged_sbef, 0, 0, merged_sbef))
+
+    f.write(compute_instruction(BWISE_XOR, INVALID, COPY, 24, 27, 0, 0, 0, 0, 27)) # onebigger = onebigger ^ reg24
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 23, 0, 0, 0, 28, 0, 28)) # twobigger &= ~leastSignificant;
+
+    # if regfile27 == 0 data movement here and do the following
+    # return std::make_pair(WordConfiguration<Word>::AllOnes, WordConfiguration<Word>::AllZeros);
+    # end for loop for scoreDifference 
+
+    f.write(compute_instruction(ADD_I, INVALID, BWISE_NOT, 27, -1, 0, 0, 0, 0, 23)) # reg23 = ~(onebigger - 1)
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-  
+
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 23, 27, 0, 0, 0, 0, 23)) # leastSignificant = onebigger & reg23
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(ADD_I, COPY, BWISE_OR, 23, -1, 0, 0, 20, 0, 20)) # leftSmaller |= leastSignificant - 1
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 28, 0, 0, 0, 23, 0, 24)) # reg24 = ~twoBigger & leastSignificant
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(BWISE_XOR, INVALID, COPY, 24, 27, 0, 0, 0, 0, 27)) # onebigger = onebigger ^ reg24
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 23, 0, 0, 0, 28, 0, 28)) # twobigger &= ~leastSignificant;
+
+    # END OF if regfile22 > 0 if statement here
+
+    # start of for loop for wordsize i++ 
+    # if statement for regfile26 == 0
+    # if statement regfile27 == 0 then break DATA MOVEMENT 
+
+    f.write(compute_instruction(ADD_I, INVALID, BWISE_NOT, 27, -1, 0, 0, 0, 0, 23)) # reg23 = ~(onebigger - 1) 
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 23, 27, 0, 0, 0, 0, 23)) # leastsignificant = reg23 & onebigger
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(BWISE_OR, INVALID, COPY, 21, 23, 0, 0, 0, 0, 21)) # rightsmaller |= -leastsignificant
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    # break statement end of if regfile26 == 0 statement
+    # start if reg27 == 0 statement DATA MOVEMENT 
+
+    f.write(compute_instruction(ADD_I, INVALID, BWISE_NOT, 26, -1, 0, 0, 0, 0, 23)) # reg23 = ~(onesmaller - 1)
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 23, 26, 0, 0, 0, 0, 23)) # leastsignificant = onesmaller & reg23
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(BWISE_OR, INVALID, COPY, 20, 23, 0, 0, 0, 0, 20)) # leftsmaller |= -leastsignificant
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    #break statement end of if regfile27==0 DATA MOVEMENT 
+
+    f.write(compute_instruction(ADD_I, INVALID, BWISE_NOT, 27, -1, 0, 0, 0, 0, 29)) # reg29 = ~(onebigger - 1)
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 29, 27, 0, 0, 0, 0, 29)) # leastSignificantBigger = onebigger & reg29
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(ADD_I, INVALID, BWISE_NOT, 26, -1, 0, 0, 0, 0, 30)) # reg30 = ~(onesmaller - 1)
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 30, 26, 0, 0, 0, 0, 30)) # leastSignificantSmaller = onesmaller & reg30
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    # if reg29 > reg30 statement start DATA MOVEMENT 
+    f.write(compute_instruction(SUBTRACTION, COPY, BWISE_OR, 29, 30, 0, 0, 20, 0, 20)) # leftSmaller |= leastSignificantBigger - leastSignificantSmaller
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    # end if statement reg29 > reg30
+    # start else statement for that condition so if reg29 is NOT > reg30
+
+    f.write(compute_instruction(SUBTRACTION, COPY, BWISE_OR, 30, 29, 0, 0, 21, 0, 21)) # rightSmaller |= leastSignificantSmaller - leastSignificantBigger
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    # end else statement for the reg29 > 30 thing
+
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 28, 0, 0, 0, 29, 0, 24)) # reg24 = ~twobigger & leastSignificantBIgger
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(BWISE_XOR, INVALID, COPY, 27, 24, 0, 0, 0, 0, 27)) # onebigger ^= reg24
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 29, 0, 0, 0, 28, 0, 28)) # twobigger &= ~leastSignificantBigger
+
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 25, 0, 0, 0, 30, 0, 24)) # reg24 = ~twosmaller & leastsignificantsmaller
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(BWISE_XOR, INVALID, COPY, 26, 24, 0, 0, 0, 0, 26)) # onesmaller ^= reg24
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 30, 0, 0, 0, 25, 0, 25)) # twosmaller &= ~leastSignificantSmaller
+
+    # end of for loop for the wordsize loop and end of the program
+    # returns a pair make_pair (regfile 20, regfile21)
+    # end of differenceMasks
+
+    # continue mergeTwoSlices - 2 Input
+    # reg20 and reg21 are set to the outputs from differenceMasks
+    # mergeTwoSlices 2 Input returns left, right, reg20, reg21
+    # left and right data movement must be done before differencemasks is called to prevent corrupting register state
+    # end of mergeTwoSlices - 2 Input
+
+    # mergeTwoSlices - 4 Input (18)
+    # set reg14 to left.getscore
+    f.write(compute_instruction(COPY, POPCOUNT, SUBTRACTION, 15, 0, 0, 0, 13, 0, 25)) # scoreEnd - pc(VP) = temp6
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(COPY, POPCOUNT, ADDITION, 25, 0, 0, 0, 12, 0, 14)) # temp6 + pc(VN) = reg14
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    # set reg18 to right.getscore
+    f.write(compute_instruction(COPY, POPCOUNT, SUBTRACTION, 19, 0, 0, 0, 17, 0, 25)) # scoreEnd - pc(VP) = temp6
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(COPY, POPCOUNT, ADDITION, 25, 0, 0, 0, 16, 0, 18)) # temp6 + pc(VN) = reg18
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    # make sure to do all the data movement where reg=result.vn etc.
+    # compute here
+    f.write(compute_instruction(BWISE_OR, INVALID, COPY, 20, 21, 0, 0, 0, 0, 22)) # reg22 = leftsmaller | rightsmaller
+    f.write(compute_instruction(LSHIFT_1, INVALID, COPY, 21, 0, 0, 0, 0, 0, 23)) # reg23 = rightsmaller << 1
+
+    f.write(compute_instruction(SUBTRACTION, INVALID, COPY, 22, 23, 0, 0, 0, 0, 22)) # reg22 = ((leftSmaller | rightSmaller) - (rightSmaller << 1))
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) 
+
+    f.write(compute_instruction(BWISE_OR, BWISE_NOT, BWISE_AND, 21, 22, 0, 0, 20, 0, 22)) # reg22 = (rightsmaller | reg22) & ~leftsmaller
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) 
+
+    f.write(compute_instruction(LSHIFT_1, COPY, BWISE_AND, 21, 0, 0, 0, 20, 0, 23)) # reg23/leftreduction = reg21 << 1 & reg20
+    f.write(compute_instruction(LSHIFT_1, COPY, BWISE_AND, 20, 0, 0, 0, 21, 0, 24)) # reg24/rightreduction = reg20 << 1 & reg21
+
+    # move the value 1 into regfile 25 here in data movement 
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 21, 25, 0, 0, 0, 0, 26)) # reg26 = reg21 & reg25 (reg21 & 1)
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, 18, 14, 25, 0, 0, 0, 27)) # reg27 = reg18 > reg14 ? reg25(1) : reg0 (0)
+
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 26, 27, 0, 0, 0, 0, 28)) # reg28 = reg26 & reg27
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) 
+
+    f.write(compute_instruction(BWISE_OR, INVALID, COPY, 24, 25, 0, 0, 0, 0, 26)) # reg26 = reg24 | reg25
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) 
+
+    f.write(compute_instruction(COMP_EQUAL, INVALID, COPY, 28, 25, 26, 24, 0, 0, 24)) # reg28 == reg25 ? reg26 : reg24
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) 
+
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 23, 0, 0, 0, 12, 0, 12)) # reg12 = leftvn & ~leftreduction
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 24, 0, 0, 0, 16, 0, 16)) # reg16 = rightvn & ~rightreduction
+
+    f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 22, 0, 0, 0, 12, 0, 26)) # reg26 = ~mask & leftvn
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 16, 22, 0, 0, 0, 0, 27)) # reg27 = rightVN & mask
+
+    f.write(compute_instruction(BWISE_OR, INVALID, COPY, 26, 27, 0, 0, 0, 0, 28)) # reg28 = (left.VN & ~mask) | (right.VN & mask);
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) 
+
+    f.write(compute_instruction(BWISE_AND, BWISE_NOT, COPY, 13, 0, 0, 0, 22, 0, 26)) # reg26 = leftvp & ~mask
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 17, 22, 0, 0, 0, 0, 27)) # reg27 = rightVP & mask
+
+    f.write(compute_instruction(BWISE_OR, INVALID, COPY, 26, 27, 0, 0, 0, 0, 29)) # reg29 = (left.VP & ~mask) | (right.VP & mask);
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) 
+
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, 15, 19, 19, 15, 0, 0, 30)) # reg15 > reg19, then minimum is reg19, or else reg15. save into reg30
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) 
+
+    # do data movement to finalize the merge slices
+    #END OF mergeTwoSlices - 4 Input
 
     # Cycle 0
     f.write(compute_instruction(BWISE_OR, INVALID, INVALID, Eq, VN, 0, 0, 0, 0, Xv))  # Xv = Eq | VN
@@ -306,6 +511,20 @@ f = open("instructions/gbv/compute_instruction_v2.txt", "w")
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) # cycle 15 finished here
 
 f.close()
+
+def gbv_main_instruction():
+     # dest, src, flag_0, flag_1, imm/reg_0, reg_0(++), flag_2, flag_3, imm/reg_1, reg_1(++), opcode
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+     
+
 
 
 def pe_0_instruction():
@@ -385,8 +604,8 @@ f.close()
 
 if not os.path.exists("instructions/gbv"):
     os.makedirs("instructions/gbv")
-gbv_compute()
-bsw_main_instruction()
+gbv_compute_v3()
+gbv_main_instruction()
 pe_0_instruction()
 pe_1_instruction()
 pe_2_instruction()
