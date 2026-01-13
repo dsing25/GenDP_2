@@ -301,15 +301,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         constexpr int EXTRA_O_LOAD_ADDR = 7*MEM_BLOCK_SIZE;
         constexpr int BLOCK_0_START = 0;
         constexpr int BLOCK_1_START = MEM_BLOCK_SIZE*7 + 2;
+        constexpr int MAX_WF_LEN = 5000;
         //4 previous scores, 3 affine wavefronts, each wavefront MEM_BLOCK entries. Rotating buffer
-        static int past_wfs[4][3][MEM_BLOCK_SIZE];
-        static int past_wf_sizes[4];
+        static int past_wfs[5][3][MAX_WF_LEN];
+        static int past_wf_sizes[5];
         static std::ofstream magic_wfs_out("magic_wfs_out.txt");
-        static ModInt current_wf_i(4);
+        static ModInt current_wf_i(5);
 
         if (magic_payload == 4) {
+        //INITIALIZATION BEGINING OF TIME
             int current_wf_size = 0;
-            // begining of time initializations
             const char* pattern_seq = "GTTTAAAAGD";
             const char* text_seq = "GAAAAAAATL";
             int text_len = 10;
@@ -378,8 +379,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 pe_unit[i]->addr_regfile_unit->buffer[8] = 9;
             }
         } else if (magic_payload == 1){
-            //begining of wavefront load
+        //READ FROM MAIN MEM. WRITE TO NEXT_BLOCK_START (gr[10)
             int current_wf_size = main_addressing_register[12];
+            int next_block_start = main_addressing_register[10];
+            int block_iter = main_addressing_register[9];
             //Rest is about writing the inputs to the SPM for each pe
             auto getInputVec = [&](int prepad, int postpad, int wf_i,
                                 int affine_ind) {
@@ -404,65 +407,77 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //Now write to SPMs
             int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
             for (int i = 0; i < 4; i++) {
-                int start = i*n_diags_per_pe;
-                int end   = std::min(start + n_diags_per_pe, current_wf_size);
+                int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
+                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
+                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+                //iterates over wf id. Then add appropriate offsets to get the SPM addr
                 for (int j = start; j < end; j++) {
                     //SET O
-                    SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + j - start) = (*fullO)[j];
+                    SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullO)[j];
                     //SET M
-                    SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + j - start) = (*fullM)[j];
+                    SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullM)[j];
                     //SET I
-                    SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + j - start) = (*fullI)[j];
+                    SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullI)[j];
                     //SET D
-                    SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + j - start) = (*fullD)[j];
+                    SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullD)[j];
 
                 }
                 //fix up the extra two Os needed from previous tile
                 if (i == 0){
-                    SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR)   = MIN_INT;
-                    SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+1) = MIN_INT;
+                    SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = MIN_INT;
+                    SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = MIN_INT;
                 } else {
-                    SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR)   = (*fullO)[start - 2];
-                    SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+1) = (*fullO)[start - 1];
+                    SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = (*fullO)[start - 2];
+                    SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = (*fullO)[start - 1];
                 }
             }
 
-            //for (int i = 0; i < 4; i++) {
-            //    //Clear write buffers (for programmability)
-            //    for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set m write
-            //        SPM_unit->access_magic(i, 4 * MEM_BLOCK_SIZE + j) = 0;
-            //    for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set d write
-            //        SPM_unit->access_magic(i, 5 * MEM_BLOCK_SIZE + j) = 0;
-            //    for (int j = 0; j < MEM_BLOCK_SIZE; j++) //set i write
-            //        SPM_unit->access_magic(i, 6 * MEM_BLOCK_SIZE + j) = 0;
-            //}
+            //display input vectors
+            magic_wfs_out << "Score " << current_wf_size - 1 << ":" << std::endl << std::endl;
+            int i = 0;
+            int width = 3;
+            for (std::vector<int>* vec : {fullO, fullM, fullI, fullD}) {
+                for (i = 0; i < current_wf_size; i++) {
+                    magic_wfs_out << std::setw(width) << (*vec)[i];
+                }
+                for (; i  < MEM_BLOCK_SIZE; i++) {
+                    magic_wfs_out << std::setw(width) << 0; //lines up for easy comparison
+                }
+                magic_wfs_out << std::endl;
+            }
             delete fullO;
             delete fullM;
             delete fullI;
             delete fullD;
         } else if (magic_payload == 2){
-            //load input wavefronts
+        //INCREMENT CURRENT_WF_I
+            current_wf_i++;
         } else if (magic_payload == 3){
+        //WRITE MAIN MEM WITH RESULTS IN CURRENT_BLOCK_START (gr[8])
             int current_wf_size = main_addressing_register[12];
+            int this_block_start = main_addressing_register[8];
+            int block_iter = main_addressing_register[9];
+            int write_wf_i = current_wf_i + 1;
             //store output wavefronts
             int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
             for (int i = 0; i < 4; i++) {
-                int start = i*n_diags_per_pe;
-                int end   = std::min(start + n_diags_per_pe, current_wf_size);
+                int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
+                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
+                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
                 for (int j = start; j < end; j++) {
-                    past_wfs[current_wf_i.val][0][j] = SPM_unit->access_magic(i, 5 * MEM_BLOCK_SIZE + j - start); //set d write
-                    past_wfs[current_wf_i.val][1][j] = SPM_unit->access_magic(i, 6 * MEM_BLOCK_SIZE + j - start); //set i write
-                    past_wfs[current_wf_i.val][2][j] = SPM_unit->access_magic(i, 4 * MEM_BLOCK_SIZE + j - start); //set m write
+                    past_wfs[write_wf_i][0][j] = SPM_unit->access_magic(i, 5 * MEM_BLOCK_SIZE + this_block_start + j - start); //set d write
+                    past_wfs[write_wf_i][1][j] = SPM_unit->access_magic(i, 6 * MEM_BLOCK_SIZE + this_block_start + j - start); //set i write
+                    past_wfs[write_wf_i][2][j] = SPM_unit->access_magic(i, 4 * MEM_BLOCK_SIZE + this_block_start + j - start); //set m write
                 }
             }
-            past_wf_sizes[current_wf_i.val] = current_wf_size;
+            past_wf_sizes[write_wf_i] = current_wf_size;
 
             //display the last computed wavefront
             int i = 0;
             int width = 3;
             for (int affine_id : {2,0,1}) {
-                for (i = 0; i < past_wf_sizes[current_wf_i.val]; i++) {
-                    magic_wfs_out << std::setw(width) << past_wfs[current_wf_i.val][affine_id][i];
+                for (i = 0; i < past_wf_sizes[write_wf_i]; i++) {
+                    magic_wfs_out << std::setw(width) << past_wfs[write_wf_i][affine_id][i];
                 }
                 for (; i  < MEM_BLOCK_SIZE; i++) {
                     magic_wfs_out << std::setw(width) << 0; //lines up for easy comparison
@@ -472,68 +487,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         } else {
             fprintf(stderr, "ERROR: PE_ARRAY PC=%d cycle=%d unknown magic instruction payload %d.\n", *PC, cycle, magic_payload);
             exit(-1);
-        }
-
-        } else {
-            //first display the SPM. Then write the results back to the past_wfs
-            //int n_pes_to_show = 1;
-            //for (int i = 0; i < n_pes_to_show; i++) {
-            //    printf("\nSPM of PE[%d] at score %d:\n", i, current_wf_size - 1);
-            //    SPM_units[i]->show_data(0, MEM_BLOCK_SIZE*7, 32);
-            //}
-            printf("\nSPM of PE[1] at score %d:\n", current_wf_size - 1);
-            SPM_unit->show_data(0, MEM_BLOCK_SIZE*7, 32);
-
-
-            //write results to memory
-            current_wf_i++;
-            //TILE across PES
-            int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
-            for (int i = 0; i < 4; i++) {
-                int start = i*n_diags_per_pe;
-                int end   = std::min(start + n_diags_per_pe, current_wf_size);
-                for (int j = start; j < end; j++) {
-                    past_wfs[current_wf_i.val][0][j] = SPM_unit->access_magic(i, 5 * MEM_BLOCK_SIZE + j - start); //set d write
-                    past_wfs[current_wf_i.val][1][j] = SPM_unit->access_magic(i, 6 * MEM_BLOCK_SIZE + j - start); //set i write
-                    past_wfs[current_wf_i.val][2][j] = SPM_unit->access_magic(i, 4 * MEM_BLOCK_SIZE + j - start); //set m write
-                }
-            }
-            past_wf_sizes[current_wf_i.val] = current_wf_size;
-
-            //display the last computed wavefront
-            int i = 0;
-            int width = 3;
-            for (int affine_id : {2,0,1}) {
-                for (i = 0; i < past_wf_sizes[current_wf_i.val]; i++) {
-                    magic_wfs_out << std::setw(width) << past_wfs[current_wf_i.val][affine_id][i];
-                }
-                for (; i  < MEM_BLOCK_SIZE; i++) {
-                    magic_wfs_out << std::setw(width) << 0; //lines up for easy comparison
-                }
-                magic_wfs_out << std::endl;
-            }
-            magic_wfs_out << std::endl;
-
-            current_wf_size += 2;
-        }
-
-        //print the wavefront size to std err
-        fprintf(stderr, "Magic instruction at PE array PC=%d cycle=%d. Current wavefront size=%d\n", *PC, cycle, current_wf_size);
-
-
-
-        //display input vectors
-        magic_wfs_out << "Score " << current_wf_size - 1 << ":" << std::endl << std::endl;
-        int i = 0;
-        int width = 3;
-        for (std::vector<int>* vec : {fullO, fullM, fullI, fullD}) {
-            for (i = 0; i < current_wf_size; i++) {
-                magic_wfs_out << std::setw(width) << (*vec)[i];
-            }
-            for (; i  < MEM_BLOCK_SIZE; i++) {
-                magic_wfs_out << std::setw(width) << 0; //lines up for easy comparison
-            }
-            magic_wfs_out << std::endl;
         }
 
         (*PC)++;

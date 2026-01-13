@@ -19,7 +19,7 @@ COMPUTE_I = COMPUTE_D + SPM_BANDWIDTH // 2 + 1 #1 is halts
 #MEMORY LOCATIONS
 BANK_SIZE = 512
 MEM_BLOCK_SIZE = 32 # in words
-MEM_BLOCK_SIZE_LG2 = log(MEM_BLOCK_SIZE, 2) # in words
+MEM_BLOCK_SIZE_LG2 = int(log(MEM_BLOCK_SIZE, 2)+1e-9) # in words
 BLOCK_0_START = 0
 BLOCK_1_START = MEM_BLOCK_SIZE*7 + 2
 PATTERN_START = BLOCK_1_START + MEM_BLOCK_SIZE*7 + 2
@@ -27,6 +27,8 @@ SEQ_LEN_ALLOC = (BANK_SIZE-PATTERN_START) // 2
 TEXT_START = PATTERN_START + SEQ_LEN_ALLOC
 SWIZZLED_PATTERN_START = PATTERN_START << 2 # need to reverse swizzle to hit 226 at the start
 SWIZZLED_TEXT_START = TEXT_START << 2 
+ALIGN_B0_PC = 7
+ALIGN_B1_PC = 48
 
 
 
@@ -51,11 +53,14 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, 0, 0, 0, 9, 0, 0, 0, 0, 0, si))                            # gr[9] = 0
     #BLOCK INIT
     #current block
-    f.write(data_movement_instruction(gr, 0, 0, 0, 8, 0, 0, 0, BLOCK_0_START, 0, si))                 # gr[8] = BLOCK_0_START
+    f.write(data_movement_instruction(gr, 0, 0, 0, 8, 0, 0, 0, BLOCK_1_START, 0, si))                # gr[8] = BLOCK_1_START
     #next block
-    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, BLOCK_1_START, 0, si))                 # gr[10] = BLOCK_1_START
-    #load first wf (and do other magic initialization)
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, BLOCK_0_START, 0, si))               # gr[10] = BLOCK_0_START
+    #load o, m, i, d inputs to next block
     f.write(write_magic(1));
+    #flip blocks
+    f.write(data_movement_instruction(gr, 0, 0, 0, 8, 0, 0, 0, BLOCK_0_START, 0, si))                 # gr[8] = BLOCK_0_START
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, BLOCK_1_START, 0, si))                 # gr[10] = BLOCK_1_START
     #set PE to INIT_WF
     f.write(data_movement_instruction(gr, gr, 0, 0, INIT_WF, 0, 0, 0, 0, 0, set_PC))                 # PE_PC = INIT_WF
     #send over the wf
@@ -66,14 +71,18 @@ def wfa_main_instruction():
 
 #BLOCK LOOP
     #load inputs o,m,i,d to NEXT_BLOCK magic(2)
-    f.write(write_magic(2));
+    f.write(write_magic(1));
     #TODO wait lsq
     #wait pe
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # bne 1 gr[13] 0
     #set PE to align next block
-    f.write(data_movement_instruction(gr, gr, 0, 0, ALIGN_B0, 0, 0, 0, 0, 0, set_PC))                # PE_PC = ALIGN_B1
-    f.write(data_movement_instruction(0, 0, 0, 0, 1, 0, 1, 0, 0, 9, beq))                            # beq gr[0] gr[8] 1
-    f.write(data_movement_instruction(gr, gr, 0, 0, ALIGN_B1, 0, 0, 0, 0, 0, set_PC))                # PE_PC = ALIGN_B0
+    #TODO since the PE will not get to this stage yet, we don't actually set pc
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
+    #f.write(data_movement_instruction(gr, gr, 0, 0, ALIGN_B1_PC, 0, 0, 0, 0, 0, set_PC))                # PE_PC = ALIGN_B1_PC
+    #f.write(data_movement_instruction(0, 0, 0, 0, 1, 0, 1, 0, 0, 8, beq))                            # beq gr[0] gr[8] 1
+    #f.write(data_movement_instruction(gr, gr, 0, 0, ALIGN_B0_PC, 0, 0, 0, 0, 0, set_PC))                # PE_PC = ALIGN_B0_PC
     #load results m,i,d of THIS_BLOCK magic(3)
     f.write(write_magic(3));
     #TODO wait lsq
@@ -87,28 +96,11 @@ def wfa_main_instruction():
 #END BLOCK LOOP. NEW WF
     #TODO check end condition
     f.write(data_movement_instruction(gr, gr, 0, 0, 12, 0, 0, 0, 2, 12, addi))                         # gr[12]+=2
+    #incrememtn current wavefront
+    f.write(write_magic(2));
     #JMP LOOP PROCESS_WF
-    f.write(data_movement_instruction(gr, gr, 0, 0, -22, 0, 0, 0, 0, 0, beq))                        # beq 0 0 -22
+    f.write(data_movement_instruction(gr, gr, 0, 0, -25, 0, 0, 0, 0, 0, beq))                        # beq 0 0 -25
     
-
-#FOR EACH WAVEFRONT
-    # calculate number of iterations
-    #sync until PES are done 
-    f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # bne 1 gr[13] 0
-    # send number of iterations
-    f.write(write_magic(1));
-    f.write(data_movement_instruction(gr, gr, 0, 0, INIT_WF, 0, 0, 0, 0, 0, set_PC))           # PE_PC = INIT_WF
-    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 12, 0, mv))                     # out = gr[12]
-    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 12, 0, mv))                     # out = gr[12]
-    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 12, 0, mv))                     # out = gr[12]
-    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 12, 0, mv))                     # out = gr[12]
-
-
-    # increment wf_len
-    f.write(data_movement_instruction(gr, gr, 0, 0, 12, 0, 0, 0, 2, 12, addi))                         # gr[12]+=2
-    #JMP ALIGN_LOOP
-    f.write(data_movement_instruction(gr, gr, 0, 0, -8, 0, 0, 0, 0, 0, beq))                        # beq 0 0 -8
-
     f.close()
 
 def wfa_compute():
@@ -202,12 +194,17 @@ def pe_instruction(pe_id):
         f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 5*MEM_BLOCK_SIZE+block_start, 0, si))         # gr[5] d write
         f.write(data_movement_instruction(gr, gr, 1, 0, 7, 0, 0, 0, 1, 7, addi))                     # gr[7] = gr[7] + 1
         f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, 6*MEM_BLOCK_SIZE+block_start, 0, si))         # gr[6] i write
-        for _ in range(pe_id):
-            f.write(data_movement_instruction(gr, gr, 0, 0, 14, 0, 0, 0, 14, 7, add))                # gr[14] = gr[14] + gr[7]
-            f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                   # No-op
-        if pe_id == 3: #fewer iterations for last PE (reduces memory traffic)
-            f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 12, 14, sub))                # gr[7] = gr[12] - gr[14]
-            f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                   # No-op
+        for i in range(N_PES):
+            if i < pe_id:
+                f.write(data_movement_instruction(gr, gr, 0, 0, 14, 0, 0, 0, 14, 7, add))                # gr[14] = gr[14] + gr[7]
+                f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                   # No-op
+            else:
+                f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                   # No-op
+                f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                   # No-op
+        #TODO this might optimize
+        #if pe_id == 3: #fewer iterations for last PE (reduces memory traffic)
+        #    f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 12, 14, sub))                # gr[7] = gr[12] - gr[14]
+        #    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                   # No-op
     #BLOCK_LOOP NEXT
         #Load I; No-op
         f.write(data_movement_instruction(gr, gr, 1, 0, 2, 0, 0, 0, SPM_BANDWIDTH, 2, addi))         # gr[2] = gr[2] + SPM_BANDWIDTH
@@ -251,7 +248,6 @@ def pe_instruction(pe_id):
         f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, 4*MEM_BLOCK_SIZE+block_start, 9, mv))       # gr[1]=SPM[gr[9] + 4*MEM_BLOCK_SIZE+block_start]
         f.write(data_movement_instruction(gr, gr, 1, 0, 2, 0, 1, 0, 9, 14, add))                     # gr[2] = gr[9] + gr[14]
 
-        f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                     # bne 1 gr[13] 0
         f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 2, 15, sub))                     # gr[2] = gr[2] - gr[15]
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
         f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 1, 2, sub))                      # gr[2] = gr[1] - gr[2]
@@ -268,10 +264,11 @@ def pe_instruction(pe_id):
         f.write(data_movement_instruction(gr, SPM, 0, 0, 3, 0, 0, 0, SWIZZLED_PATTERN_START, 2, mvi))# gr[3] = SPM[gr[2]+PATTERN_START]
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
-        f.write(data_movement_instruction(gr, gr, 1, 0, 1, 0, 0, 0, 1, 1, addi))                     # gr[1] = gr[1] + 1
+        #OPTIMIZATION Should be able to hoist this into the branches. Will give a good deal of perf
         f.write(data_movement_instruction(gr, SPM, 0, 0, 5, 0, 0, 0, SWIZZLED_TEXT_START, 1, mvi))   # gr[5] = SPM[gr[1]+TEXT_START]
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
+        f.write(data_movement_instruction(gr, gr, 1, 0, 1, 0, 0, 0, 1, 1, addi))                     # gr[1] = gr[1] + 1
         f.write(data_movement_instruction(0, 0, 0, 0, -4, 0, 1, 0, 3, 5, beq))                       # beq gr[3] gr[5] -4
         f.write(data_movement_instruction(0, 0, 0, 0, -4, 0, 1, 0, 3, 5, beq))                       # beq gr[3] gr[5] -4
     #FINISH EXTEND MATCH LOOP
