@@ -309,10 +309,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         static ModInt current_wf_i(5);
 
         if (magic_payload == 4) {
-            //TODO gotta remove this eventually
-            for (int i = 0 ; i < SPM_unit->buffer_size; i++){
-                SPM_unit->buffer[i] = -99;
-            }
         //INITIALIZATION BEGINING OF TIME
             int current_wf_size = 0;
             const char* pattern_seq = "GTTTAAAAGGTTTAAAAGGTTTAAAAGGTTTAAAAGGTTD";
