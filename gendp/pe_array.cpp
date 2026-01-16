@@ -309,12 +309,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         static ModInt current_wf_i(5);
 
         if (magic_payload == 4) {
+            //TODO gotta remove this eventually
+            for (int i = 0 ; i < SPM_unit->buffer_size; i++){
+                SPM_unit->buffer[i] = -99;
+            }
         //INITIALIZATION BEGINING OF TIME
             int current_wf_size = 0;
-            const char* pattern_seq = "GTTTAAAAGD";
-            const char* text_seq = "GAAAAAAATL";
-            int text_len = 10;
-            int pattern_len = 10;
+            const char* pattern_seq = "GTTTAAAAGGTTTAAAAGGTTTAAAAGGTTTAAAAGGTTD";
+            const char* text_seq = "GAAAAAAATGAAAAAAATGAAAAAAATGAAAAAAATGAAL";
+            int text_len = 40;
+            int pattern_len = 40;
             int first_extend_len = 1;
             //loading the first wavefront. Initialization of this alignment
             //initialization logic
@@ -375,8 +379,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
             // Initialize register values for each PE
             for (int i = 0; i < 4; i++) {
-                pe_unit[i]->addr_regfile_unit->buffer[13] = 9;
-                pe_unit[i]->addr_regfile_unit->buffer[8] = 9;
+                pe_unit[i]->addr_regfile_unit->buffer[13] = text_len;
+                pe_unit[i]->addr_regfile_unit->buffer[8] = pattern_len;
             }
         } else if (magic_payload == 1){
         //READ FROM MAIN MEM. WRITE TO NEXT_BLOCK_START (gr[10)
@@ -451,6 +455,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             delete fullD;
         } else if (magic_payload == 2){
         //INCREMENT CURRENT_WF_I
+            printf("score %d:\n", past_wf_sizes[current_wf_i]+3);
             current_wf_i++;
         } else if (magic_payload == 3){
         //WRITE MAIN MEM WITH RESULTS IN CURRENT_BLOCK_START (gr[8])
