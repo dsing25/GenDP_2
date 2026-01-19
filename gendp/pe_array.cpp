@@ -391,6 +391,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
             magic_wfs_out << "sdfsdf"; //helps vimdiff
         } else if (magic_payload == 1){
+            int (&regfile)[16] = main_addressing_register;
         //READ FROM MAIN MEM. WRITE TO NEXT_BLOCK_START (gr[10)
             int current_wf_size = main_addressing_register[12];
             int next_block_start = main_addressing_register[10];
@@ -432,7 +433,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             std::vector<int>* fullO = getInputVec(3, 5, current_wf_i - 3, 2);
             std::vector<int>* fullM = getInputVec(2, 2, current_wf_i - 1, 2);
             std::vector<int>* fullI = getInputVec(2, 0, current_wf_i, 1);
-            std::vector<int>* fullD = getInputVec(0, 2, current_wf_i, 0);
+            //std::vector<int>* fullD = getInputVec(0, 2, current_wf_i, 0);
 
 
             //Now write to SPMs
@@ -478,66 +479,90 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             delete fullO;
             delete fullM;
             delete fullI;
-            delete fullD;
+            //delete fullD;
 
-            //Write the fullDs
+            /*
+             * Preconditions:
+             *      gr4: diags per pe
+             *      gr3: current_wf_i
+             *      gr1: points to SPM row we're writing to
+             *      gr9: holds the iteration
+             *      gr12: holds wavefront len
+             *   prepadding: the number of MIN_INTS to put at the start of wf
+             *   postpadding: number of MIN_INTS to put at end of wf
+             *   affineInd: {D0:I1:H2}. For wf calculation
+             * Postconditions:
+             *      The wavefront located in 
+             *      gr11:destroyed. Used as a tmp
+             *      gr2: destroyed.
+             *      gr1: preserved
+             *      gr5: destroyed. Used as loop end
+             */
+            auto loadSpmRegMapped = [&](int prepadding, int postpadding, int affineInd){
+                //offset into mainMem = wf_i*3*max_wf_len + affine_ind*max_wf_len + block_iter *block_size
+                regfile[11] = 0 * MAX_WF_LEN; //affine_ind * wflen
+                regfile[2] = regfile[11]; //initial set = instead of +=
+                regfile[11] = regfile[3];
+                regfile[11] *= MAX_WF_LEN;
+                //multiply by 3
+                for (int i = 0; i < 3; i++){
+                    regfile[2] += regfile[11];
+                }
+                regfile[11] = regfile[9] * MEM_BLOCK_SIZE; //block iter * block size
+                regfile[2] += regfile[11];
+                //padding
+                int prepad_length=0;
+                int postpad_len=2;
+                for (int j = 0; j < prepad_length; j++){
+                    for (int i = 0; i < 4; i++){
+                        SPM_unit->buffer[regfile[1]+SPM_BANK_SIZE*i]   = MIN_INT;
+                    }
+                    regfile[1] = regfile[1]+1;
+                }
+                //end point define
+                regfile[5] = regfile[1] + regfile[4];
+                //real for loop
+                while (regfile[1] < regfile[5]){
+                    regfile[11] = regfile[2]; //temp cache
+                    for (int i = 0; i < 4; i++){
+                        mvdq(regfile[1]+SPM_BANK_SIZE*i, regfile[11], true);
+                        regfile[11] += regfile[4];
+                    }
+                    regfile[1] += 8;
+                    regfile[2] += 8;
+                }
+                //We may have overshot, so we gotta reset to true end of last pe
+                regfile[1] = regfile[5] - regfile[4]; //reset to base
+                //using gr11 to point to the cell we want to write to
+                regfile[11] = regfile[12] - regfile[4];
+                regfile[11] -= regfile[4];
+                regfile[11] -= regfile[4];
+                regfile[11] += regfile[1];
+                //gr1 now holds remainder
+                regfile[11] -= (postpad_len);
 
-            int (&regfile)[16] = main_addressing_register;
+                //postpad
+                for (int j = 0; j < postpad_len; j++){
+                    //for (int i = 0; i < 4; i++){
+                        SPM_unit->buffer[regfile[11]+SPM_BANK_SIZE*3]   = MIN_INT; //only for last
+                        std::cout << "zkn " << regfile[11] << std::endl;
+                    //}
+                    regfile[11] = regfile[11]+1;
+                }
+
+            };
 
             //diags_per_pe
             regfile[4] = regfile[12] >> 2;
             regfile[4] += 1;
-            //offset into PEs
-            regfile[1] = 3*MEM_BLOCK_SIZE + regfile[10];
-            //offset into mainMem = wf_i*3*max_wf_len + affine_ind*max_wf_len + block_iter *block_size
-            regfile[10] = 0 * MAX_WF_LEN; //affine_ind * wflen
-            regfile[2] = regfile[10]; //initial set = instead of +=
-            regfile[10] = regfile[3];
-            regfile[10] *= MAX_WF_LEN;
-            //multiply by 3
-            for (int i = 0; i < 3; i++){
-                regfile[2] += regfile[10];
-            }
-            regfile[10] = regfile[9] * MEM_BLOCK_SIZE; //block iter * block size
-            regfile[2] += regfile[10];
-            //padding
-            int prepad_length=0;
-            int postpad_len=2;
-            for (int j = 0; j < prepad_length; j++){
-                for (int i = 0; i < 4; i++){
-                    SPM_unit->buffer[regfile[1]+SPM_BANK_SIZE*i]   = MIN_INT;
-                }
-                regfile[1] = regfile[1]+1;
-            }
-            //end point define
-            regfile[5] = regfile[1] + regfile[4];
-            //real for loop
-            while (regfile[1] < regfile[5]){
-                regfile[10] = regfile[2]; //temp cache
-                for (int i = 0; i < 4; i++){
-                    mvdq(regfile[1]+SPM_BANK_SIZE*i, regfile[10], true);
-                    regfile[10] += regfile[4];
-                }
-                regfile[1] += 8;
-                regfile[2] += 8;
-            }
-            //We may have overshot, so we gotta reset to true end of last pe
-            regfile[1] = regfile[5] - regfile[4]; //reset to base
-            regfile[10] = regfile[12] - regfile[4];
-            regfile[10] -= regfile[4];
-            regfile[10] -= regfile[4];
-            regfile[1] += regfile[10];
-            //gr1 now holds remainder
-            regfile[1] -= (postpad_len);
+            //Write fullIs
+            //regfile[1] = 2*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
+            //loadSpmRegMapped(2,0,1);
+            //Write the fullDs
+            regfile[1] = 3*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
+            loadSpmRegMapped(0, 2, 0);
 
-            //postpad
-            for (int j = 0; j < postpad_len; j++){
-                //for (int i = 0; i < 4; i++){
-                    SPM_unit->buffer[regfile[1]+SPM_BANK_SIZE*3]   = MIN_INT; //only for last
-                    std::cout << "zkn " << regfile[1] << std::endl;
-                //}
-                regfile[1] = regfile[1]+1;
-            }
+
 
             //display
             for (int i = 0; i < 4; i++) {
