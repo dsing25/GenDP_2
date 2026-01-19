@@ -319,16 +319,21 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //loading the first wavefront. Initialization of this alignment
             //initialization logic
             memset(past_wfs, 0, sizeof(past_wfs));
+            for (int a = 0; a < 5; a++)
+                for (int b = 0; b < 3; b++)
+                    for (int c = 0; c< MAX_WF_LEN; c++)
+                        past_wfs[a][b][c] = -42;
+            constexpr int INITIAL_WF_LEN = MEM_BLOCK_SIZE;
             //WF 0
             past_wf_sizes[current_wf_i] = 1;
-            for (int j = 0; j < MEM_BLOCK_SIZE; j++) {
+            for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
                     past_wfs[current_wf_i][k][j] = -99;
                 }
             }
             current_wf_i++; //0 wf all zero
             //WF 1
-            for (int j = 0; j < MEM_BLOCK_SIZE; j++) {
+            for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
                     past_wfs[current_wf_i][k][j] = -99;
                 }
@@ -336,7 +341,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             past_wf_sizes[current_wf_i] = 1;
             current_wf_i++; //2 wf all zero
             //WF 2
-            for (int j = 0; j < MEM_BLOCK_SIZE; j++) {
+            for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
                     past_wfs[current_wf_i][k][j] = -99;
                 }
@@ -345,9 +350,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             past_wfs[current_wf_i][2][0] = first_extend_len; //middle m wavefront
             current_wf_i++; //4 should have a 1, but it's never used
             //WF 3
-            for (int j = 0; j < MEM_BLOCK_SIZE; j++) {
+            for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
                     past_wfs[current_wf_i][k][j] = -99;
+                }
+            }
+            //Extra: first postpadding misses cause postpad is not on pe3. this lets us ignore that
+            for (int j = 0; j < INITIAL_WF_LEN; j++) {
+                for (int k = 0; k < 3; k++) {
+                    past_wfs[current_wf_i+1][k][j] = -99;
                 }
             }
             past_wf_sizes[current_wf_i] = 3;
@@ -378,11 +389,18 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 pe_unit[i]->addr_regfile_unit->buffer[13] = text_len;
                 pe_unit[i]->addr_regfile_unit->buffer[8] = pattern_len;
             }
+            magic_wfs_out << "sdfsdf"; //helps vimdiff
         } else if (magic_payload == 1){
         //READ FROM MAIN MEM. WRITE TO NEXT_BLOCK_START (gr[10)
             int current_wf_size = main_addressing_register[12];
             int next_block_start = main_addressing_register[10];
             int block_iter = main_addressing_register[9];
+            main_addressing_register[3] = current_wf_i;
+            int width = 3; // for display
+
+
+            
+
             //Rest is about writing the inputs to the SPM for each pe
             auto getInputVec = [&](int prepad, int postpad, int wf_i,
                                 int affine_ind) {
@@ -399,10 +417,23 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     vec->push_back(-99);
                 return vec;
             };
+            auto mvdq = [&](int dst, int src, bool toSPM){
+                //TODO this is not realistic. We need to access blocks not arbitrary location.
+                std::cout << dst << " " << src << std::endl;
+                for (int i =0; i < 8; i++){
+                    if (toSPM){
+                        SPM_unit->buffer[dst+i] = ((int*)past_wfs)[src+i];
+                    } else {
+                        ((int*)past_wfs)[dst+i] = SPM_unit->buffer[src+i];
+                    }
+                }
+            };
+
             std::vector<int>* fullO = getInputVec(3, 5, current_wf_i - 3, 2);
             std::vector<int>* fullM = getInputVec(2, 2, current_wf_i - 1, 2);
             std::vector<int>* fullI = getInputVec(2, 0, current_wf_i, 1);
             std::vector<int>* fullD = getInputVec(0, 2, current_wf_i, 0);
+
 
             //Now write to SPMs
             int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
@@ -419,7 +450,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     //SET I
                     SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullI)[j];
                     //SET D
-                    SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullD)[j];
+            //        SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullD)[j];
 
                 }
                 //fix up the extra two Os needed from previous tile
@@ -431,24 +462,95 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = (*fullO)[start - 1];
                 }
             }
-
             //display input vectors
             magic_wfs_out << "Score " << current_wf_size - 1 << ":" << std::endl << std::endl;
-            int i = 0;
-            int width = 3;
-            for (std::vector<int>* vec : {fullO, fullM, fullI, fullD}) {
-                for (i = 0; i < current_wf_size; i++) {
-                    magic_wfs_out << std::setw(width) << (*vec)[i];
+            int k = 0;
+            for (std::vector<int>* vec : {fullO, fullM, fullI/*, fullD*/}) {
+                for (k = 0; k < current_wf_size; k++) {
+                    magic_wfs_out << std::setw(width) << (*vec)[k];
                 }
-                for (; i  < MEM_BLOCK_SIZE; i++) {
+                for (; k  < MEM_BLOCK_SIZE; k++) {
                     magic_wfs_out << std::setw(width) << 0; //lines up for easy comparison
                 }
                 magic_wfs_out << std::endl;
             }
+
             delete fullO;
             delete fullM;
             delete fullI;
             delete fullD;
+
+            //Write the fullDs
+
+            int (&regfile)[16] = main_addressing_register;
+
+            //diags_per_pe
+            regfile[4] = regfile[12] >> 2;
+            regfile[4] += 1;
+            //offset into PEs
+            regfile[1] = 3*MEM_BLOCK_SIZE + regfile[10];
+            //offset into mainMem = wf_i*3*max_wf_len + affine_ind*max_wf_len + block_iter *block_size
+            regfile[10] = 0 * MAX_WF_LEN; //affine_ind * wflen
+            regfile[2] = regfile[10]; //initial set = instead of +=
+            regfile[10] = regfile[3];
+            regfile[10] *= MAX_WF_LEN;
+            //multiply by 3
+            for (int i = 0; i < 3; i++){
+                regfile[2] += regfile[10];
+            }
+            regfile[10] = regfile[9] * MEM_BLOCK_SIZE; //block iter * block size
+            regfile[2] += regfile[10];
+            //padding
+            int prepad_length=0;
+            int postpad_len=2;
+            for (int j = 0; j < prepad_length; j++){
+                for (int i = 0; i < 4; i++){
+                    SPM_unit->buffer[regfile[1]+SPM_BANK_SIZE*i]   = MIN_INT;
+                }
+                regfile[1] = regfile[1]+1;
+            }
+            //end point define
+            regfile[5] = regfile[1] + regfile[4];
+            //real for loop
+            while (regfile[1] < regfile[5]){
+                regfile[10] = regfile[2]; //temp cache
+                for (int i = 0; i < 4; i++){
+                    mvdq(regfile[1]+SPM_BANK_SIZE*i, regfile[10], true);
+                    regfile[10] += regfile[4];
+                }
+                regfile[1] += 8;
+                regfile[2] += 8;
+            }
+            //We may have overshot, so we gotta reset to true end of last pe
+            regfile[1] = regfile[5] - regfile[4]; //reset to base
+            regfile[10] = regfile[12] - regfile[4];
+            regfile[10] -= regfile[4];
+            regfile[10] -= regfile[4];
+            regfile[1] += regfile[10];
+            //gr1 now holds remainder
+            regfile[1] -= (postpad_len);
+
+            //postpad
+            for (int j = 0; j < postpad_len; j++){
+                //for (int i = 0; i < 4; i++){
+                    SPM_unit->buffer[regfile[1]+SPM_BANK_SIZE*3]   = MIN_INT; //only for last
+                    std::cout << "zkn " << regfile[1] << std::endl;
+                //}
+                regfile[1] = regfile[1]+1;
+            }
+
+            //display
+            for (int i = 0; i < 4; i++) {
+                int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
+                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
+                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+                //iterates over wf id. Then add appropriate offsets to get the SPM addr
+                for (int j = start; j < end; j++) {
+                    magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start);
+                }
+            }
+            magic_wfs_out << std::endl;
+
         } else if (magic_payload == 2){
         //INCREMENT CURRENT_WF_I
             printf("score %d:\n", past_wf_sizes[current_wf_i]+3);
