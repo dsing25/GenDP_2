@@ -511,27 +511,30 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 regfile[11] = regfile[9] * MEM_BLOCK_SIZE; //block iter * block size
                 regfile[2] += regfile[11];
 
-                //padding - only write to PE 0 for prepad
+                //prepad, we do one full pass through here
                 for (int j = 0; j < prepad_len; j++){
                     SPM_unit->buffer[regfile[1]+j+SPM_BANK_SIZE*0] = MIN_INT;
                 }
-                //end point define - don't increment regfile[1] for prepad
+                //end point define - must be set BEFORE incrementing regfile[1]
                 regfile[5] = regfile[1] + regfile[4];
-                //real for loop
+                mvdq(regfile[1]+prepad_len, regfile[2], true); //ignore last prepad_len of this
+                regfile[2] -= prepad_len;
+                regfile[11] = regfile[2] + regfile[4];
+                mvdq(regfile[1]+SPM_BANK_SIZE*1,regfile[11],true); //pe1
+                regfile[11] += regfile[4];
+                mvdq(regfile[1]+SPM_BANK_SIZE*2,regfile[11],true); //pe1
+                regfile[11] += regfile[4];
+                mvdq(regfile[1]+SPM_BANK_SIZE*3,regfile[11],true); //pe1
+                regfile[1] += 8;
+                regfile[2] += 8;
+
+                //now we do the remaining passes (if there are any)
                 while (regfile[1] < regfile[5]){
                     regfile[11] = regfile[2]; //temp cache
                     for (int i = 0; i < 4; i++){
-                        if (i == 0 && prepad_len > 0) {
-                            // PE 0 with prepad: only copy data that fits after prepad
-                            int data_count = regfile[4] - prepad_len;
-                            for (int j = 0; j < data_count && j < 8; j++) {
-                                SPM_unit->buffer[regfile[1]+prepad_len+j+SPM_BANK_SIZE*0] = ((int*)past_wfs)[regfile[11]+j];
-                            }
-                            regfile[11] += data_count;
-                        } else {
-                            mvdq(regfile[1]+SPM_BANK_SIZE*i, regfile[11], true);
+                        mvdq(regfile[1]+SPM_BANK_SIZE*i, regfile[11], true);
+                        if (i != 4) //save a cycle don't need inc
                             regfile[11] += regfile[4];
-                        }
                     }
                     regfile[1] += 8;
                     regfile[2] += 8;
