@@ -298,9 +298,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
     if (is_magic) {
         constexpr int MEM_BLOCK_SIZE = 32;
+        constexpr int PADDING_SIZE = 30;
         constexpr int EXTRA_O_LOAD_ADDR = 7*MEM_BLOCK_SIZE;
         constexpr int BLOCK_0_START = 0;
-        constexpr int BLOCK_1_START = MEM_BLOCK_SIZE*7 + 2;
+        constexpr int BLOCK_1_START = MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE;
         constexpr int MAX_WF_LEN = 5000;
         constexpr int N_WFS = 5;
         //4 previous scores, 3 affine wavefronts, each wavefront MEM_BLOCK entries. Rotating buffer

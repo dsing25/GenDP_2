@@ -1234,6 +1234,80 @@ f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
 
 ---
 
+## Scratchpad Memory Configuration
+
+### Changing the Scratchpad Bank Size
+
+The scratchpad memory size is parameterized but requires coordinated changes across multiple files. To change the bank size (currently 1024 words per bank), you must update the following parameters:
+
+**1. Update System Constants (sys_def.h)**
+- `SPM_BANK_SIZE` - Words per bank (e.g., 1024)
+- `SPM_ADDR_NUM` - Total words = `SPM_BANK_SIZE * 4` (e.g., 4096 for 4 PEs)
+- `ADDR_LEN` - Address bits = `log2(SPM_ADDR_NUM)` (e.g., 12 bits for 4096 addresses)
+- `PATTERN_START` - Start address for pattern DNA sequence storage
+- `TEXT_START` - Start address for text DNA sequence storage
+
+**2. Update Memory Layout (wfa_instruction_generator.py)**
+- `BANK_SIZE` - Must match `SPM_BANK_SIZE` from sys_def.h
+- `BLOCK_1_START` - Offset to second memory block = `MEM_BLOCK_SIZE*7 + PADDING_SIZE + 2`
+- `PATTERN_START` - Must match sys_def.h value = `BLOCK_1_START + MEM_BLOCK_SIZE*7 + PADDING_SIZE + 2`
+
+The following are automatically derived from the above:
+- `SEQ_LEN_ALLOC` - Available space for sequences = `(BANK_SIZE - PATTERN_START) // 2`
+- `TEXT_START` - Text start = `PATTERN_START + SEQ_LEN_ALLOC`
+- `SWIZZLED_PATTERN_START` - Swizzled address for pattern (for mvi instruction)
+- `SWIZZLED_TEXT_START` - Swizzled address for text (for mvi instruction)
+
+**3. Update Magic Instruction Constants (pe_array.cpp)**
+- `PADDING_SIZE` - Padding section size = 30 (words, adjustable)
+- `EXTRA_O_LOAD_ADDR` - Padding section offset = `7*MEM_BLOCK_SIZE` (fixed at 224, independent of PADDING_SIZE)
+- `BLOCK_1_START` - Must match Python value = `MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE`
+
+### Memory Block Structure
+
+Each memory block in the WFA algorithm contains 7 core sections of `MEM_BLOCK_SIZE` words (32 words each) plus a PADDING section:
+
+**Block Layout (254 words + 2-word gap):**
+- Section 0: Open (O) wavefront values - 32 words
+- Section 1: Match (M) input values - 32 words
+- Section 2: Insertion (I) input values - 32 words
+- Section 3: Deletion (D) input values - 32 words
+- Section 4: Match (M) output values - 32 words
+- Section 5: Deletion (D) output values - 32 words
+- Section 6: Insertion (I) output values - 32 words
+- PADDING (reserved space) - 30 words
+- 2-word gap - reserved space
+
+**Current Configuration (BANK_SIZE = 1024):**
+- Block 0: 254 words (7×32 + 30 padding) + 2 words (gap) = 256 words total
+- Block 1: 254 words (7×32 + 30 padding) + 2 words (gap) = 256 words total
+- Total blocks: 512 words
+- Pattern region: 256 words (addresses 512-767)
+- Text region: 256 words (addresses 768-1023)
+- Total per bank: 512 + 256 + 256 = 1024 words ✓
+
+### Critical Constraints
+
+When changing scratchpad size, ensure:
+1. `PATTERN_START + 2*SEQ_LEN_ALLOC ≤ BANK_SIZE` - Pattern and text sequences must fit
+2. `SPM_ADDR_NUM = SPM_BANK_SIZE * 4` - Total addressable space (4 PE banks)
+3. `ADDR_LEN = log2(SPM_ADDR_NUM)` - Affects address swizzling in mvi instruction
+4. All constants must be synchronized across sys_def.h, wfa_instruction_generator.py, and pe_array.cpp
+
+### Example: Modifying PADDING_SIZE
+
+To change PADDING_SIZE from 30 to 64 words (to add more reserved space):
+1. In pe_array.cpp: Change `constexpr int PADDING_SIZE = 64;`
+2. In wfa_instruction_generator.py: Change `PADDING_SIZE = 64`
+3. Recalculate BLOCK_1_START: `32*7 + 2 + 64 = 290`
+4. Recalculate PATTERN_START: `290 + 32*7 + 2 + 64 = 580`
+5. Update sys_def.h: PATTERN_START = 580
+6. Verify: With BANK_SIZE=1024, SEQ_LEN_ALLOC = (1024-580)//2 = 222, which leaves room for pattern (222 words) and text (222 words) each
+
+**Note:** The formula-based approach (`MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE`) enables this single-point-of-change capability. Changing PADDING_SIZE only requires editing the constant in two files; dependent values recalculate automatically.
+
+---
+
 ## Appendix: Quick Reference
 
 ### Opcode Numbers
@@ -1251,10 +1325,21 @@ in_port=7, in_instr=8, out_port=9, out_instr=10, fifo=[11,12,13,14]
 
 ### Key Constants (from sys_def.h)
 ```c
-SPM_BANK_SIZE = 512
-SPM_ADDR_NUM = 2048
+SPM_BANK_SIZE = 1024
+SPM_ADDR_NUM = 4096
 SPM_ACCESS_LATENCY = 2
 SPM_BANDWIDTH = 2
 ADDR_REGISTER_NUM = 16    // gr[0..15]
 REGFILE_ADDR_NUM = 32     // reg[0..31]
+PATTERN_START = 512       // Derived: BLOCK_1_START + 7*32 + 2 + PADDING_SIZE = 256 + 224 + 2 + 30
+TEXT_START = 768          // Derived: PATTERN_START + SEQ_LEN_ALLOC = 512 + 256
+ADDR_LEN = 12             // For address swizzling (log2(4096))
+```
+
+**Memory Block Constants (from wfa_instruction_generator.py):**
+```python
+PADDING_SIZE = 30         // Adjustable padding per block (enables single-point-of-change)
+BLOCK_1_START = 256       // = MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE
+PATTERN_START = 512       // = BLOCK_1_START + MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE
+SEQ_LEN_ALLOC = 256       // = (BANK_SIZE - PATTERN_START) // 2
 ```
