@@ -447,7 +447,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //iterates over wf id. Then add appropriate offsets to get the SPM addr
                 for (int j = start; j < end; j++) {
                     //SET O
-                    SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullO)[j];
+                    //SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullO)[j];
                     //SET M (now using register-mapped approach)
                     //SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullM)[j];
                     //SET I
@@ -468,15 +468,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //display input vectors
             magic_wfs_out << "Score " << current_wf_size - 1 << ":" << std::endl << std::endl;
             int k = 0;
-            for (std::vector<int>* vec : {fullO/*, fullM, fullI, fullD*/}) {
-                for (k = 0; k < current_wf_size; k++) {
-                    magic_wfs_out << std::setw(width) << (*vec)[k];
-                }
-                for (; k  < MEM_BLOCK_SIZE; k++) {
-                    magic_wfs_out << std::setw(width) << 0; //lines up for easy comparison
-                }
-                magic_wfs_out << std::endl;
-            }
+            //for (std::vector<int>* vec : {fullO/*, fullM, fullI, fullD*/}) {
+            //    for (k = 0; k < current_wf_size; k++) {
+            //        magic_wfs_out << std::setw(width) << (*vec)[k];
+            //    }
+            //    for (; k  < MEM_BLOCK_SIZE; k++) {
+            //        magic_wfs_out << std::setw(width) << 0; //lines up for easy comparison
+            //    }
+            //    magic_wfs_out << std::endl;
+            //}
 
             delete fullO;
             //delete fullM;  // Now using register-mapped approach
@@ -528,7 +528,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //end point define - must be set BEFORE incrementing regfile[1]
                 regfile[5] = regfile[1] + regfile[4];
                 mvdq(regfile[1]+prepad_len, regfile[2], true); //ignore last prepad_len of this
-                regfile[2] -= prepad_len;
+
+                //We need this because for small wf_len, diags_per_pe (gr4) is less than prepad len
+                //which causes gr2 = offset -2 (i.e. out of bounds access)
+                if (regfile[4] >= prepad_len) {
+                    regfile[2] -= prepad_len;
+                }
                 regfile[11] = regfile[2] + regfile[4];
                 mvdq(regfile[1]+SPM_BANK_SIZE*1,regfile[11],true); //pe1
                 regfile[11] += regfile[4];
@@ -573,6 +578,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //diags_per_pe
             regfile[4] = regfile[12] >> 2;
             regfile[4] += 1;
+            //Write fullOs
+            regfile[1] = 0*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs (O is row 0)
+            loadSpmRegMapped(3, 5, 2, 3);  // prepad=3, postpad=5, affineInd=2, wf_i_offset=3
+
             //Write fullMs
             regfile[1] = 1*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
             loadSpmRegMapped(2, 2, 2, 1);  // prepad=2, postpad=2, affineInd=2
@@ -584,6 +593,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             loadSpmRegMapped(0, 2, 0,0);
 
 
+
+            //display O
+            k = 0;
+            for (int i = 0; i < 4; i++) {
+                int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
+                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
+                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+                for (int j = start; j < end; j++) {
+                    magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start);
+                    k++;
+                }
+            }
+            for (; k < MEM_BLOCK_SIZE; k++) {
+                magic_wfs_out << std::setw(width) << 0;
+            }
+            magic_wfs_out << std::endl;
 
             //display M
             k = 0;
