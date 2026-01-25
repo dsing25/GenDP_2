@@ -95,13 +95,18 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 1, 9, addi))                         # gr[9]+=1
     f.write(data_movement_instruction(gr, gr, 0, 0, -10, 0, 1, 0, 9, 7, blt))                        # blt gr[9] gr[7] -10
 #END BLOCK LOOP. NEW WF
-    #TODO check end condition
-    f.write(data_movement_instruction(gr, gr, 0, 0, 12, 0, 0, 0, 2, 12, addi))                         # gr[12]+=2
-    #incrememtn current wavefront
+    #check end condition: gr[6] was set by magic(3) if alignment complete
+    f.write(data_movement_instruction(gr, gr, 0, 0, 4, 0, 0, 0, 1, 6, beq))                          # beq 1 gr[6] 4 (jump to EXIT if gr[6]==1)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 12, 0, 0, 0, 2, 12, addi))                       # gr[12]+=2
+    #increment current wavefront
     f.write(write_magic(2));
     #JMP LOOP PROCESS_WF
-    f.write(data_movement_instruction(gr, gr, 0, 0, -25, 0, 0, 0, 0, 0, beq))                        # beq 0 0 -25
-    
+    f.write(data_movement_instruction(gr, gr, 0, 0, -26, 0, 0, 0, 0, 0, beq))                        # beq 0 0 -26
+
+#EXIT:
+    f.write(write_magic(5));                                                                            # magic(5) - print final state
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                            # halt
+
     f.close()
 
 def wfa_compute():

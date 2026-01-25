@@ -391,6 +391,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 pe_unit[i]->addr_regfile_unit->buffer[13] = text_len;
                 pe_unit[i]->addr_regfile_unit->buffer[8] = pattern_len;
             }
+            // Initialize main controller registers for exit condition
+            main_addressing_register[14] = text_len - 1;    // gr[14] = text_len
+            main_addressing_register[15] = pattern_len - 1; // gr[15] = pattern_len
             magic_wfs_out << "lkjsdfoih"; //helps vimdiff
         } else if (magic_payload == 1){
             int (&regfile)[16] = main_addressing_register;
@@ -696,6 +699,23 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
                 magic_wfs_out << std::endl;
             }
+
+            // Check termination condition for WFA exit
+            int text_len_exit = main_addressing_register[14];
+            int pattern_len_exit = main_addressing_register[15];
+            int target_k = text_len_exit - pattern_len_exit;
+            int center = current_wf_size / 2;
+            int idx = target_k + center;
+
+            main_addressing_register[6] = 0; // Default: don't exit
+            if (idx >= 0 && idx < current_wf_size) {
+                if (past_wfs[write_wf_i][2][idx] >= text_len_exit) {
+                    main_addressing_register[6] = 1; // Signal exit
+                }
+            }
+        } else if (magic_payload == 5) {
+            // Exit condition reached - print final wavefront score
+            printf("qqq %d qqq\n", main_addressing_register[12]);
         } else {
             fprintf(stderr, "ERROR: PE_ARRAY PC=%d cycle=%d unknown magic instruction payload %d.\n", *PC, cycle, magic_payload);
             exit(-1);
