@@ -100,14 +100,14 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 1, 12, shifti_r))                    # gr[2] = gr[12] >> 1 (center)
     f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 2, add))                          # gr[1] = gr[1] + gr[2] (idx in gr[1])
 
-    # Bounds check 1: if idx < 0, skip to CONTINUE
-    f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 1, 0, 1, 0, blt))                            # blt gr[1] gr[0] 4 (SKIP)
-
-    # Bounds check 2: if idx >= wf_len, skip to CONTINUE
-    f.write(data_movement_instruction(0, 0, 0, 0, 3, 0, 1, 0, 1, 12, bge))                           # bge gr[1] gr[12] 3 (SKIP)
-
     # Load M[idx] via magic(7) - reads past_wfs[write_wf_i][2][gr[1]] into gr[2]
     f.write(write_magic(7))
+
+    # Bounds check 1: if idx < 0, skip to CONTINUE
+    f.write(data_movement_instruction(0, 0, 0, 0, 3, 0, 1, 0, 1, 0, blt))                            # blt gr[1] gr[0] 3 (SKIP)
+
+    # Bounds check 2: if idx >= wf_len, skip to CONTINUE
+    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 1, 0, 1, 12, bge))                           # bge gr[1] gr[12] 4 (SKIP)
 
     # Check if M[idx] >= text_len (exit condition)
     f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 1, 0, 2, 14, bge))                           # bge gr[2] gr[14] 4 (EXIT)

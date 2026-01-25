@@ -705,15 +705,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         } else if (magic_payload == 7) {
             // Load M[idx] from past_wfs into a register
             // gr[1] = index, result goes to gr[2]
+            // Note: Bounds checking is done in ISA before calling this magic
             int idx = main_addressing_register[1];
             int write_wf_i = current_wf_i + 1;
-            int wf_size = past_wf_sizes[write_wf_i];
 
-            if (idx >= 0 && idx < wf_size) {
-                main_addressing_register[2] = past_wfs[write_wf_i][2][idx];
-            } else {
-                main_addressing_register[2] = MIN_INT; // Out of bounds
-            }
+            main_addressing_register[2] = past_wfs[write_wf_i][2][idx];
         } else {
             fprintf(stderr, "ERROR: PE_ARRAY PC=%d cycle=%d unknown magic instruction payload %d.\n", *PC, cycle, magic_payload);
             exit(-1);
