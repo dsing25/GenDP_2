@@ -36,7 +36,7 @@ GenDP is a domain-specific accelerator organized as a hierarchical system of Pro
      └─────────────┴─────────────┴─────────────┘
                          │
                     Shared SPM
-                  (2048 addresses)
+                  (4096 addresses)
 ```
 
 ### PE Resources
@@ -67,29 +67,29 @@ Each PE runs two independent traces:
 The control trace can set the compute trace's PC, enabling coarse-grained synchronization.
 
 ### VLIW Control Execution
-The control trace uses a VLIW design with **two threads** that should be kept in lockstep. Instructions come in pairs:
+The control trace uses a VLIW design with **two slots** that execute as a pair. Instructions are written in pairs:
 
 ```python
-# Both threads execute simultaneously
-f.write(data_movement_instruction(...))  # Thread 1
-f.write(data_movement_instruction(...))  # Thread 0
+# Instructions are written in pairs
+f.write(data_movement_instruction(...))  # Slot 0 (written first, executes SECOND)
+f.write(data_movement_instruction(...))  # Slot 1 (written second, executes FIRST)
 ```
 
-**Critical Implementation Detail**: While architecturally both instructions execute simultaneously, the simulator processes the **second-written instruction first**. This matters for hazards involving arithmetic operations that write to `gr`:
+**Critical Execution Order**: The simulator processes the **second-written instruction (Slot 1) first**, then the **first-written instruction (Slot 0)**. This counter-intuitive order matters for hazards involving arithmetic operations that write to `gr`:
 
 ```python
-# INCORRECT - read sees NEW value because increment (2nd written) executes first
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))   # read SPM[gr[1]] - 1st written, decoded 2nd
-f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))   # gr[1]++ - 2nd written, decoded 1st
+# INCORRECT - read sees NEW value because increment (Slot 1) executes first
+f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))   # Slot 0: read SPM[gr[1]] - executes 2nd, sees new gr[1]
+f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))   # Slot 1: gr[1]++ - executes 1st
 
-# CORRECT - place increment FIRST so it executes AFTER the read
-f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))   # gr[1]++ - 1st written, decoded 2nd
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))   # read SPM[gr[1]] - 2nd written, decoded 1st
+# CORRECT - place increment in Slot 0 so it executes AFTER the read
+f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))   # Slot 0: gr[1]++ - executes 2nd
+f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))   # Slot 1: read SPM[gr[1]] - executes 1st, sees old gr[1]
 ```
 
 **Execution Order Summary**:
-- First written instruction → stored in slot [0] → decoded **second**
-- Second written instruction → stored in slot [1] → decoded **first**
+- First written instruction → stored in Slot 0 → decoded **second**
+- Second written instruction → stored in Slot 1 → decoded **first**
 
 **Write Timing Note**: Arithmetic ops (`add`, `addi`, `sub`, `subi`, `shifti_*`, `andi`) write to `gr` **immediately** during decode. However, `mv`/`si` writes to `gr` are **deferred** until after both decodes complete. This means hazards between two `mv`/`si` instructions are safe (both see old values), but hazards involving arithmetic ops require careful ordering as shown above.
 
@@ -201,19 +201,21 @@ else:
 | Code | Name     | Load | Store | Notes                                           |
 |:----:|:---------|:----:|:-----:|:------------------------------------------------|
 | 0    | reg      | -    | -     | PE only                                         |
-| 1    | gr       | ✓    | ✓     |                                                 |
+| 1    | gr       | ✓    | ✓     | Valid for arithmetic ops                        |
 | 2    | SPM      | ✓*   | ✓*    | *Planned but not yet implemented                |
 | 3    | comp_ib  | ✓    | -     | Load instructions to distribute to PEs         |
 | 4    | ctrl_ib  | -    | -     | Not supported                                   |
 | 5    | in_buf   | ✓    | -     | Load from external input                        |
-| 6    | out_buf  | -    | ✓     | Store to external output                        |
+| 6    | out_buf  | -    | ✓     | Valid for arithmetic ops                        |
 | 7    | in_port  | ✓    | -     | Receive from PE[3]                              |
 | 8    | in_instr | -    | -     | PE only                                         |
-| 9    | out_port | -    | ✓     | Send to PE[0]                                   |
-| 10   | out_instr| -    | ✓†    | †No-op, works for instruction transfer          |
+| 9    | out_port | -    | ✓     | Valid for arithmetic ops                        |
+| 10   | out_instr| -    | ✓†    | †Move ops only (`mv`, `si`); crashes on arith   |
 | 11-14| fifo     | ✓    | ✓     | Pop on load, push on store                      |
 
-**Note on out_instr (code 10) for Controller**: When the controller loads from `comp_ib`, the instruction is stored in an internal buffer (`PE_instruction`). Specifying `out_instr` as the destination causes the store function to do nothing, but the instruction is still transferred to PEs via the internal buffer. This is the mechanism for distributing compute instructions.
+**Controller Arithmetic Destination Restriction**: Arithmetic operations (`add`, `sub`, `addi`, `subi`, `shifti_*`, `andi`) on the controller can only write to `gr` (1), `out_buf` (6), or `out_port` (9). Using other destinations (e.g., `out_instr`, `fifo`) will crash the simulator. Move operations (`mv`, `si`) have broader destination support.
+
+**Note on out_instr (code 10) for Controller**: When the controller loads from `comp_ib`, the instruction is stored in an internal buffer (`PE_instruction`). Specifying `out_instr` as the destination in a `mv` operation causes the store function to do nothing, but the instruction is still transferred to PEs via the internal buffer. This is the mechanism for distributing compute instructions.
 
 ### Import Statement
 ```python
@@ -994,8 +996,8 @@ The SPM is a shared memory accessible by all PEs. It is organized into 4 banks, 
 
 | Parameter           | Value       | Description                        |
 |:-------------------|:------------|:----------------------------------|
-| Total Size         | 2048 words  | Total addressable words            |
-| Bank Size          | 512 words   | Words per PE bank                  |
+| Total Size         | 4096 words  | Total addressable words            |
+| Bank Size          | 1024 words  | Words per PE bank                  |
 | Word Size          | 32 bits     | Single word                        |
 | Double Word        | 64 bits     | Two consecutive words              |
 | Access Latency     | 2 cycles    | Cycles from request to data        |
@@ -1040,27 +1042,27 @@ f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 0, 0, 2, mv))  # load
 Each PE sees its own "virtual" address space. Physical address = virtual address + PE_ID * BANK_SIZE.
 
 ```
-PE[0]: virtual 0-511  → physical 0-511
-PE[1]: virtual 0-511  → physical 512-1023
-PE[2]: virtual 0-511  → physical 1024-1535
-PE[3]: virtual 0-511  → physical 1536-2047
+PE[0]: virtual 0-1023  → physical 0-1023
+PE[1]: virtual 0-1023  → physical 1024-2047
+PE[2]: virtual 0-1023  → physical 2048-3071
+PE[3]: virtual 0-1023  → physical 3072-4095
 ```
 
 **Accessing Own Bank**:
 ```python
-# PE accesses its own bank with addresses 0-511
+# PE accesses its own bank with addresses 0-1023
 f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 32, 0, mv))  # SPM[32] in own bank
 ```
 
-**Accessing Other Banks** (negative or >512 addresses):
+**Accessing Other Banks** (negative or >1023 addresses):
 ```python
 # PE[0] accessing PE[1]'s data at offset 32:
-# Virtual address = 32 + 512 = 544
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 544, 0, mv))
+# Virtual address = 32 + 1024 = 1056
+f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 1056, 0, mv))
 
 # PE[1] accessing PE[0]'s data at offset 32:
-# Virtual address = 32 - 512 = -480
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, -480, 0, mv))
+# Virtual address = 32 - 1024 = -992
+f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, -992, 0, mv))
 ```
 
 #### Interleaved Addressing (`mvi`)
@@ -1069,11 +1071,11 @@ For data distributed round-robin across PEs, use `mvi` which swizzles addresses:
 
 ```
 Index 0 → PE[0], physical 0
-Index 1 → PE[1], physical 512
-Index 2 → PE[2], physical 1024
-Index 3 → PE[3], physical 1536
+Index 1 → PE[1], physical 1024
+Index 2 → PE[2], physical 2048
+Index 3 → PE[3], physical 3072
 Index 4 → PE[0], physical 1
-Index 5 → PE[1], physical 513
+Index 5 → PE[1], physical 1025
 ...
 ```
 
