@@ -213,8 +213,8 @@ def pe_instruction(pe_id):
         block_start BLOCK_1_START
         '''
         f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                       # gr[10] = 0
-
         f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 2, 12, shifti_r))                # gr[7] = gr[12] // 4
+
         f.write(data_movement_instruction(gr, gr, 1, 0, 7, 0, 0, 0, 1, 7, addi))                     # gr[7] = gr[7] + 1
         f.write(data_movement_instruction(gr, gr, 1, 0, 9, 0, 0, 0, 1, 7, addi))                     # gr[9] = gr[7] + 1
 
