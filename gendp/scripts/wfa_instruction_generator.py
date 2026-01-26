@@ -95,17 +95,33 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 1, 9, addi))                         # gr[9]+=1
     f.write(data_movement_instruction(gr, gr, 0, 0, -10, 0, 1, 0, 9, 7, blt))                        # blt gr[9] gr[7] -10
 #END BLOCK LOOP. NEW WF
-    #check end condition: gr[6] was set by magic(3) if alignment complete
-    f.write(data_movement_instruction(gr, gr, 0, 0, 4, 0, 0, 0, 1, 6, beq))                          # beq 1 gr[6] 4 (jump to EXIT if gr[6]==1)
+    # Calculate idx = (text_len - pattern_len) + (wf_len / 2)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 14, 15, sub))                        # gr[1] = gr[14] - gr[15] (target_k)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 1, 12, shifti_r))                    # gr[2] = gr[12] >> 1 (center)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 2, add))                          # gr[1] = gr[1] + gr[2] (idx in gr[1])
+
+    # Load M[idx] via magic(7) - reads past_wfs[write_wf_i][2][gr[1]] into gr[2]
+    f.write(write_magic(7))
+
+    # Bounds check 1: if idx < 0, skip to CONTINUE
+    f.write(data_movement_instruction(0, 0, 0, 0, 3, 0, 1, 0, 1, 0, blt))                            # blt gr[1] gr[0] 3 (SKIP)
+
+    # Bounds check 2: if idx >= wf_len, skip to CONTINUE
+    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 1, 0, 1, 12, bge))                           # bge gr[1] gr[12] 4 (SKIP)
+
+    # Check if M[idx] >= text_len (exit condition)
+    f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 1, 0, 2, 14, bge))                           # bge gr[2] gr[14] 4 (EXIT)
+
+#CONTINUE:
     f.write(data_movement_instruction(gr, gr, 0, 0, 12, 0, 0, 0, 2, 12, addi))                       # gr[12]+=2
     #increment current wavefront
-    f.write(write_magic(2));
+    f.write(write_magic(2))
     #JMP LOOP PROCESS_WF
-    f.write(data_movement_instruction(gr, gr, 0, 0, -26, 0, 0, 0, 0, 0, beq))                        # beq 0 0 -26
+    f.write(data_movement_instruction(0, 0, 0, 0, -32, 0, 0, 0, 0, 0, jump))                         # jump -32 (LOOP)
 
 #EXIT:
-    f.write(write_magic(5));                                                                            # magic(5) - print final state
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                            # halt
+    f.write(write_magic(5))                                                                           # magic(5) - print final state
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
 
     f.close()
 
