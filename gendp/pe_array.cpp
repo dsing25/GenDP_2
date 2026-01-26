@@ -4,6 +4,8 @@
 #include "data_buffer.h"
 #include "simulator.h"
 #include <iomanip>
+#include <cstdlib>
+#include <cstring>
 
 #define NUM_FRACTION_BITS 16
 #define MAX_RANGE NUM_FRACTION_BITS
@@ -313,10 +315,33 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         if (magic_payload == 4) {
         //INITIALIZATION BEGINING OF TIME
             int current_wf_size = 0;
-            const char* pattern_seq = "GTTTAAAAGGTTTAAAAGGTTTAAAAGGTTTAAAAGGTTD";
-            const char* text_seq = "GAAAAAAATGAAAAAAATGAAAAAAATGAAAAAAATGAAL";
-            int text_len = 40;
-            int pattern_len = 40;
+
+            // Read base sequences from environment variables
+            const char* pattern_base = getenv("PATTERN_WFA");
+            const char* text_base = getenv("TEXT_WFA");
+
+            // Error checking for environment variables
+            if (pattern_base == NULL || text_base == NULL) {
+                fprintf(stderr, "ERROR: Environment variables PATTERN_WFA and TEXT_WFA must be set\n");
+                fprintf(stderr, "Usage: export PATTERN_WFA=\"your_pattern\" TEXT_WFA=\"your_text\"\n");
+                exit(-1);
+            }
+
+            // Allocate memory for sequences with suffixes
+            int pattern_base_len = strlen(pattern_base);
+            int text_base_len = strlen(text_base);
+            char* pattern_seq = (char*)malloc(pattern_base_len + 2); // +1 for 'D', +1 for '\0'
+            char* text_seq = (char*)malloc(text_base_len + 2);       // +1 for 'L', +1 for '\0'
+
+            // Copy base sequences and append suffixes
+            strcpy(pattern_seq, pattern_base);
+            strcat(pattern_seq, "D");
+            strcpy(text_seq, text_base);
+            strcat(text_seq, "L");
+
+            // Calculate lengths (including the appended character)
+            int text_len = strlen(text_seq);
+            int pattern_len = strlen(pattern_seq);
             int first_extend_len = 1;
             //loading the first wavefront. Initialization of this alignment
             //initialization logic
@@ -395,6 +420,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             main_addressing_register[14] = text_len - 1;    // gr[14] = text_len
             main_addressing_register[15] = pattern_len - 1; // gr[15] = pattern_len
             magic_wfs_out << "lkjsdfoih"; //helps vimdiff
+
+            // Free allocated memory
+            free(pattern_seq);
+            free(text_seq);
         } else if (magic_payload == 1){
             int (&regfile)[16] = main_addressing_register;
         //READ FROM MAIN MEM. WRITE TO NEXT_BLOCK_START (gr[10)
