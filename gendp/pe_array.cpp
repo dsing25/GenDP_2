@@ -342,7 +342,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // Calculate lengths (including the appended character)
             int text_len = strlen(text_seq);
             int pattern_len = strlen(pattern_seq);
-            int first_extend_len = 1;
+            int first_extend_len = 0;
+            while (pattern_base[first_extend_len] != '\0' && 
+                   text_base[first_extend_len] != '\0' && 
+                   pattern_base[first_extend_len] == text_base[first_extend_len]) {
+                first_extend_len++;
+            }
             //loading the first wavefront. Initialization of this alignment
             //initialization logic
             memset(past_wfs, 0, sizeof(past_wfs));
