@@ -29,7 +29,7 @@ TEXT_START = PATTERN_START + SEQ_LEN_ALLOC
 SWIZZLED_PATTERN_START = PATTERN_START << 2 # need to reverse swizzle to hit 226 at the start
 SWIZZLED_TEXT_START = TEXT_START << 2 
 ALIGN_B0_PC = 7 + 6
-ALIGN_B1_PC = 48 + 1
+ALIGN_B1_PC = 58
 
 
 
@@ -50,8 +50,9 @@ def wfa_main_instruction():
 #LOOP PROCESS_WF
     #calc num blocks
     f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 2+MEM_BLOCK_SIZE_LG2, 12, shifti_r)) # gr[7] = gr[12] // MEM_BLOCK_SIZE // 4
+    f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 1, 7, addi))                         # gr[7]+=1
     #set current block count to 0
-    f.write(data_movement_instruction(gr, 0, 0, 0, 9, 0, 0, 0, 0, 0, si))                            # gr[9] = 0
+    f.write(data_movement_instruction(gr, 0, 0, 0, 9, 0, 0, 0, -1, 0, si))                           # gr[9] = -1
     #BLOCK INIT
     #current block
     f.write(data_movement_instruction(gr, 0, 0, 0, 8, 0, 0, 0, BLOCK_1_START, 0, si))                # gr[8] = BLOCK_1_START
@@ -81,12 +82,12 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # bne 1 gr[13] 0
     #set PE to align next block
     #TODO since the PE will not get to this stage yet, we don't actually set pc
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
-    #f.write(data_movement_instruction(gr, gr, 0, 0, ALIGN_B1_PC, 0, 0, 0, 0, 0, set_PC))                # PE_PC = ALIGN_B1_PC
-    #f.write(data_movement_instruction(0, 0, 0, 0, 1, 0, 1, 0, 0, 8, beq))                            # beq gr[0] gr[8] 1
-    #f.write(data_movement_instruction(gr, gr, 0, 0, ALIGN_B0_PC, 0, 0, 0, 0, 0, set_PC))                # PE_PC = ALIGN_B0_PC
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(gr, gr, 0, 0, ALIGN_B0_PC, 0, 0, 0, 0, 0, set_PC))             # PE_PC = ALIGN_B0_PC
+    f.write(data_movement_instruction(0, 0, 0, 0, 1, 0, 1, 0, 0, 8, beq))                            # beq gr[0] gr[8] 1
+    f.write(data_movement_instruction(gr, gr, 0, 0, ALIGN_B1_PC, 0, 0, 0, 0, 0, set_PC))             # PE_PC = ALIGN_B1_PC
     #load results m,i,d of THIS_BLOCK magic(3)
     f.write(write_magic(3));
     # Display combined inputs/outputs for debugging
@@ -98,7 +99,7 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, 11, 0, mv))                          # gr[8] = gr[11]
     #increment count
     f.write(data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 1, 9, addi))                         # gr[9]+=1
-    f.write(data_movement_instruction(gr, gr, 0, 0, -10, 0, 1, 0, 9, 7, blt))                        # blt gr[9] gr[7] -10
+    f.write(data_movement_instruction(gr, gr, 0, 0, -13, 0, 1, 0, 9, 7, blt))                        # blt gr[9] gr[7] -13
 #END BLOCK LOOP. NEW WF
     # Calculate idx = (text_len - pattern_len) + (wf_len / 2)
     f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 14, 15, sub))                        # gr[1] = gr[14] - gr[15] (target_k)
@@ -122,7 +123,7 @@ def wfa_main_instruction():
     #increment current wavefront
     f.write(write_magic(2))
     #JMP LOOP PROCESS_WF
-    f.write(data_movement_instruction(0, 0, 0, 0, -34, 0, 0, 0, 0, 0, jump))                         # jump -34 (LOOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, -38, 0, 0, 0, 0, 0, jump))                         # jump -38 (LOOP)
 
 #EXIT:
     f.write(write_magic(5))                                                                           # magic(5) - print final state

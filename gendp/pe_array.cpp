@@ -436,6 +436,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int next_block_start = main_addressing_register[10];
             int this_block_start = main_addressing_register[8];
             int block_iter = main_addressing_register[9];
+            int next_block_iter = block_iter +1; //we operate on this cause we're writing to next
             main_addressing_register[3] = current_wf_i;
             int width = 3; // for display
 
@@ -479,7 +480,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //Now write to SPMs
             int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
             for (int i = 0; i < 4; i++) {
-                int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
+                int start = i*n_diags_per_pe + next_block_iter * MEM_BLOCK_SIZE;
                 int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
                 int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
                 //iterates over wf id. Then add appropriate offsets to get the SPM addr
@@ -496,7 +497,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
                 if (start < end){
                     //fix up the extra two Os needed from previous tile
-                    if (i == 0){
+                    if (i == 0 && next_block_iter == 0){
                         SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = MIN_INT;
                         SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = MIN_INT;
                     } else {
@@ -542,7 +543,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
              */
             auto loadSpmRegMapped = [&](int prepad_len, int postpad_len, int affineInd, 
                     int wf_i_offset){
-                //offset into mainMem = wf_i*3*max_wf_len + affine_ind*max_wf_len + block_iter *block_size
+                //offset into mainMem = wf_i*3*max_wf_len + affine_ind*max_wf_len + next_block_iter *block_size
                 regfile[11] = affineInd * MAX_WF_LEN; //affine_ind * wflen
                 regfile[2] = regfile[11]; //initial set = instead of +=
                 regfile[11] = regfile[3];
@@ -637,7 +638,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             ////display O
             //k = 0;
             //for (int i = 0; i < 4; i++) {
-            //    int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
+            //    int start = i*n_diags_per_pe + next_block_iter * MEM_BLOCK_SIZE;
             //    int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
             //    int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
             //    if (i == 0){
@@ -653,7 +654,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             ////display M
             //k = 0;
             //for (int i = 0; i < 4; i++) {
-            //    int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
+            //    int start = i*n_diags_per_pe + next_block_iter * MEM_BLOCK_SIZE;
             //    int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
             //    int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
             //    for (int j = start; j < end; j++) {
@@ -666,7 +667,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             ////display I
             //k = 0;
             //for (int i = 0; i < 4; i++) {
-            //    int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
+            //    int start = i*n_diags_per_pe + next_block_iter * MEM_BLOCK_SIZE;
             //    int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
             //    int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
             //    //iterates over wf id. Then add appropriate offsets to get the SPM addr
@@ -680,7 +681,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             ////display D
             //k = 0;
             //for (int i = 0; i < 4; i++) {
-            //    int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
+            //    int start = i*n_diags_per_pe + next_block_iter * MEM_BLOCK_SIZE;
             //    int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
             //    int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
             //    //iterates over wf id. Then add appropriate offsets to get the SPM addr
@@ -704,7 +705,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //store output wavefronts
             int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
             for (int i = 0; i < 4; i++) {
-                int start = i*n_diags_per_pe + (block_iter-1) * MEM_BLOCK_SIZE;
+                int start = i*n_diags_per_pe + (block_iter) * MEM_BLOCK_SIZE;
                 int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
                 int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
                 for (int j = start; j < end; j++) {
@@ -719,7 +720,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //int width = 3;
             //for (int affine_id : {2,0,1}) {  // M, D, I order
             //    for (int pe_i = 0; pe_i < 4; pe_i++) {
-            //        int start = pe_i * n_diags_per_pe + (block_iter-1) * MEM_BLOCK_SIZE;
+            //        int start = pe_i * n_diags_per_pe + (block_iter) * MEM_BLOCK_SIZE;
             //        int end_pe = std::min(n_diags_per_pe * (pe_i + 1), current_wf_size);
             //        int end = std::min(start + MEM_BLOCK_SIZE, end_pe);
             //        for (int j = start; j < end; j++) {
@@ -737,7 +738,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int this_block_start = main_addressing_register[8];
             int next_block_start = main_addressing_register[10];
             int block_iter = main_addressing_register[9];
-            int display_block_iter = block_iter - 1;  // Display previous block (just computed)
+            int display_block_iter = block_iter;  // Display previous block (just computed)
             int write_wf_i = current_wf_i + 1;
             int width = 3;
             int k = 0;
