@@ -89,6 +89,8 @@ def wfa_main_instruction():
     #f.write(data_movement_instruction(gr, gr, 0, 0, ALIGN_B0_PC, 0, 0, 0, 0, 0, set_PC))                # PE_PC = ALIGN_B0_PC
     #load results m,i,d of THIS_BLOCK magic(3)
     f.write(write_magic(3));
+    # Display combined inputs/outputs for debugging
+    f.write(write_magic(6));
     #TODO wait lsq
     #SWAP THIS_BLOCK, NEXT_BLOCK
     f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 10, 0, mv))                         # gr[11] = gr[10]
@@ -120,7 +122,7 @@ def wfa_main_instruction():
     #increment current wavefront
     f.write(write_magic(2))
     #JMP LOOP PROCESS_WF
-    f.write(data_movement_instruction(0, 0, 0, 0, -33, 0, 0, 0, 0, 0, jump))                         # jump -32 (LOOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, -34, 0, 0, 0, 0, 0, jump))                         # jump -34 (LOOP)
 
 #EXIT:
     f.write(write_magic(5))                                                                           # magic(5) - print final state

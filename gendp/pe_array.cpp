@@ -506,7 +506,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
             }
             //display input vectors
-            magic_wfs_out << "Score " << current_wf_size - 1 << ":" << std::endl << std::endl;
+            //magic_wfs_out << "Score " << current_wf_size - 1 << ":" << std::endl << std::endl;
             int k = 0;
             //for (std::vector<int>* vec : {fullO/*, fullM, fullI, fullD*/}) {
             //    for (k = 0; k < current_wf_size; k++) {
@@ -634,66 +634,66 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
 
 
-            //display O
-            k = 0;
-            for (int i = 0; i < 4; i++) {
-                int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
-                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
-                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
-                if (i == 0){
-                    magic_wfs_out << "(wf_start, wf_end) : (" << start <<", " << end <<")" << std::endl;
-                }
-                for (int j = start; j < end; j++) {
-                    magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start);
-                    k++;
-                }
-            }
-            magic_wfs_out << std::endl;
+            ////display O
+            //k = 0;
+            //for (int i = 0; i < 4; i++) {
+            //    int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
+            //    int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
+            //    int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+            //    if (i == 0){
+            //        magic_wfs_out << "(wf_start, wf_end) : (" << start <<", " << end <<")" << std::endl;
+            //    }
+            //    for (int j = start; j < end; j++) {
+            //        magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start);
+            //        k++;
+            //    }
+            //}
+            //magic_wfs_out << std::endl;
 
-            //display M
-            k = 0;
-            for (int i = 0; i < 4; i++) {
-                int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
-                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
-                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
-                for (int j = start; j < end; j++) {
-                    magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + next_block_start + j - start);
-                    k++;
-                }
-            }
-            magic_wfs_out << std::endl;
+            ////display M
+            //k = 0;
+            //for (int i = 0; i < 4; i++) {
+            //    int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
+            //    int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
+            //    int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+            //    for (int j = start; j < end; j++) {
+            //        magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + next_block_start + j - start);
+            //        k++;
+            //    }
+            //}
+            //magic_wfs_out << std::endl;
 
-            //display I
-            k = 0;
-            for (int i = 0; i < 4; i++) {
-                int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
-                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
-                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
-                //iterates over wf id. Then add appropriate offsets to get the SPM addr
-                for (int j = start; j < end; j++) {
-                    magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + next_block_start + j - start);
-                    k++;
-                }
-            }
-            magic_wfs_out << std::endl;
+            ////display I
+            //k = 0;
+            //for (int i = 0; i < 4; i++) {
+            //    int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
+            //    int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
+            //    int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+            //    //iterates over wf id. Then add appropriate offsets to get the SPM addr
+            //    for (int j = start; j < end; j++) {
+            //        magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + next_block_start + j - start);
+            //        k++;
+            //    }
+            //}
+            //magic_wfs_out << std::endl;
 
-            //display D
-            k = 0;
-            for (int i = 0; i < 4; i++) {
-                int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
-                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
-                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
-                //iterates over wf id. Then add appropriate offsets to get the SPM addr
-                for (int j = start; j < end; j++) {
-                    magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start);
-                    k++;
-                }
-            }
-            magic_wfs_out << std::endl;
+            ////display D
+            //k = 0;
+            //for (int i = 0; i < 4; i++) {
+            //    int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
+            //    int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
+            //    int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+            //    //iterates over wf id. Then add appropriate offsets to get the SPM addr
+            //    for (int j = start; j < end; j++) {
+            //        magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start);
+            //        k++;
+            //    }
+            //}
+            //magic_wfs_out << std::endl;
 
         } else if (magic_payload == 2){
         //INCREMENT CURRENT_WF_I
-            printf("score %d:\n", past_wf_sizes[current_wf_i]+3);
+            //printf("score %d:\n", past_wf_sizes[current_wf_i]+3);
             current_wf_i++;
         } else if (magic_payload == 3){
         //WRITE MAIN MEM WITH RESULTS IN CURRENT_BLOCK_START (gr[8])
@@ -716,10 +716,97 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             past_wf_sizes[write_wf_i] = current_wf_size;
 
             //display the last computed wavefront in PE-strided block order
+            //int width = 3;
+            //for (int affine_id : {2,0,1}) {  // M, D, I order
+            //    for (int pe_i = 0; pe_i < 4; pe_i++) {
+            //        int start = pe_i * n_diags_per_pe + (block_iter-1) * MEM_BLOCK_SIZE;
+            //        int end_pe = std::min(n_diags_per_pe * (pe_i + 1), current_wf_size);
+            //        int end = std::min(start + MEM_BLOCK_SIZE, end_pe);
+            //        for (int j = start; j < end; j++) {
+            //            magic_wfs_out << std::setw(width) << past_wfs[write_wf_i][affine_id][j];
+            //        }
+            //    }
+            //    magic_wfs_out << std::endl;
+            //}
+        } else if (magic_payload == 5) {
+            // Exit condition reached - print final score (wf_len - 1)
+            printf("qqq %d qqq\n", main_addressing_register[12] - 1);
+        } else if (magic_payload == 6) {
+            // Display inputs and outputs for the same wavefront block
+            int current_wf_size = main_addressing_register[12];
+            int this_block_start = main_addressing_register[8];
+            int next_block_start = main_addressing_register[10];
+            int block_iter = main_addressing_register[9];
+            int display_block_iter = block_iter - 1;  // Display previous block (just computed)
+            int write_wf_i = current_wf_i + 1;
             int width = 3;
-            for (int affine_id : {2,0,1}) {  // M, D, I order
+            int k = 0;
+
+            // Calculate PE distribution
+            int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
+
+            // Section header
+            magic_wfs_out << "Block " << display_block_iter << " (Score " << current_wf_size - 1 << "):" << std::endl << std::endl;
+
+            // Display INPUT wavefronts (O, M, I, D) from SPM
+            // Read from THIS_BLOCK (the block that was just computed)
+
+            //display O
+            k = 0;
+            for (int i = 0; i < 4; i++) {
+                int start = i*n_diags_per_pe + display_block_iter * MEM_BLOCK_SIZE;
+                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
+                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+                for (int j = start; j < end; j++) {
+                    magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + this_block_start + j - start);
+                    k++;
+                }
+            }
+            magic_wfs_out << std::endl;
+
+            //display M
+            k = 0;
+            for (int i = 0; i < 4; i++) {
+                int start = i*n_diags_per_pe + display_block_iter * MEM_BLOCK_SIZE;
+                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
+                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+                for (int j = start; j < end; j++) {
+                    magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + this_block_start + j - start);
+                    k++;
+                }
+            }
+            magic_wfs_out << std::endl;
+
+            //display I
+            k = 0;
+            for (int i = 0; i < 4; i++) {
+                int start = i*n_diags_per_pe + display_block_iter * MEM_BLOCK_SIZE;
+                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
+                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+                for (int j = start; j < end; j++) {
+                    magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + this_block_start + j - start);
+                    k++;
+                }
+            }
+            magic_wfs_out << std::endl;
+
+            //display D
+            k = 0;
+            for (int i = 0; i < 4; i++) {
+                int start = i*n_diags_per_pe + display_block_iter * MEM_BLOCK_SIZE;
+                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
+                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+                for (int j = start; j < end; j++) {
+                    magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + this_block_start + j - start);
+                    k++;
+                }
+            }
+            magic_wfs_out << std::endl;
+
+            // Display OUTPUT wavefronts (M, D, I) from past_wfs
+            for (int affine_id : {2, 0, 1}) {  // M, D, I order
                 for (int pe_i = 0; pe_i < 4; pe_i++) {
-                    int start = pe_i * n_diags_per_pe + (block_iter-1) * MEM_BLOCK_SIZE;
+                    int start = pe_i * n_diags_per_pe + display_block_iter * MEM_BLOCK_SIZE;
                     int end_pe = std::min(n_diags_per_pe * (pe_i + 1), current_wf_size);
                     int end = std::min(start + MEM_BLOCK_SIZE, end_pe);
                     for (int j = start; j < end; j++) {
@@ -728,9 +815,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
                 magic_wfs_out << std::endl;
             }
-        } else if (magic_payload == 5) {
-            // Exit condition reached - print final score (wf_len - 1)
-            printf("qqq %d qqq\n", main_addressing_register[12] - 1);
+
+            magic_wfs_out << std::endl;
         } else if (magic_payload == 7) {
             // Load M[idx] from past_wfs into a register
             // gr[1] = index, result goes to gr[2]
