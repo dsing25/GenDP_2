@@ -69,6 +69,9 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 12, 0, mv))                    # out = gr[12]
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 12, 0, mv))                    # out = gr[12]
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 12, 0, mv))                    # out = gr[12]
+    #increment count
+    f.write(data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 1, 9, addi))                         # gr[9]+=1
+    #optional, branch and skip some extra comps for wf smaller than 128
 
 #BLOCK LOOP
     #load inputs o,m,i,d to NEXT_BLOCK magic(2)
@@ -117,7 +120,7 @@ def wfa_main_instruction():
     #increment current wavefront
     f.write(write_magic(2))
     #JMP LOOP PROCESS_WF
-    f.write(data_movement_instruction(0, 0, 0, 0, -32, 0, 0, 0, 0, 0, jump))                         # jump -32 (LOOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, -33, 0, 0, 0, 0, 0, jump))                         # jump -32 (LOOP)
 
 #EXIT:
     f.write(write_magic(5))                                                                           # magic(5) - print final state

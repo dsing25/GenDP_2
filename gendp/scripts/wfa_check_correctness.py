@@ -10,8 +10,8 @@ import subprocess
 import re
 from pathlib import Path
 
-# Import reference WFA implementation
-sys.path.insert(0, str(Path(__file__).parent / '../../../kernel/WfaProxy'))
+# Import reference WFA implementation from submodule
+sys.path.insert(0, str(Path(__file__).parent / '../kernel/WFA-proxy'))
 from wfa_align import wfa_align
 
 def read_seq_file(filename):

@@ -434,6 +434,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         //READ FROM MAIN MEM. WRITE TO NEXT_BLOCK_START (gr[10)
             int current_wf_size = main_addressing_register[12];
             int next_block_start = main_addressing_register[10];
+            int this_block_start = main_addressing_register[8];
             int block_iter = main_addressing_register[9];
             main_addressing_register[3] = current_wf_i;
             int width = 3; // for display
@@ -470,9 +471,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             };
 
             std::vector<int>* fullO = getInputVec(3, 5, current_wf_i - 3, 2);
-            //std::vector<int>* fullM = getInputVec(2, 2, current_wf_i - 1, 2);  // Now using register-mapped approach
-            //std::vector<int>* fullI = getInputVec(2, 0, current_wf_i, 1);
-            //std::vector<int>* fullD = getInputVec(0, 2, current_wf_i, 0);
+            std::vector<int>* fullM = getInputVec(2, 2, current_wf_i - 1, 2);  // Now using register-mapped approach
+            std::vector<int>* fullI = getInputVec(2, 0, current_wf_i, 1);
+            std::vector<int>* fullD = getInputVec(0, 2, current_wf_i, 0);
 
 
             //Now write to SPMs
@@ -484,22 +485,24 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //iterates over wf id. Then add appropriate offsets to get the SPM addr
                 for (int j = start; j < end; j++) {
                     //SET O
-                    //SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullO)[j];
+                    SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullO)[j];
                     //SET M (now using register-mapped approach)
-                    //SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullM)[j];
+                    SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullM)[j];
                     //SET I
-                    //SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullI)[j];
+                    SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullI)[j];
                     //SET D
-            //        SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullD)[j];
+                    SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullD)[j];
 
                 }
-                //fix up the extra two Os needed from previous tile
-                if (i == 0){
-                    SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = MIN_INT;
-                    SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = MIN_INT;
-                } else {
-                    SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = (*fullO)[start - 2];
-                    SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = (*fullO)[start - 1];
+                if (start < end){
+                    //fix up the extra two Os needed from previous tile
+                    if (i == 0){
+                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = MIN_INT;
+                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = MIN_INT;
+                    } else {
+                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = (*fullO)[start - 2];
+                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = (*fullO)[start - 1];
+                    }
                 }
             }
             //display input vectors
@@ -516,9 +519,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //}
 
             delete fullO;
-            //delete fullM;  // Now using register-mapped approach
-            //delete fullI;
-            //delete fullD;
+            delete fullM;  // Now using register-mapped approach
+            delete fullI;
+            delete fullD;
 
             /*
              * Preconditions:
@@ -612,22 +615,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
             };
 
-            //diags_per_pe
-            regfile[4] = regfile[12] >> 2;
-            regfile[4] += 1;
-            //Write fullOs
-            regfile[1] = 0*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs (O is row 0)
-            loadSpmRegMapped(3, 5, 2, 3);  // prepad=3, postpad=5, affineInd=2, wf_i_offset=3
+            ////diags_per_pe
+            //regfile[4] = regfile[12] >> 2;
+            //regfile[4] += 1;
+            ////Write fullOs
+            //regfile[1] = 0*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs (O is row 0)
+            //loadSpmRegMapped(3, 5, 2, 3);  // prepad=3, postpad=5, affineInd=2, wf_i_offset=3
 
-            //Write fullMs
-            regfile[1] = 1*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
-            loadSpmRegMapped(2, 2, 2, 1);  // prepad=2, postpad=2, affineInd=2
-            //Write fullIs
-            regfile[1] = 2*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
-            loadSpmRegMapped(2,0,1,0);
-            //Write the fullDs
-            regfile[1] = 3*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
-            loadSpmRegMapped(0, 2, 0,0);
+            ////Write fullMs
+            //regfile[1] = 1*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
+            //loadSpmRegMapped(2, 2, 2, 1);  // prepad=2, postpad=2, affineInd=2
+            ////Write fullIs
+            //regfile[1] = 2*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
+            //loadSpmRegMapped(2,0,1,0);
+            ////Write the fullDs
+            //regfile[1] = 3*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
+            //loadSpmRegMapped(0, 2, 0,0);
 
 
 
@@ -637,13 +640,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
                 int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
                 int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+                if (i == 0){
+                    magic_wfs_out << "(wf_start, wf_end) : (" << start <<", " << end <<")" << std::endl;
+                }
                 for (int j = start; j < end; j++) {
                     magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start);
                     k++;
                 }
-            }
-            for (; k < MEM_BLOCK_SIZE; k++) {
-                magic_wfs_out << std::setw(width) << 0;
             }
             magic_wfs_out << std::endl;
 
@@ -657,9 +660,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + next_block_start + j - start);
                     k++;
                 }
-            }
-            for (; k < MEM_BLOCK_SIZE; k++) {
-                magic_wfs_out << std::setw(width) << 0;
             }
             magic_wfs_out << std::endl;
 
@@ -675,9 +675,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     k++;
                 }
             }
-            for (; k < MEM_BLOCK_SIZE; k++) {
-                magic_wfs_out << std::setw(width) << 0;
-            }
             magic_wfs_out << std::endl;
 
             //display D
@@ -691,9 +688,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start);
                     k++;
                 }
-            }
-            for (; k < MEM_BLOCK_SIZE; k++) {
-                magic_wfs_out << std::setw(width) << 0;
             }
             magic_wfs_out << std::endl;
 
@@ -710,7 +704,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //store output wavefronts
             int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
             for (int i = 0; i < 4; i++) {
-                int start = i*n_diags_per_pe + block_iter * MEM_BLOCK_SIZE;
+                int start = i*n_diags_per_pe + (block_iter-1) * MEM_BLOCK_SIZE;
                 int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
                 int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
                 for (int j = start; j < end; j++) {
@@ -721,15 +715,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
             past_wf_sizes[write_wf_i] = current_wf_size;
 
-            //display the last computed wavefront
-            int i = 0;
+            //display the last computed wavefront in PE-strided block order
             int width = 3;
-            for (int affine_id : {2,0,1}) {
-                for (i = 0; i < past_wf_sizes[write_wf_i]; i++) {
-                    magic_wfs_out << std::setw(width) << past_wfs[write_wf_i][affine_id][i];
-                }
-                for (; i  < MEM_BLOCK_SIZE; i++) {
-                    magic_wfs_out << std::setw(width) << 0; //lines up for easy comparison
+            for (int affine_id : {2,0,1}) {  // M, D, I order
+                for (int pe_i = 0; pe_i < 4; pe_i++) {
+                    int start = pe_i * n_diags_per_pe + (block_iter-1) * MEM_BLOCK_SIZE;
+                    int end_pe = std::min(n_diags_per_pe * (pe_i + 1), current_wf_size);
+                    int end = std::min(start + MEM_BLOCK_SIZE, end_pe);
+                    for (int j = start; j < end; j++) {
+                        magic_wfs_out << std::setw(width) << past_wfs[write_wf_i][affine_id][j];
+                    }
                 }
                 magic_wfs_out << std::endl;
             }
