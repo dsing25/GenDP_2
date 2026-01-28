@@ -8,6 +8,7 @@ import sys
 import os
 import subprocess
 import re
+import shlex
 from pathlib import Path
 
 # Import reference WFA implementation from submodule
@@ -53,8 +54,9 @@ def run_simulator(pattern, text, sim_path='./sim', verbose=False):
            '-o', '/dev/null', '-s', '-n', '-1']
 
     try:
-        result = subprocess.run(cmd, env=env, capture_output=True,
-                              text=True, timeout=30)
+        # Capture stdout for score parsing, but let stderr pass through to the terminal.
+        result = subprocess.run(cmd, env=env, stdout=subprocess.PIPE,
+                              stderr=None, text=True, timeout=30)
 
         if verbose:
             print("Simulator output:", result.stdout)
@@ -153,6 +155,18 @@ def main():
             passed += 1
         else:
             print(f"FAIL (sim={sim_score}, kernel={kernel_score})")
+            sim_cmd = ['./sim', '-k', '5', '-i', '../../kernel/Datasets/crossBlockSeq.seq',
+                       '-o', '/dev/null', '-s', '-n', '-1']
+            gdb_cmd = ['gdb', '--args'] + sim_cmd
+            print(f"  GenDP command: {shlex.join(sim_cmd)}")
+            try:
+                with open('lastFailedGdb', 'w') as f:
+                    f.write('PATTERN_WFA=' + shlex.quote(pattern) + '\n')
+                    f.write('TEXT_WFA=' + shlex.quote(text) + '\n')
+                    f.write(shlex.join(gdb_cmd) + '\n')
+                print("  Wrote gdb command to: lastFailedGdb")
+            except Exception as e:
+                print(f"WARNING: Failed to write lastFailedGdb: {e}")
             if verbose:
                 print(f"  Pattern: {pattern[:50]}...")
                 print(f"  Text:    {text[:50]}...")

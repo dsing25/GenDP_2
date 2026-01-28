@@ -461,7 +461,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             };
             auto mvdq = [&](int dst, int src, bool toSPM){
                 //TODO this is not realistic. We need to access blocks not arbitrary location.
-                std::cout << dst << " " << src << std::endl;
                 for (int i =0; i < 8; i++){
                     if (toSPM){
                         SPM_unit->buffer[dst+i] = ((int*)past_wfs)[src+i];
@@ -475,58 +474,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             std::vector<int>* fullM = getInputVec(2, 2, current_wf_i - 1, 2);  // Now using register-mapped approach
             std::vector<int>* fullI = getInputVec(2, 0, current_wf_i, 1);
             std::vector<int>* fullD = getInputVec(0, 2, current_wf_i, 0);
-
-
-            //Now write to SPMs
-            int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
-            for (int i = 0; i < 4; i++) {
-                int start = i*n_diags_per_pe + next_block_iter * MEM_BLOCK_SIZE;
-                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
-                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
-                //iterates over wf id. Then add appropriate offsets to get the SPM addr
-                for (int j = start; j < end; j++) {
-                    //SET O
-                    SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullO)[j];
-                    //SET M (now using register-mapped approach)
-                    SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullM)[j];
-                    //SET I
-                    SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullI)[j];
-                    //SET D
-                    SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullD)[j];
-
-                }
-                if (start < end){
-                    //fix up the extra two Os needed from previous tile
-                    if (i == 0 && next_block_iter == 0){
-                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = MIN_INT;
-                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = MIN_INT;
-                    } else {
-                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = (*fullO)[start - 2];
-                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = (*fullO)[start - 1];
-                    }
-                }
-            }
-            //display input vectors
-            //magic_wfs_out << "Score " << current_wf_size - 1 << ":" << std::endl << std::endl;
             int k = 0;
-            //for (std::vector<int>* vec : {fullO/*, fullM, fullI, fullD*/}) {
-            //    for (k = 0; k < current_wf_size; k++) {
-            //        magic_wfs_out << std::setw(width) << (*vec)[k];
-            //    }
-            //    for (; k  < MEM_BLOCK_SIZE; k++) {
-            //        magic_wfs_out << std::setw(width) << 0; //lines up for easy comparison
-            //    }
-            //    magic_wfs_out << std::endl;
-            //}
 
-            delete fullO;
-            delete fullM;  // Now using register-mapped approach
-            delete fullI;
-            delete fullD;
 
             /*
              * Preconditions:
              *      gr4: diags per pe
+             *      gr6: diags to execute this iteration
              *      gr3: current_wf_i
              *      gr1: points to SPM row we're writing to
              *      gr9: holds the iteration
@@ -562,28 +516,32 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 regfile[11] = regfile[9] * MEM_BLOCK_SIZE; //block iter * block size
                 regfile[2] += regfile[11];
 
-                //prepad, we do one full pass through here
-                for (int j = 0; j < prepad_len; j++){
-                    SPM_unit->buffer[regfile[1]+j+SPM_BANK_SIZE*0] = MIN_INT;
-                }
-                //end point define - must be set BEFORE incrementing regfile[1]
-                regfile[5] = regfile[1] + regfile[4];
-                mvdq(regfile[1]+prepad_len, regfile[2], true); //ignore last prepad_len of this
+                if (regfile[9] == regfile[0]){ //if first block
+                    //prepad, we do one full pass through here
+                    for (int j = 0; j < prepad_len; j++){
+                        SPM_unit->buffer[regfile[1]+j+SPM_BANK_SIZE*0] = MIN_INT;
+                    }
+                    //end point define - must be set BEFORE incrementing regfile[1]
+                    regfile[5] = regfile[1] + regfile[6];
+                    mvdq(regfile[1]+prepad_len, regfile[2], true); //ignore last prepad_len of this
 
-                //We need this because for small wf_len, diags_per_pe (gr4) is less than prepad len
-                //which causes gr2 = offset -2 (i.e. out of bounds access)
-                if (regfile[4] >= prepad_len) {
+                    //We need this because for small wf_len, diags_per_pe (gr4) is less than prepad len
+                    //which causes gr2 = offset -2 (i.e. out of bounds access)
+                    if (regfile[6] >= prepad_len) {
+                        regfile[2] -= prepad_len;
+                    }
+                    regfile[11] = regfile[2] + regfile[4];
+                    mvdq(regfile[1]+SPM_BANK_SIZE*1,regfile[11],true); //pe1
+                    regfile[11] += regfile[4];
+                    mvdq(regfile[1]+SPM_BANK_SIZE*2,regfile[11],true); //pe1
+                    regfile[11] += regfile[4];
+                    mvdq(regfile[1]+SPM_BANK_SIZE*3,regfile[11],true); //pe1
+                    regfile[1] += 8;
+                    regfile[2] += 8;
+                } else {
+                    regfile[5] = regfile[1] + regfile[6];
                     regfile[2] -= prepad_len;
                 }
-                regfile[11] = regfile[2] + regfile[4];
-                mvdq(regfile[1]+SPM_BANK_SIZE*1,regfile[11],true); //pe1
-                regfile[11] += regfile[4];
-                mvdq(regfile[1]+SPM_BANK_SIZE*2,regfile[11],true); //pe1
-                regfile[11] += regfile[4];
-                mvdq(regfile[1]+SPM_BANK_SIZE*3,regfile[11],true); //pe1
-                regfile[1] += 8;
-                regfile[2] += 8;
-
                 //now we do the remaining passes (if there are any)
                 while (regfile[1] < regfile[5]){
                     regfile[11] = regfile[2]; //temp cache
@@ -595,107 +553,115 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     regfile[1] += 8;
                     regfile[2] += 8;
                 }
-                //We may have overshot, so we gotta reset to true end of last pe
-                regfile[1] = regfile[5] - regfile[4]; //reset to base
-                //using gr11 to point to the cell we want to write to
-                regfile[11] = regfile[12] - regfile[4];
-                regfile[11] -= regfile[4];
-                regfile[11] -= regfile[4];
-                regfile[11] += regfile[1];
-                //gr1 now holds remainder
-                regfile[11] -= (postpad_len);
+                //restore gr1
+                regfile[1] = regfile[5] - regfile[6];
 
-                //postpad
-                for (int j = 0; j < postpad_len; j++){
-                    //for (int i = 0; i < 4; i++){
+                if (false) { //(regfile[6] < MEM_BLOCK_SIZE){
+                    //we are in the last block of this section and must postpad
+                    //postpadding
+                    //Now we calculate mem addr of last cell to write of last pe
+                    if (regfile[12] % 4 == 1) { //i.e. score % 4 == 1
+                        regfile[11] = regfile[6] - 3;
+                    } else {
+                        regfile[11] = regfile[6] - 1;
+                    }
+                    if (regfile[11] < 0){
+                        regfile[11] = 0;
+                    }
+                    //add up until we get to last pe
+                    for (int i = 0; i < 3; i++){
+                        regfile[11] += regfile[4];
+                    }
+                    //add initial offset
+                    regfile[11] += regfile[1];
+                    //finally subtract the remainder
+                    regfile[11] -= (postpad_len);
+
+                    //postpad
+                    for (int j = 0; j < postpad_len; j++){
                         SPM_unit->buffer[regfile[11]+SPM_BANK_SIZE*3]   = MIN_INT; //only for last
-                        std::cout << "zkn " << regfile[11] << std::endl;
-                    //}
-                    regfile[11] = regfile[11]+1;
+                        regfile[11] = regfile[11]+1;
+                    }
                 }
 
             };
 
-            ////diags_per_pe
-            //regfile[4] = regfile[12] >> 2;
-            //regfile[4] += 1;
-            ////Write fullOs
-            //regfile[1] = 0*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs (O is row 0)
-            //loadSpmRegMapped(3, 5, 2, 3);  // prepad=3, postpad=5, affineInd=2, wf_i_offset=3
+            //temporary increase regfile[9] because we are processing the next block_iter
+            regfile[9]+=1;
+            //diags_per_pe
+            regfile[4] = regfile[12] >> 2;
+            regfile[4] += 1;
+            //true end is gr4
+            //local end is min(MEM_BLOCK_SIZE or remainder regfile[4])
+            regfile[11] = MEM_BLOCK_SIZE * regfile[9];
+            regfile[2] = regfile[4] - regfile[11]; //gr2 as tmp. holds remainder
+            if (regfile[2] < MEM_BLOCK_SIZE){
+                regfile[6] = regfile[2];
+            } else {
+                regfile[6] = MEM_BLOCK_SIZE;
+            }
+            if (regfile[6] < 0){
+                regfile[6] = 0;
+            }
+            //Write fullOs
+            regfile[1] = 0*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs (O is row 0)
+            loadSpmRegMapped(3, 5, 2, 3);  // prepad=3, postpad=5, affineInd=2, wf_i_offset=3
 
-            ////Write fullMs
-            //regfile[1] = 1*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
-            //loadSpmRegMapped(2, 2, 2, 1);  // prepad=2, postpad=2, affineInd=2
-            ////Write fullIs
-            //regfile[1] = 2*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
-            //loadSpmRegMapped(2,0,1,0);
-            ////Write the fullDs
-            //regfile[1] = 3*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
-            //loadSpmRegMapped(0, 2, 0,0);
+            //Write fullMs
+            regfile[1] = 1*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
+            loadSpmRegMapped(2, 2, 2, 1);  // prepad=2, postpad=2, affineInd=2
+            //Write fullIs
+            regfile[1] = 2*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
+            loadSpmRegMapped(2,0,1,0);
+            //Write the fullDs
+            regfile[1] = 3*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
+            loadSpmRegMapped(0, 2, 0,0);
+            regfile[9]-=1;
 
+            //Now write to SPMs
+            int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
+            for (int i = 0; i < 4; i++) {
+                int start = i*n_diags_per_pe + next_block_iter * MEM_BLOCK_SIZE;
+                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
+                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+                //iterates over wf id. Then add appropriate offsets to get the SPM addr
+                for (int j = start; j < end; j++) {
+                //    //SET O
+                //    SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullO)[j];
+                //    //SET M (now using register-mapped approach)
+                //    SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullM)[j];
+                //    //SET I
+                //    SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullI)[j];
+                //    //SET D
+                //    SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullD)[j];
 
-
-            ////display O
-            //k = 0;
-            //for (int i = 0; i < 4; i++) {
-            //    int start = i*n_diags_per_pe + next_block_iter * MEM_BLOCK_SIZE;
-            //    int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
-            //    int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
-            //    if (i == 0){
-            //        magic_wfs_out << "(wf_start, wf_end) : (" << start <<", " << end <<")" << std::endl;
-            //    }
-            //    for (int j = start; j < end; j++) {
-            //        magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start);
-            //        k++;
-            //    }
-            //}
-            //magic_wfs_out << std::endl;
-
-            ////display M
-            //k = 0;
-            //for (int i = 0; i < 4; i++) {
-            //    int start = i*n_diags_per_pe + next_block_iter * MEM_BLOCK_SIZE;
-            //    int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
-            //    int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
-            //    for (int j = start; j < end; j++) {
-            //        magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + next_block_start + j - start);
-            //        k++;
-            //    }
-            //}
-            //magic_wfs_out << std::endl;
-
-            ////display I
-            //k = 0;
-            //for (int i = 0; i < 4; i++) {
-            //    int start = i*n_diags_per_pe + next_block_iter * MEM_BLOCK_SIZE;
-            //    int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
-            //    int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
-            //    //iterates over wf id. Then add appropriate offsets to get the SPM addr
-            //    for (int j = start; j < end; j++) {
-            //        magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + next_block_start + j - start);
-            //        k++;
-            //    }
-            //}
-            //magic_wfs_out << std::endl;
-
-            ////display D
-            //k = 0;
-            //for (int i = 0; i < 4; i++) {
-            //    int start = i*n_diags_per_pe + next_block_iter * MEM_BLOCK_SIZE;
-            //    int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
-            //    int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
-            //    //iterates over wf id. Then add appropriate offsets to get the SPM addr
-            //    for (int j = start; j < end; j++) {
-            //        magic_wfs_out << std::setw(width) << SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start);
-            //        k++;
-            //    }
-            //}
-            //magic_wfs_out << std::endl;
+                }
+                if (start < end){
+                    //fix up the extra two Os needed from previous tile
+                    if (i == 0 && next_block_iter == 0){
+                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = MIN_INT;
+                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = MIN_INT;
+                    } else {
+                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = (*fullO)[start - 2];
+                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = (*fullO)[start - 1];
+                    }
+                }
+            }
+            delete fullO;
+            delete fullM;  // Now using register-mapped approach
+            delete fullI;
+            delete fullD;
 
         } else if (magic_payload == 2){
         //INCREMENT CURRENT_WF_I
             //printf("score %d:\n", past_wf_sizes[current_wf_i]+3);
             current_wf_i++;
+            //Do an extra write of buffer MIN_INTS to wfs
+            for (int i = 0; i < 8; i++){
+                for (int affine_i = 0; affine_i < 3; affine_i++){
+                    past_wfs[current_wf_i][affine_i][past_wf_sizes[current_wf_i]+i] = MIN_INT;
+                }
+            }
         } else if (magic_payload == 3){
         //WRITE MAIN MEM WITH RESULTS IN CURRENT_BLOCK_START (gr[8])
             int current_wf_size = main_addressing_register[12];
@@ -716,19 +682,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
             past_wf_sizes[write_wf_i] = current_wf_size;
 
-            //display the last computed wavefront in PE-strided block order
-            //int width = 3;
-            //for (int affine_id : {2,0,1}) {  // M, D, I order
-            //    for (int pe_i = 0; pe_i < 4; pe_i++) {
-            //        int start = pe_i * n_diags_per_pe + (block_iter) * MEM_BLOCK_SIZE;
-            //        int end_pe = std::min(n_diags_per_pe * (pe_i + 1), current_wf_size);
-            //        int end = std::min(start + MEM_BLOCK_SIZE, end_pe);
-            //        for (int j = start; j < end; j++) {
-            //            magic_wfs_out << std::setw(width) << past_wfs[write_wf_i][affine_id][j];
-            //        }
-            //    }
-            //    magic_wfs_out << std::endl;
-            //}
         } else if (magic_payload == 5) {
             // Exit condition reached - print final score (wf_len - 1)
             printf("qqq %d qqq\n", main_addressing_register[12] - 1);
