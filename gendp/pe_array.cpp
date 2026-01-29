@@ -475,6 +475,39 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             std::vector<int>* fullI = getInputVec(2, 0, current_wf_i, 1);
             std::vector<int>* fullD = getInputVec(0, 2, current_wf_i, 0);
             int k = 0;
+            //Now write to SPMs
+            int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
+            for (int i = 0; i < 4; i++) {
+                int start = i*n_diags_per_pe + next_block_iter * MEM_BLOCK_SIZE;
+                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
+                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+                //iterates over wf id. Then add appropriate offsets to get the SPM addr
+                for (int j = start; j < end; j++) {
+                //    //SET O
+                //    SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullO)[j];
+                //    //SET M (now using register-mapped approach)
+                //    SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullM)[j];
+                //    //SET I
+                //    SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullI)[j];
+                //    //SET D
+                //    SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullD)[j];
+
+                }
+                if (start < end){
+                    //fix up the extra two Os needed from previous tile
+                    if (i == 0 && next_block_iter == 0){
+                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = MIN_INT;
+                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = MIN_INT;
+                    } else {
+                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = (*fullO)[start - 2];
+                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = (*fullO)[start - 1];
+                    }
+                }
+            }
+            delete fullO;
+            delete fullM;  // Now using register-mapped approach
+            delete fullI;
+            delete fullD;
 
 
             /*
@@ -555,35 +588,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
                 //restore gr1
                 regfile[1] = regfile[5] - regfile[6];
-
-                if (false) { //(regfile[6] < MEM_BLOCK_SIZE){
-                    //we are in the last block of this section and must postpad
-                    //postpadding
-                    //Now we calculate mem addr of last cell to write of last pe
-                    if (regfile[12] % 4 == 1) { //i.e. score % 4 == 1
-                        regfile[11] = regfile[6] - 3;
-                    } else {
-                        regfile[11] = regfile[6] - 1;
-                    }
-                    if (regfile[11] < 0){
-                        regfile[11] = 0;
-                    }
-                    //add up until we get to last pe
-                    for (int i = 0; i < 3; i++){
-                        regfile[11] += regfile[4];
-                    }
-                    //add initial offset
-                    regfile[11] += regfile[1];
-                    //finally subtract the remainder
-                    regfile[11] -= (postpad_len);
-
-                    //postpad
-                    for (int j = 0; j < postpad_len; j++){
-                        SPM_unit->buffer[regfile[11]+SPM_BANK_SIZE*3]   = MIN_INT; //only for last
-                        regfile[11] = regfile[11]+1;
-                    }
-                }
-
             };
 
             //temporary increase regfile[9] because we are processing the next block_iter
@@ -618,39 +622,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             loadSpmRegMapped(0, 2, 0,0);
             regfile[9]-=1;
 
-            //Now write to SPMs
-            int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
-            for (int i = 0; i < 4; i++) {
-                int start = i*n_diags_per_pe + next_block_iter * MEM_BLOCK_SIZE;
-                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
-                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
-                //iterates over wf id. Then add appropriate offsets to get the SPM addr
-                for (int j = start; j < end; j++) {
-                //    //SET O
-                //    SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullO)[j];
-                //    //SET M (now using register-mapped approach)
-                //    SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullM)[j];
-                //    //SET I
-                //    SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullI)[j];
-                //    //SET D
-                //    SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullD)[j];
-
-                }
-                if (start < end){
-                    //fix up the extra two Os needed from previous tile
-                    if (i == 0 && next_block_iter == 0){
-                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = MIN_INT;
-                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = MIN_INT;
-                    } else {
-                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = (*fullO)[start - 2];
-                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = (*fullO)[start - 1];
-                    }
-                }
-            }
-            delete fullO;
-            delete fullM;  // Now using register-mapped approach
-            delete fullI;
-            delete fullD;
 
         } else if (magic_payload == 2){
         //INCREMENT CURRENT_WF_I
