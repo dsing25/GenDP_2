@@ -2,6 +2,22 @@
 #include <iomanip>
 #include <cassert>
 
+S2::S2(int size_elements) {
+    buffer = new int[size_elements];
+    buffer_size = size_elements;
+    reset();
+}
+
+S2::~S2() {
+    delete[] buffer;
+}
+
+void S2::reset() {
+    int i;
+    for (i = 0; i < buffer_size; i++)
+        buffer[i] = -42;
+}
+
 // template <typename T>
 // data_buffer<T>::data_buffer(int size) {
 

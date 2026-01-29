@@ -19,6 +19,7 @@ pe_array::pe_array(int input_size, int output_size) {
 
     input_buffer = (int*)calloc(input_buffer_size, sizeof(int));
     output_buffer = (int*)calloc(output_buffer_size, sizeof(int));
+    s2 = new S2(S2_BUFFER_INTS);
 
     main_addressing_register[0] = 0;
     main_PC = 0;
@@ -35,6 +36,7 @@ pe_array::~pe_array() {
     int i;
     free(input_buffer);
     free(output_buffer);
+    delete s2;
     for (i = 0; i < PE_NUM; i++)
         delete pe_unit[i];
     delete SPM_unit;

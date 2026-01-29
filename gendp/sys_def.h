@@ -30,6 +30,8 @@
 #define SPM_BANDWIDTH 2
 #define SPM_ADDR_NUM 4096
 #define SPM_BANK_SIZE 1024
+#define S2_BUFFER_BYTES (1024 * 1024) // 1 MB, int-addressable (4 bytes per int)
+#define S2_BUFFER_INTS (S2_BUFFER_BYTES / 4)
 #define MAIN_ADDR_REGISTER_NUM 16
 #define CTRL_INSTR_BUFFER_NUM 512
 #define COMP_INSTR_BUFFER_GROUP_NUM 33

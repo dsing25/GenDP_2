@@ -65,6 +65,7 @@ class pe_array {
         std::set<EventProducer*> active_event_producers;
 
         SPM * SPM_unit;
+        S2 * s2;
 
 
 };

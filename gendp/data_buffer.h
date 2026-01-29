@@ -8,6 +8,20 @@ enum class SpmAccessT {
     WRITE
 };
 
+class S2 {
+
+    public:
+
+        explicit S2(int size_elements);
+        ~S2();
+
+        void reset();
+
+        int *buffer;
+        int buffer_size;
+
+};
+
 // template <class T>
 // class data_buffer {
 
