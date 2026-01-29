@@ -439,26 +439,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int next_block_iter = block_iter +1; //we operate on this cause we're writing to next
             main_addressing_register[3] = current_wf_i;
             int width = 3; // for display
-
-
-            
-
-            //Rest is about writing the inputs to the SPM for each pe
-            auto getInputVec = [&](int prepad, int postpad, int wf_i,
-                                int affine_ind) {
-                std::vector<int>* vec = new std::vector<int>();
-                int j = 0;
-                // Write prepadding zeros
-                for (; j < prepad; j++)
-                    vec->push_back(-99);
-                // Copy data from past_wfs
-                for (; j < prepad + past_wf_sizes[wf_i]; j++)
-                    vec->push_back(past_wfs[wf_i][affine_ind][j - prepad]);
-                // Write postpadding zeros
-                for (; j < prepad + past_wf_sizes[wf_i] + postpad; j++)
-                    vec->push_back(-99);
-                return vec;
-            };
+                           
             auto mvdq = [&](int dst, int src, bool toSPM){
                 //TODO this is not realistic. We need to access blocks not arbitrary location.
                 for (int i =0; i < 8; i++){
@@ -469,46 +450,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     }
                 }
             };
-
-            std::vector<int>* fullO = getInputVec(3, 5, current_wf_i - 3, 2);
-            std::vector<int>* fullM = getInputVec(2, 2, current_wf_i - 1, 2);  // Now using register-mapped approach
-            std::vector<int>* fullI = getInputVec(2, 0, current_wf_i, 1);
-            std::vector<int>* fullD = getInputVec(0, 2, current_wf_i, 0);
-            int k = 0;
-            //Now write to SPMs
-            int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
-            for (int i = 0; i < 4; i++) {
-                int start = i*n_diags_per_pe + next_block_iter * MEM_BLOCK_SIZE;
-                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
-                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
-                //iterates over wf id. Then add appropriate offsets to get the SPM addr
-                for (int j = start; j < end; j++) {
-                //    //SET O
-                //    SPM_unit->access_magic(i, 0 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullO)[j];
-                //    //SET M (now using register-mapped approach)
-                //    SPM_unit->access_magic(i, 1 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullM)[j];
-                //    //SET I
-                //    SPM_unit->access_magic(i, 2 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullI)[j];
-                //    //SET D
-                //    SPM_unit->access_magic(i, 3 * MEM_BLOCK_SIZE + next_block_start + j - start) = (*fullD)[j];
-
-                }
-                if (start < end){
-                    //fix up the extra two Os needed from previous tile
-                    if (i == 0 && next_block_iter == 0){
-                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = MIN_INT;
-                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = MIN_INT;
-                    } else {
-                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start)   = (*fullO)[start - 2];
-                        SPM_unit->access_magic(i, EXTRA_O_LOAD_ADDR+next_block_start+1) = (*fullO)[start - 1];
-                    }
-                }
-            }
-            delete fullO;
-            delete fullM;  // Now using register-mapped approach
-            delete fullI;
-            delete fullD;
-
 
             /*
              * Preconditions:
@@ -521,15 +462,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
              *   prepadding: the number of MIN_INTS to put at the start of wf. (must be < 8)
              *   postpadding: number of MIN_INTS to put at end of wf. (must be < 8)
              *   affineInd: {D0:I1:H2}. For wf calculation
+             *   isO: if true, write extra O values to EXTRA_O_LOAD_ADDR
              * Postconditions:
-             *      The wavefront located in 
+             *      The wavefront located in
              *      gr11:destroyed. Used as a tmp
              *      gr2: destroyed.
              *      gr1: preserved
              *      gr5: destroyed. Used as loop end
+             *      For isO=true, extra O values are written to EXTRA_O_LOAD_ADDR
              */
-            auto loadSpmRegMapped = [&](int prepad_len, int postpad_len, int affineInd, 
-                    int wf_i_offset){
+            auto loadSpmRegMapped = [&](int prepad_len, int postpad_len, int affineInd,
+                    int wf_i_offset, bool isO){
                 //offset into mainMem = wf_i*3*max_wf_len + affine_ind*max_wf_len + next_block_iter *block_size
                 regfile[11] = affineInd * MAX_WF_LEN; //affine_ind * wflen
                 regfile[2] = regfile[11]; //initial set = instead of +=
@@ -588,6 +531,52 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
                 //restore gr1
                 regfile[1] = regfile[5] - regfile[6];
+
+                // Extra O load for EXTRA_O_LOAD_ADDR (only when isO=true)
+                if (isO) {
+                    // Recompute base address for extra O load
+                    // Need: (current_wf_i - 3) * 3 * MAX_WF_LEN + 2 * MAX_WF_LEN + block_iter * MEM_BLOCK_SIZE - 5
+                    
+                    // Add affineInd * MAX_WF_LEN (affineInd = 2 for O)
+                    regfile[2] = 2 * MAX_WF_LEN;
+
+                    // Compute (current_wf_i - 3) with modular wraparound into gr[11]
+                    regfile[11] = regfile[3]; // current_wf_i
+                    for (int i = 0; i < 3; i++) { // wf_i_offset = 3 for O
+                        regfile[11] -= 1;
+                        if (regfile[11] < 0) regfile[11] = N_WFS - 1;
+                    }
+                    regfile[11] *= MAX_WF_LEN;
+
+                    // Multiply by 3 into gr[2]
+                    for (int i = 0; i < 3; i++) {
+                        regfile[2] += regfile[11];
+                    }
+
+
+                    // Add block_iter * MEM_BLOCK_SIZE (gr[9] was already incremented to next_block_iter)
+                    regfile[11] = regfile[9] * MEM_BLOCK_SIZE;
+                    regfile[2] += regfile[11];
+
+                    // Subtract 5 (prepad=3 means start-2 maps to index-5 in past_wfs)
+                    regfile[2] -= 5;
+
+                    // gr[2] now points to PE 0's source for extra O load
+                    // Use accumulator pattern: gr[11] holds current source offset
+                    regfile[11] = regfile[2];
+
+                    // Loop through 4 PEs, always write (don't check bounds)
+                    for (int pe_i = 0; pe_i < 4; pe_i++) {
+                        // Write two values to EXTRA_O_LOAD_ADDR + next_block_start for this PE
+                        SPM_unit->buffer[EXTRA_O_LOAD_ADDR + regfile[10] + SPM_BANK_SIZE * pe_i] =
+                            ((int*)past_wfs)[regfile[11]];
+                        SPM_unit->buffer[EXTRA_O_LOAD_ADDR + regfile[10] + SPM_BANK_SIZE * pe_i + 1] =
+                            ((int*)past_wfs)[regfile[11] + 1];
+
+                        // Accumulate: add n_diags_per_pe (gr[4]) for next PE
+                        regfile[11] += regfile[4];
+                    }
+                }
             };
 
             //temporary increase regfile[9] because we are processing the next block_iter
@@ -609,17 +598,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
             //Write fullOs
             regfile[1] = 0*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs (O is row 0)
-            loadSpmRegMapped(3, 5, 2, 3);  // prepad=3, postpad=5, affineInd=2, wf_i_offset=3
+            loadSpmRegMapped(3, 5, 2, 3, true);  // prepad=3, postpad=5, affineInd=2, wf_i_offset=3, isO=true
 
             //Write fullMs
             regfile[1] = 1*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
-            loadSpmRegMapped(2, 2, 2, 1);  // prepad=2, postpad=2, affineInd=2
+            loadSpmRegMapped(2, 2, 2, 1, false);  // prepad=2, postpad=2, affineInd=2, isO=false
             //Write fullIs
             regfile[1] = 2*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
-            loadSpmRegMapped(2,0,1,0);
+            loadSpmRegMapped(2, 0, 1, 0, false);  // isO=false
             //Write the fullDs
             regfile[1] = 3*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
-            loadSpmRegMapped(0, 2, 0,0);
+            loadSpmRegMapped(0, 2, 0, 0, false);  // isO=false
             regfile[9]-=1;
 
 
