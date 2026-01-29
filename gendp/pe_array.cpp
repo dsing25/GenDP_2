@@ -494,6 +494,24 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 regfile[11] = regfile[9] * MEM_BLOCK_SIZE; //block iter * block size
                 regfile[2] += regfile[11];
 
+                // Extra O load for EXTRA_O_LOAD_ADDR (only when isO=true)
+                if (isO) {
+                    // Subtract 5 (prepad=3 means start-2 maps to index-5 in past_wfs)
+                    regfile[11] = regfile[2] - 5;
+
+                    // Loop through 4 PEs, always write (don't check bounds)
+                    for (int pe_i = 0; pe_i < 4; pe_i++) {
+                        // Write two values to EXTRA_O_LOAD_ADDR + next_block_start for this PE
+                        SPM_unit->buffer[EXTRA_O_LOAD_ADDR + regfile[10] + SPM_BANK_SIZE * pe_i] =
+                            ((int*)past_wfs)[regfile[11]];
+                        SPM_unit->buffer[EXTRA_O_LOAD_ADDR + regfile[10] + SPM_BANK_SIZE * pe_i + 1] =
+                            ((int*)past_wfs)[regfile[11] + 1];
+
+                        // Accumulate: add n_diags_per_pe (gr[4]) for next PE
+                        regfile[11] += regfile[4];
+                    }
+                }
+
                 if (regfile[9] == regfile[0]){ //if first block
                     //prepad, we do one full pass through here
                     for (int j = 0; j < prepad_len; j++){
@@ -534,51 +552,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //restore gr1
                 regfile[1] = regfile[5] - regfile[6];
 
-                // Extra O load for EXTRA_O_LOAD_ADDR (only when isO=true)
-                if (isO) {
-                    // Recompute base address for extra O load
-                    // Need: (current_wf_i - 3) * 3 * MAX_WF_LEN + 2 * MAX_WF_LEN + block_iter * MEM_BLOCK_SIZE - 5
-                    
-                    // Add affineInd * MAX_WF_LEN (affineInd = 2 for O)
-                    regfile[2] = 2 * MAX_WF_LEN;
-
-                    // Compute (current_wf_i - 3) with modular wraparound into gr[11]
-                    regfile[11] = regfile[3]; // current_wf_i
-                    for (int i = 0; i < 3; i++) { // wf_i_offset = 3 for O
-                        regfile[11] -= 1;
-                        if (regfile[11] < 0) regfile[11] = N_WFS - 1;
-                    }
-                    regfile[11] *= MAX_WF_LEN;
-
-                    // Multiply by 3 into gr[2]
-                    for (int i = 0; i < 3; i++) {
-                        regfile[2] += regfile[11];
-                    }
-
-
-                    // Add block_iter * MEM_BLOCK_SIZE (gr[9] was already incremented to next_block_iter)
-                    regfile[11] = regfile[9] * MEM_BLOCK_SIZE;
-                    regfile[2] += regfile[11];
-
-                    // Subtract 5 (prepad=3 means start-2 maps to index-5 in past_wfs)
-                    regfile[2] -= 5;
-
-                    // gr[2] now points to PE 0's source for extra O load
-                    // Use accumulator pattern: gr[11] holds current source offset
-                    regfile[11] = regfile[2];
-
-                    // Loop through 4 PEs, always write (don't check bounds)
-                    for (int pe_i = 0; pe_i < 4; pe_i++) {
-                        // Write two values to EXTRA_O_LOAD_ADDR + next_block_start for this PE
-                        SPM_unit->buffer[EXTRA_O_LOAD_ADDR + regfile[10] + SPM_BANK_SIZE * pe_i] =
-                            ((int*)past_wfs)[regfile[11]];
-                        SPM_unit->buffer[EXTRA_O_LOAD_ADDR + regfile[10] + SPM_BANK_SIZE * pe_i + 1] =
-                            ((int*)past_wfs)[regfile[11] + 1];
-
-                        // Accumulate: add n_diags_per_pe (gr[4]) for next PE
-                        regfile[11] += regfile[4];
-                    }
-                }
             };
 
             //temporary increase regfile[9] because we are processing the next block_iter
