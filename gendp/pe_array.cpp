@@ -599,23 +599,87 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
         } else if (magic_payload == 3){
         //WRITE MAIN MEM WITH RESULTS IN CURRENT_BLOCK_START (gr[8])
-            int current_wf_size = main_addressing_register[12];
-            int this_block_start = main_addressing_register[8];
-            int block_iter = main_addressing_register[9];
-            int write_wf_i = current_wf_i + 1;
-            //store output wavefronts
-            int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
-            for (int i = 0; i < 4; i++) {
-                int start = i*n_diags_per_pe + (block_iter) * MEM_BLOCK_SIZE;
-                int end_this_pe_comp_region = std::min(n_diags_per_pe*(i+1), current_wf_size);
-                int end   = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
-                for (int j = start; j < end; j++) {
-                    past_wfs[write_wf_i][0][j] = SPM_unit->access_magic(i, 5 * MEM_BLOCK_SIZE + this_block_start + j - start); //set d write
-                    past_wfs[write_wf_i][1][j] = SPM_unit->access_magic(i, 6 * MEM_BLOCK_SIZE + this_block_start + j - start); //set i write
-                    past_wfs[write_wf_i][2][j] = SPM_unit->access_magic(i, 4 * MEM_BLOCK_SIZE + this_block_start + j - start); //set m write
+        //Register-mapped version with strided PE access: SPM -> past_wfs
+            int (&regfile)[16] = main_addressing_register;
+            regfile[3] = current_wf_i;
+
+            /*
+             * storeSpmToWavefrontStrided: Transfer computed results from SPM to past_wfs
+             * Uses strided PE access pattern (PE0 → PE1 → PE2 → PE3) for each element
+             * to minimize banking conflicts while respecting per-PE bounds.
+             *
+             * Parameters:
+             *      affine_i: affine type (0=D, 1=I, 2=M)
+             *
+             * Preconditions:
+             *      gr3: current_wf_i
+             *      gr4: n_diags_per_pe
+             *      gr8: this_block_start (0 or BLOCK_1_START) - read only
+             *      gr9: block_iter - read only
+             *      gr12: current_wf_size - read only
+             *
+             * Uses (destroyed):
+             *      gr1, gr2, gr5, gr6, gr7, gr11
+             */
+            auto storeSpmToWavefrontStrided = [&](int affine_i) {
+                // SPM row mapping: D=row5, I=row6, M=row4
+                static constexpr int SPM_ROW_FOR_AFFINE[3] = {5, 6, 4};
+                // For each element offset within the block (strided access)
+                for (int elem = 0; elem < regfile[6]; elem++) {
+                    // Compute base past_wfs destination
+                    regfile[11] = regfile[3] + 1;
+                    if (regfile[11] >= N_WFS) regfile[11] = 0;
+                    regfile[11] *= MAX_WF_LEN;
+                    regfile[2] = regfile[11];
+                    regfile[2] += regfile[11];
+                    regfile[2] += regfile[11];       // = 3 * write_wf_i * MAX_WF_LEN
+                    regfile[2] += affine_i * MAX_WF_LEN;
+                    regfile[11] = regfile[9] * MEM_BLOCK_SIZE;
+                    regfile[2] += regfile[11];       // + block_iter * MEM_BLOCK_SIZE
+                    regfile[2] += elem;              // + element offset
+
+                    // SPM local address base
+                    regfile[1] = SPM_ROW_FOR_AFFINE[affine_i] * MEM_BLOCK_SIZE + regfile[8] + elem;
+
+                    // Strided pattern: PE0 → PE1 → PE2 → PE3
+                    for (int pe_i = 0; pe_i < 4; pe_i++) {
+                        // Compute start for this PE in this block
+                        int start = pe_i * regfile[4] + regfile[9] * MEM_BLOCK_SIZE;
+                        // Compute end for this PE (min of pe's region end and wf_size)
+                        int end_pe = (pe_i + 1) * regfile[4];
+                        if (end_pe > regfile[12]) end_pe = regfile[12];
+                        // End for this block iteration
+                        int end_block = start + MEM_BLOCK_SIZE;
+                        if (end_block > end_pe) end_block = end_pe;
+
+                        // Check if this element is valid for this PE
+                        if (start + elem < end_block) {
+                            // Copy single element
+                            ((int*)past_wfs)[regfile[2]] = SPM_unit->buffer[regfile[1] + pe_i * SPM_BANK_SIZE];
+                        }
+                        regfile[2] += regfile[4];  // stride by n_diags_per_pe
+                    }
                 }
+            };
+
+            // Compute n_diags_per_pe: gr[4] = gr[12] / 4 + 1
+            regfile[4] = regfile[12] >> 2;
+            regfile[4] += 1;
+            regfile[11] = regfile[9] * MEM_BLOCK_SIZE;
+            // gr[6] = diags_to_execute for this block (for PE0)
+            regfile[6] = regfile[4] - regfile[11];
+            if (regfile[6] > MEM_BLOCK_SIZE) regfile[6] = MEM_BLOCK_SIZE;
+            if (regfile[6] > 0){
+                // Process each affine type: D=0, I=1, M=2
+                storeSpmToWavefrontStrided(0);
+                storeSpmToWavefrontStrided(1);
+                storeSpmToWavefrontStrided(2);
             }
-            past_wf_sizes[write_wf_i] = current_wf_size;
+
+            // Update past_wf_sizes
+            regfile[11] = regfile[3] + 1;
+            if (regfile[11] >= N_WFS) regfile[11] = 0;
+            past_wf_sizes[regfile[11]] = regfile[12];
 
         } else if (magic_payload == 5) {
             // Exit condition reached - print final score (wf_len - 1)
