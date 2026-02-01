@@ -313,6 +313,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         static int past_wf_sizes[N_WFS];
         static std::ofstream magic_wfs_out("magic_wfs_out.txt");
         static ModInt current_wf_i(N_WFS);
+        auto mvdq = [&](int dst, int src, bool toSPM){
+            //TODO this is not realistic. We need to access blocks not arbitrary location.
+            for (int i =0; i < 8; i++){
+                if (toSPM){
+                    SPM_unit->buffer[dst+i] = ((int*)past_wfs)[src+i];
+                } else {
+                    ((int*)past_wfs)[dst+i] = SPM_unit->buffer[src+i];
+                }
+            }
+        };
+
 
         if (magic_payload == 4) {
         //INITIALIZATION BEGINING OF TIME
@@ -432,7 +443,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             free(pattern_seq);
             free(text_seq);
         } else if (magic_payload == 1){
-            int (&regfile)[16] = main_addressing_register;
+            int (&gr)[16] = main_addressing_register;
         //READ FROM MAIN MEM. WRITE TO NEXT_BLOCK_START (gr[10)
             int current_wf_size = main_addressing_register[12];
             int next_block_start = main_addressing_register[10];
@@ -442,17 +453,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             main_addressing_register[3] = current_wf_i;
             int width = 3; // for display
                            
-            auto mvdq = [&](int dst, int src, bool toSPM){
-                //TODO this is not realistic. We need to access blocks not arbitrary location.
-                for (int i =0; i < 8; i++){
-                    if (toSPM){
-                        SPM_unit->buffer[dst+i] = ((int*)past_wfs)[src+i];
-                    } else {
-                        ((int*)past_wfs)[dst+i] = SPM_unit->buffer[src+i];
-                    }
-                }
-            };
-
             /*
              * Preconditions:
              *      gr4: diags per pe
@@ -476,115 +476,115 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             auto loadSpmRegMapped = [&](int prepad_len, int postpad_len, int affineInd,
                     int wf_i_offset, bool isO){
                 //offset into mainMem = wf_i*3*max_wf_len + affine_ind*max_wf_len + next_block_iter *block_size
-                regfile[11] = affineInd * MAX_WF_LEN; //affine_ind * wflen
-                regfile[2] = regfile[11]; //initial set = instead of +=
-                regfile[11] = regfile[3];
+                gr[11] = affineInd * MAX_WF_LEN; //affine_ind * wflen
+                gr[2] = gr[11]; //initial set = instead of +=
+                gr[11] = gr[3];
                 //modular subtraction
                 for (int i=0; i < wf_i_offset; i++){
-                    regfile[11] -= 1;
-                    if (regfile[11] < 0) {
-                        regfile[11] = N_WFS-1;
+                    gr[11] -= 1;
+                    if (gr[11] < 0) {
+                        gr[11] = N_WFS-1;
                     }
                 }
-                regfile[11] *= MAX_WF_LEN;
+                gr[11] *= MAX_WF_LEN;
                 //multiply by 3
                 for (int i = 0; i < 3; i++){
-                    regfile[2] += regfile[11];
+                    gr[2] += gr[11];
                 }
-                regfile[11] = regfile[9] * MEM_BLOCK_SIZE; //block iter * block size
-                regfile[2] += regfile[11];
+                gr[11] = gr[9] * MEM_BLOCK_SIZE; //block iter * block size
+                gr[2] += gr[11];
 
                 // Extra O load for EXTRA_O_LOAD_ADDR (only when isO=true)
                 if (isO) {
                     // Subtract 5 (prepad=3 means start-2 maps to index-5 in past_wfs)
-                    regfile[11] = regfile[2] - 5;
+                    gr[11] = gr[2] - 5;
 
                     // Loop through 4 PEs, always write (don't check bounds)
                     for (int pe_i = 0; pe_i < 4; pe_i++) {
                         // Write two values to EXTRA_O_LOAD_ADDR + next_block_start for this PE
-                        SPM_unit->buffer[EXTRA_O_LOAD_ADDR + regfile[10] + SPM_BANK_SIZE * pe_i] =
-                            ((int*)past_wfs)[regfile[11]];
-                        SPM_unit->buffer[EXTRA_O_LOAD_ADDR + regfile[10] + SPM_BANK_SIZE * pe_i + 1] =
-                            ((int*)past_wfs)[regfile[11] + 1];
+                        SPM_unit->buffer[EXTRA_O_LOAD_ADDR + gr[10] + SPM_BANK_SIZE * pe_i] =
+                            ((int*)past_wfs)[gr[11]];
+                        SPM_unit->buffer[EXTRA_O_LOAD_ADDR + gr[10] + SPM_BANK_SIZE * pe_i + 1] =
+                            ((int*)past_wfs)[gr[11] + 1];
 
                         // Accumulate: add n_diags_per_pe (gr[4]) for next PE
-                        regfile[11] += regfile[4];
+                        gr[11] += gr[4];
                     }
                 }
 
-                if (regfile[9] == regfile[0]){ //if first block
+                if (gr[9] == gr[0]){ //if first block
                     //prepad, we do one full pass through here
                     for (int j = 0; j < prepad_len; j++){
-                        SPM_unit->buffer[regfile[1]+j+SPM_BANK_SIZE*0] = MIN_INT;
+                        SPM_unit->buffer[gr[1]+j+SPM_BANK_SIZE*0] = MIN_INT;
                     }
-                    //end point define - must be set BEFORE incrementing regfile[1]
-                    regfile[5] = regfile[1] + regfile[6];
-                    mvdq(regfile[1]+prepad_len, regfile[2], true); //ignore last prepad_len of this
+                    //end point define - must be set BEFORE incrementing gr[1]
+                    gr[5] = gr[1] + gr[6];
+                    mvdq(gr[1]+prepad_len, gr[2], true); //ignore last prepad_len of this
 
                     //We need this because for small wf_len, diags_per_pe (gr4) is less than prepad len
                     //which causes gr2 = offset -2 (i.e. out of bounds access)
-                    if (regfile[6] >= prepad_len) {
-                        regfile[2] -= prepad_len;
+                    if (gr[6] >= prepad_len) {
+                        gr[2] -= prepad_len;
                     }
-                    regfile[11] = regfile[2] + regfile[4];
-                    mvdq(regfile[1]+SPM_BANK_SIZE*1,regfile[11],true); //pe1
-                    regfile[11] += regfile[4];
-                    mvdq(regfile[1]+SPM_BANK_SIZE*2,regfile[11],true); //pe1
-                    regfile[11] += regfile[4];
-                    mvdq(regfile[1]+SPM_BANK_SIZE*3,regfile[11],true); //pe1
-                    regfile[1] += 8;
-                    regfile[2] += 8;
+                    gr[11] = gr[2] + gr[4];
+                    mvdq(gr[1]+SPM_BANK_SIZE*1,gr[11],true); //pe1
+                    gr[11] += gr[4];
+                    mvdq(gr[1]+SPM_BANK_SIZE*2,gr[11],true); //pe1
+                    gr[11] += gr[4];
+                    mvdq(gr[1]+SPM_BANK_SIZE*3,gr[11],true); //pe1
+                    gr[1] += 8;
+                    gr[2] += 8;
                 } else {
-                    regfile[5] = regfile[1] + regfile[6];
-                    regfile[2] -= prepad_len;
+                    gr[5] = gr[1] + gr[6];
+                    gr[2] -= prepad_len;
                 }
                 //now we do the remaining passes (if there are any)
-                while (regfile[1] < regfile[5]){
-                    regfile[11] = regfile[2]; //temp cache
+                while (gr[1] < gr[5]){
+                    gr[11] = gr[2]; //temp cache
                     for (int i = 0; i < 4; i++){
-                        mvdq(regfile[1]+SPM_BANK_SIZE*i, regfile[11], true);
+                        mvdq(gr[1]+SPM_BANK_SIZE*i, gr[11], true);
                         if (i != 4) //save a cycle don't need inc
-                            regfile[11] += regfile[4];
+                            gr[11] += gr[4];
                     }
-                    regfile[1] += 8;
-                    regfile[2] += 8;
+                    gr[1] += 8;
+                    gr[2] += 8;
                 }
                 //restore gr1
-                regfile[1] = regfile[5] - regfile[6];
+                gr[1] = gr[5] - gr[6];
 
             };
 
-            //temporary increase regfile[9] because we are processing the next block_iter
-            regfile[9]+=1;
+            //temporary increase gr[9] because we are processing the next block_iter
+            gr[9]+=1;
             //diags_per_pe
-            regfile[4] = regfile[12] >> 2;
-            regfile[4] += 1;
+            gr[4] = gr[12] >> 2;
+            gr[4] += 1;
             //true end is gr4
-            //local end is min(MEM_BLOCK_SIZE or remainder regfile[4])
-            regfile[11] = MEM_BLOCK_SIZE * regfile[9];
-            regfile[2] = regfile[4] - regfile[11]; //gr2 as tmp. holds remainder
-            if (regfile[2] < MEM_BLOCK_SIZE){
-                regfile[6] = regfile[2];
+            //local end is min(MEM_BLOCK_SIZE or remainder gr[4])
+            gr[11] = MEM_BLOCK_SIZE * gr[9];
+            gr[2] = gr[4] - gr[11]; //gr2 as tmp. holds remainder
+            if (gr[2] < MEM_BLOCK_SIZE){
+                gr[6] = gr[2];
             } else {
-                regfile[6] = MEM_BLOCK_SIZE;
+                gr[6] = MEM_BLOCK_SIZE;
             }
-            if (regfile[6] < 0){
-                regfile[6] = 0;
+            if (gr[6] < 0){
+                gr[6] = 0;
             }
             //Write fullOs
-            regfile[1] = 0*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs (O is row 0)
+            gr[1] = 0*MEM_BLOCK_SIZE + gr[10]; //offset into PEs (O is row 0)
             loadSpmRegMapped(3, 5, 2, 3, true);  // prepad=3, postpad=5, affineInd=2, wf_i_offset=3, isO=true
 
             //Write fullMs
-            regfile[1] = 1*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
+            gr[1] = 1*MEM_BLOCK_SIZE + gr[10]; //offset into PEs
             loadSpmRegMapped(2, 2, 2, 1, false);  // prepad=2, postpad=2, affineInd=2, isO=false
             //Write fullIs
-            regfile[1] = 2*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
+            gr[1] = 2*MEM_BLOCK_SIZE + gr[10]; //offset into PEs
             loadSpmRegMapped(2, 0, 1, 0, false);  // isO=false
             //Write the fullDs
-            regfile[1] = 3*MEM_BLOCK_SIZE + regfile[10]; //offset into PEs
+            gr[1] = 3*MEM_BLOCK_SIZE + gr[10]; //offset into PEs
             loadSpmRegMapped(0, 2, 0, 0, false);  // isO=false
-            regfile[9]-=1;
+            gr[9]-=1;
 
 
         } else if (magic_payload == 2){
@@ -592,7 +592,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //printf("score %d:\n", past_wf_sizes[current_wf_i]+3);
             current_wf_i++;
             //Do an extra write of buffer MIN_INTS to wfs
-            for (int i = 0; i < 8; i++){
+            for (int i = 0; i < 16; i++){
                 for (int affine_i = 0; affine_i < 3; affine_i++){
                     past_wfs[current_wf_i][affine_i][past_wf_sizes[current_wf_i]+i] = MIN_INT;
                 }
@@ -600,8 +600,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         } else if (magic_payload == 3){
         //WRITE MAIN MEM WITH RESULTS IN CURRENT_BLOCK_START (gr[8])
         //Register-mapped version with strided PE access: SPM -> past_wfs
-            int (&regfile)[16] = main_addressing_register;
-            regfile[3] = current_wf_i;
+            int (&gr)[16] = main_addressing_register;
+            gr[3] = current_wf_i;
 
             /*
              * storeSpmToWavefrontStrided: Transfer computed results from SPM to past_wfs
@@ -612,6 +612,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
              *      affine_i: affine type (0=D, 1=I, 2=M)
              *
              * Preconditions:
+             *      gr1: the pointer to the first spm (in appropriate tile)
+             *      gr2: pointer to memory wf offset by block.
+             *      gr6: the number of iterations for PE0 + gr1
+             *
              *      gr3: current_wf_i
              *      gr4: n_diags_per_pe
              *      gr8: this_block_start (0 or BLOCK_1_START) - read only
@@ -619,67 +623,93 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
              *      gr12: current_wf_size - read only
              *
              * Uses (destroyed):
-             *      gr1, gr2, gr5, gr6, gr7, gr11
+             *      gr1 is preserved
+             *      gr2 is preserved
+             *      gr6 is preserved
+             *      gr10 is destroyed
+             *      gr1, gr2, gr5, gr6, gr11
              */
             auto storeSpmToWavefrontStrided = [&](int affine_i) {
                 // SPM row mapping: D=row5, I=row6, M=row4
                 static constexpr int SPM_ROW_FOR_AFFINE[3] = {5, 6, 4};
-                // For each element offset within the block (strided access)
-                for (int elem = 0; elem < regfile[6]; elem++) {
-                    // Compute base past_wfs destination
-                    regfile[11] = regfile[3] + 1;
-                    if (regfile[11] >= N_WFS) regfile[11] = 0;
-                    regfile[11] *= MAX_WF_LEN;
-                    regfile[2] = regfile[11];
-                    regfile[2] += regfile[11];
-                    regfile[2] += regfile[11];       // = 3 * write_wf_i * MAX_WF_LEN
-                    regfile[2] += affine_i * MAX_WF_LEN;
-                    regfile[11] = regfile[9] * MEM_BLOCK_SIZE;
-                    regfile[2] += regfile[11];       // + block_iter * MEM_BLOCK_SIZE
-                    regfile[2] += elem;              // + element offset
+                
+                //cache gr[1] and gr[2] to temps
+                gr[10] = gr[1];
+                gr[5]  = gr[2];
 
-                    // SPM local address base
-                    regfile[1] = SPM_ROW_FOR_AFFINE[affine_i] * MEM_BLOCK_SIZE + regfile[8] + elem;
-
-                    // Strided pattern: PE0 → PE1 → PE2 → PE3
-                    for (int pe_i = 0; pe_i < 4; pe_i++) {
-                        // Compute start for this PE in this block
-                        int start = pe_i * regfile[4] + regfile[9] * MEM_BLOCK_SIZE;
-                        // Compute end for this PE (min of pe's region end and wf_size)
-                        int end_pe = (pe_i + 1) * regfile[4];
-                        if (end_pe > regfile[12]) end_pe = regfile[12];
-                        // End for this block iteration
-                        int end_block = start + MEM_BLOCK_SIZE;
-                        if (end_block > end_pe) end_block = end_pe;
-
-                        // Check if this element is valid for this PE
-                        if (start + elem < end_block) {
-                            // Copy single element
-                            ((int*)past_wfs)[regfile[2]] = SPM_unit->buffer[regfile[1] + pe_i * SPM_BANK_SIZE];
-                        }
-                        regfile[2] += regfile[4];  // stride by n_diags_per_pe
+                //skip the first write
+                gr[1] += 8;
+                gr[2] += 8;
+                while (gr[1] < gr[6]) {
+                    gr[11] = gr[2];
+                    for (int i = 0; i < 4; i++){
+                        mvdq(gr[11], gr[1]+i*SPM_BANK_SIZE, false);
+                        gr[11] += gr[4];
                     }
+                    gr[1] += 8;
+                    gr[2] += 8;
                 }
+
+                //restore gr[1] and gr[2]
+                gr[1] = gr[10];
+                gr[2] = gr[5];
+
+                //write the first write because we may need to overwrite
+                for (int i = 0; i < 4; i++){
+                    mvdq(gr[2], gr[1]+i*SPM_BANK_SIZE, false);
+                    gr[2] += gr[4];
+                }
+
+                //restore vals again
+                gr[1] = gr[10];
+                gr[2] = gr[5];
             };
 
             // Compute n_diags_per_pe: gr[4] = gr[12] / 4 + 1
-            regfile[4] = regfile[12] >> 2;
-            regfile[4] += 1;
-            regfile[11] = regfile[9] * MEM_BLOCK_SIZE;
-            // gr[6] = diags_to_execute for this block (for PE0)
-            regfile[6] = regfile[4] - regfile[11];
-            if (regfile[6] > MEM_BLOCK_SIZE) regfile[6] = MEM_BLOCK_SIZE;
-            if (regfile[6] > 0){
+            gr[4] = gr[12] >> 2;
+            gr[4] += 1;
+            //Compute gr6, the diags_to_execute for this block (for PE0)
+            gr[11] = gr[9] * MEM_BLOCK_SIZE;
+            gr[6] = gr[4] - gr[11];
+            //Compute gr2, the offset into this wavefront (not including affine offset)
+            //gr2 = next_block_iter *block_size + (wf_i+1)*max_wf_len*3 +(affine_ind*max_wf_len //later)
+            gr[2] = gr[9] * MEM_BLOCK_SIZE; //block iter * block size
+                //modular add for current_wf_i
+            gr[11] = gr[3] + 1;
+            if (gr[11] >= N_WFS) gr[11] = 0;
+            gr[11] *= MAX_WF_LEN;
+                //multiply by 3
+            for (int i = 0; i < 3; i++){
+                gr[2] += gr[11];
+            }
+
+            if (gr[6] > MEM_BLOCK_SIZE) gr[6] = MEM_BLOCK_SIZE;
+            if (gr[6] > 0){
                 // Process each affine type: D=0, I=1, M=2
+                gr[1] = 5*MEM_BLOCK_SIZE + gr[8];
+                gr[6] += gr[1];
+                //gr[2] starts at D
                 storeSpmToWavefrontStrided(0);
+                gr[1] += MEM_BLOCK_SIZE; //6*MEM_BLOCK_SIZE + gr[8];
+                gr[6] += MEM_BLOCK_SIZE;
+                gr[2] += MAX_WF_LEN; //I
                 storeSpmToWavefrontStrided(1);
+                gr[1] -= 2*MEM_BLOCK_SIZE; //4*MEM_BLOCK_SIZE + gr[8];
+                gr[6] -= 2*MEM_BLOCK_SIZE;
+                gr[2] += MAX_WF_LEN; //M
                 storeSpmToWavefrontStrided(2);
+            }
+            //restore gr10 via recomputation
+            if (gr[8] == 0){
+                gr[10] = BLOCK_1_START;
+            } else { //gr[8] == BLOCK_1_START
+                gr[10] = BLOCK_0_START;
             }
 
             // Update past_wf_sizes
-            regfile[11] = regfile[3] + 1;
-            if (regfile[11] >= N_WFS) regfile[11] = 0;
-            past_wf_sizes[regfile[11]] = regfile[12];
+            gr[11] = gr[3] + 1;
+            if (gr[11] >= N_WFS) gr[11] = 0;
+            past_wf_sizes[gr[11]] = gr[12];
 
         } else if (magic_payload == 5) {
             // Exit condition reached - print final score (wf_len - 1)
