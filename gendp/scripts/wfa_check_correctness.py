@@ -50,7 +50,7 @@ def run_simulator(pattern, text, sim_path='./sim', verbose=False):
     env['TEXT_WFA'] = text
 
     # Run simulator
-    cmd = [sim_path, '-k', '5', '-i', '../../kernel/Datasets/crossBlockSeq.seq',
+    cmd = [sim_path, '-k', '5', '-i', '../../kernel/Datasets/shortSeq.seq',
            '-o', '/dev/null', '-s', '-n', '-1']
 
     try:
@@ -155,14 +155,14 @@ def main():
             passed += 1
         else:
             print(f"FAIL (sim={sim_score}, kernel={kernel_score})")
-            sim_cmd = ['./sim', '-k', '5', '-i', '../../kernel/Datasets/crossBlockSeq.seq',
+            sim_cmd = ['./sim', '-k', '5', '-i', seq_file,
                        '-o', '/dev/null', '-s', '-n', '-1']
             gdb_cmd = ['gdb', '--args'] + sim_cmd
             print(f"  GenDP command: {shlex.join(sim_cmd)}")
             try:
                 with open('lastFailedGdb', 'w') as f:
-                    f.write('PATTERN_WFA=' + shlex.quote(pattern) + '\n')
-                    f.write('TEXT_WFA=' + shlex.quote(text) + '\n')
+                    f.write('export PATTERN_WFA=' + shlex.quote(pattern) + '\n')
+                    f.write('export TEXT_WFA=' + shlex.quote(text) + '\n')
                     f.write(shlex.join(gdb_cmd) + '\n')
                 print("  Wrote gdb command to: lastFailedGdb")
             except Exception as e:
