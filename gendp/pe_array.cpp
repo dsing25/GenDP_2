@@ -650,9 +650,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[10] = gr[1];
                 gr[5]  = gr[2];
 
-                //skip the first write
-                gr[1] += 8;
-                gr[2] += 8;
+                gr[6] -= 8; //exit early. Do 8wide writes until boundary
                 while (gr[1] < gr[6]) {
                     gr[11] = gr[2];
                     for (int i = 0; i < 4; i++){
@@ -663,19 +661,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[2] += 8;
                 }
 
+                gr[6] += 8; //restore gr6 and do single writes
+                while (gr[1] < gr[6]) {
+                    gr[11] = gr[2];
+                    for (int i = 0; i < 4; i++){
+                        ((int*)past_wfs)[gr[11]] = SPM_unit->buffer[gr[1]+i*SPM_BANK_SIZE];
+                        gr[11] += gr[4];
+                    }
+                    gr[1] += 1;
+                    gr[2] += 1;
+                }
+
+
                 //restore gr[1] and gr[2]
                 gr[1] = gr[10];
                 gr[2] = gr[5];
 
-                //write the first write because we may need to overwrite
-                for (int i = 0; i < 4; i++){
-                    mvdq(gr[2], gr[1]+i*SPM_BANK_SIZE, false);
-                    gr[2] += gr[4];
-                }
-
-                //restore vals again
-                gr[1] = gr[10];
-                gr[2] = gr[5];
             };
 
             // Compute n_diags_per_pe: gr[4] = gr[12] / 4 + 1
