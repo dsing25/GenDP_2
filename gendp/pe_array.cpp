@@ -308,18 +308,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         constexpr int BLOCK_1_START = MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE;
         constexpr int MAX_WF_LEN = 5000;
         constexpr int N_WFS = 5;
+        constexpr int PAST_WFS_SIZE = N_WFS * 3 * MAX_WF_LEN;
         //4 previous scores, 3 affine wavefronts, each wavefront MEM_BLOCK entries. Rotating buffer
-        static int past_wfs[N_WFS][3][MAX_WF_LEN];
+        auto past_wf_at = [&](int wf_i, int affine_i, int idx) -> int& {
+            return s2->buffer[(wf_i * 3 + affine_i) * MAX_WF_LEN + idx];
+        };
         static int past_wf_sizes[N_WFS];
         static std::ofstream magic_wfs_out("magic_wfs_out.txt");
         static ModInt current_wf_i(N_WFS);
+        assert(S2_BUFFER_INTS >= PAST_WFS_SIZE);
         auto mvdq = [&](int dst, int src, bool toSPM){
             //TODO this is not realistic. We need to access blocks not arbitrary location.
             for (int i =0; i < 8; i++){
                 if (toSPM){
-                    SPM_unit->buffer[dst+i] = ((int*)past_wfs)[src+i];
+                    SPM_unit->buffer[dst+i] = s2->buffer[src+i];
                 } else {
-                    ((int*)past_wfs)[dst+i] = SPM_unit->buffer[src+i];
+                    s2->buffer[dst+i] = SPM_unit->buffer[src+i];
                 }
             }
         };
@@ -363,24 +367,21 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
             //loading the first wavefront. Initialization of this alignment
             //initialization logic
-            memset(past_wfs, 0, sizeof(past_wfs));
-            for (int a = 0; a < 5; a++)
-                for (int b = 0; b < 3; b++)
-                    for (int c = 0; c< MAX_WF_LEN; c++)
-                        past_wfs[a][b][c] = -42;
+            for (int i = 0; i < PAST_WFS_SIZE; i++)
+                s2->buffer[i] = -42;
             constexpr int INITIAL_WF_LEN = MEM_BLOCK_SIZE;
             //WF 0
             past_wf_sizes[current_wf_i] = 1;
             for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
-                    past_wfs[current_wf_i][k][j] = -99;
+                    past_wf_at(current_wf_i, k, j) = -99;
                 }
             }
             current_wf_i++; //0 wf all zero
             //WF 1
             for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
-                    past_wfs[current_wf_i][k][j] = -99;
+                    past_wf_at(current_wf_i, k, j) = -99;
                 }
             }
             past_wf_sizes[current_wf_i] = 1;
@@ -388,26 +389,26 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //WF 2
             for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
-                    past_wfs[current_wf_i][k][j] = -99;
+                    past_wf_at(current_wf_i, k, j) = -99;
                 }
             }
             past_wf_sizes[current_wf_i] = 1;
-            past_wfs[current_wf_i][2][0] = first_extend_len; //middle m wavefront
+            past_wf_at(current_wf_i, 2, 0) = first_extend_len; //middle m wavefront
             current_wf_i++; //4 should have a 1, but it's never used
             //WF 3
             for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
-                    past_wfs[current_wf_i][k][j] = -99;
+                    past_wf_at(current_wf_i, k, j) = -99;
                 }
             }
             //Extra: first postpadding misses cause postpad is not on pe3. this lets us ignore that
             for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
-                    past_wfs[current_wf_i+1][k][j] = -99;
+                    past_wf_at(current_wf_i + 1, k, j) = -99;
                 }
             }
             past_wf_sizes[current_wf_i] = 3;
-            past_wfs[current_wf_i][2][1] = first_extend_len; //middle m wavefront
+            past_wf_at(current_wf_i, 2, 1) = first_extend_len; //middle m wavefront
 
             //at this point the first four wavefronts have been defined initialized with dummy, and 
             //the correct middle m for last two. The score is 2. The size was 3.
@@ -509,7 +510,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                                 MIN_INT;
                         } else {
                             SPM_unit->buffer[EXTRA_O_LOAD_ADDR + gr[10] + SPM_BANK_SIZE * pe_i] =
-                            ((int*)past_wfs)[gr[11]];
+                            s2->buffer[gr[11]];
                         }
                         gr[11] += 1;
                         if (gr[11] < gr[5]){ //digs into prepad region. wf too small
@@ -517,7 +518,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                                 MIN_INT;
                         } else {
                             SPM_unit->buffer[EXTRA_O_LOAD_ADDR + gr[10] + SPM_BANK_SIZE * pe_i+1] =
-                            ((int*)past_wfs)[gr[11]];
+                            s2->buffer[gr[11]];
                         }
                         gr[11] -= 1; //restore
                         // Accumulate: add n_diags_per_pe (gr[4]) for next PE
@@ -607,7 +608,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //Do an extra write of buffer MIN_INTS to wfs
             for (int i = 0; i < 16; i++){
                 for (int affine_i = 0; affine_i < 3; affine_i++){
-                    past_wfs[current_wf_i][affine_i][past_wf_sizes[current_wf_i]+i] = MIN_INT;
+                    past_wf_at(current_wf_i, affine_i, past_wf_sizes[current_wf_i] + i) = MIN_INT;
                 }
             }
         } else if (magic_payload == 3){
@@ -665,7 +666,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 while (gr[1] < gr[6]) {
                     gr[11] = gr[2];
                     for (int i = 0; i < 4; i++){
-                        ((int*)past_wfs)[gr[11]] = SPM_unit->buffer[gr[1]+i*SPM_BANK_SIZE];
+                        s2->buffer[gr[11]] = SPM_unit->buffer[gr[1]+i*SPM_BANK_SIZE];
                         gr[11] += gr[4];
                     }
                     gr[1] += 1;
@@ -807,7 +808,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     int end_pe = std::min(n_diags_per_pe * (pe_i + 1), current_wf_size);
                     int end = std::min(start + MEM_BLOCK_SIZE, end_pe);
                     for (int j = start; j < end; j++) {
-                        magic_wfs_out << std::setw(width) << past_wfs[write_wf_i][affine_id][j];
+                        magic_wfs_out << std::setw(width) << past_wf_at(write_wf_i, affine_id, j);
                     }
                 }
                 magic_wfs_out << std::endl;
@@ -821,7 +822,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int idx = main_addressing_register[1];
             int write_wf_i = current_wf_i + 1;
 
-            main_addressing_register[2] = past_wfs[write_wf_i][2][idx];
+            main_addressing_register[2] = past_wf_at(write_wf_i, 2, idx);
         } else {
             fprintf(stderr, "ERROR: PE_ARRAY PC=%d cycle=%d unknown magic instruction payload %d.\n", *PC, cycle, magic_payload);
             exit(-1);
