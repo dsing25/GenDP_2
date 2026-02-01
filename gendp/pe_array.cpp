@@ -491,6 +491,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 for (int i = 0; i < 3; i++){
                     gr[2] += gr[11];
                 }
+                //cache the start of the wf in gr[5] used for bounds check in the final write
+                if (isO) { gr[5] = gr[2]; }
                 gr[11] = gr[9] * MEM_BLOCK_SIZE; //block iter * block size
                 gr[2] += gr[11];
 
@@ -502,11 +504,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     // Loop through 4 PEs, always write (don't check bounds)
                     for (int pe_i = 0; pe_i < 4; pe_i++) {
                         // Write two values to EXTRA_O_LOAD_ADDR + next_block_start for this PE
-                        SPM_unit->buffer[EXTRA_O_LOAD_ADDR + gr[10] + SPM_BANK_SIZE * pe_i] =
+                        if (gr[11] < gr[5]){ //digs into prepad region. wf too small
+                            SPM_unit->buffer[EXTRA_O_LOAD_ADDR + gr[10] + SPM_BANK_SIZE * pe_i] = 
+                                MIN_INT;
+                        } else {
+                            SPM_unit->buffer[EXTRA_O_LOAD_ADDR + gr[10] + SPM_BANK_SIZE * pe_i] =
                             ((int*)past_wfs)[gr[11]];
-                        SPM_unit->buffer[EXTRA_O_LOAD_ADDR + gr[10] + SPM_BANK_SIZE * pe_i + 1] =
-                            ((int*)past_wfs)[gr[11] + 1];
-
+                        }
+                        gr[11] += 1;
+                        if (gr[11] < gr[5]){ //digs into prepad region. wf too small
+                            SPM_unit->buffer[EXTRA_O_LOAD_ADDR + gr[10] + SPM_BANK_SIZE * pe_i+1] = 
+                                MIN_INT;
+                        } else {
+                            SPM_unit->buffer[EXTRA_O_LOAD_ADDR + gr[10] + SPM_BANK_SIZE * pe_i+1] =
+                            ((int*)past_wfs)[gr[11]];
+                        }
+                        gr[11] -= 1; //restore
                         // Accumulate: add n_diags_per_pe (gr[4]) for next PE
                         gr[11] += gr[4];
                     }
