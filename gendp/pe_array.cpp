@@ -312,7 +312,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         static int past_wfs[N_WFS][3][MAX_WF_LEN];
         static int past_wf_sizes[N_WFS];
         static std::ofstream magic_wfs_out("magic_wfs_out.txt");
-        static ModInt current_wf_i(N_WFS);
+        //static ModInt current_wf_i(N_WFS);
+        int (&gr)[16] = main_addressing_register;
         auto mvdq = [&](int dst, int src, bool toSPM){
             //TODO this is not realistic. We need to access blocks not arbitrary location.
             for (int i =0; i < 8; i++){
@@ -327,7 +328,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
         if (magic_payload == 4) {
         //INITIALIZATION BEGINING OF TIME
+            int (&gr)[16] = main_addressing_register;
             int current_wf_size = 0;
+            gr[3] = 0; //current_wf_i
 
             // Read base sequences from environment variables
             const char* pattern_base = getenv("PATTERN_WFA");
@@ -370,44 +373,44 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         past_wfs[a][b][c] = -42;
             constexpr int INITIAL_WF_LEN = MEM_BLOCK_SIZE;
             //WF 0
-            past_wf_sizes[current_wf_i] = 1;
+            past_wf_sizes[gr[3]] = 1;
             for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
-                    past_wfs[current_wf_i][k][j] = -99;
+                    past_wfs[gr[3]][k][j] = -99;
                 }
             }
-            current_wf_i++; //0 wf all zero
+            gr[3]++; //0 wf all zero
             //WF 1
             for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
-                    past_wfs[current_wf_i][k][j] = -99;
+                    past_wfs[gr[3]][k][j] = -99;
                 }
             }
-            past_wf_sizes[current_wf_i] = 1;
-            current_wf_i++; //2 wf all zero
+            past_wf_sizes[gr[3]] = 1;
+            gr[3]++; //2 wf all zero
             //WF 2
             for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
-                    past_wfs[current_wf_i][k][j] = -99;
+                    past_wfs[gr[3]][k][j] = -99;
                 }
             }
-            past_wf_sizes[current_wf_i] = 1;
-            past_wfs[current_wf_i][2][0] = first_extend_len; //middle m wavefront
-            current_wf_i++; //4 should have a 1, but it's never used
+            past_wf_sizes[gr[3]] = 1;
+            past_wfs[gr[3]][2][0] = first_extend_len; //middle m wavefront
+            gr[3]++; //4 should have a 1, but it's never used
             //WF 3
             for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
-                    past_wfs[current_wf_i][k][j] = -99;
+                    past_wfs[gr[3]][k][j] = -99;
                 }
             }
             //Extra: first postpadding misses cause postpad is not on pe3. this lets us ignore that
             for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
-                    past_wfs[current_wf_i+1][k][j] = -99;
+                    past_wfs[gr[3]+1][k][j] = -99;
                 }
             }
-            past_wf_sizes[current_wf_i] = 3;
-            past_wfs[current_wf_i][2][1] = first_extend_len; //middle m wavefront
+            past_wf_sizes[gr[3]] = 3;
+            past_wfs[gr[3]][2][1] = first_extend_len; //middle m wavefront
 
             //at this point the first four wavefronts have been defined initialized with dummy, and 
             //the correct middle m for last two. The score is 2. The size was 3.
@@ -450,7 +453,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int this_block_start = main_addressing_register[8];
             int block_iter = main_addressing_register[9];
             int next_block_iter = block_iter +1; //we operate on this cause we're writing to next
-            main_addressing_register[3] = current_wf_i;
             int width = 3; // for display
                            
             /*
@@ -603,19 +605,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         } else if (magic_payload == 2){
         //INCREMENT CURRENT_WF_I
             //printf("score %d:\n", past_wf_sizes[current_wf_i]+3);
-            current_wf_i++;
+            gr[3]++;
+            if (gr[3] >= N_WFS) gr[3] = 0;
             //Do an extra write of buffer MIN_INTS to wfs
             for (int i = 0; i < 16; i++){
                 for (int affine_i = 0; affine_i < 3; affine_i++){
-                    past_wfs[current_wf_i][affine_i][past_wf_sizes[current_wf_i]+i] = MIN_INT;
+                    past_wfs[gr[3]][affine_i][past_wf_sizes[gr[3]]+i] = MIN_INT;
                 }
             }
         } else if (magic_payload == 3){
         //WRITE MAIN MEM WITH RESULTS IN CURRENT_BLOCK_START (gr[8])
         //Register-mapped version with strided PE access: SPM -> past_wfs
-            int (&gr)[16] = main_addressing_register;
-            gr[3] = current_wf_i;
-
             /*
              * storeSpmToWavefrontStrided: Transfer computed results from SPM to past_wfs
              * Uses strided PE access pattern (PE0 → PE1 → PE2 → PE3) for each element
@@ -735,7 +735,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int next_block_start = main_addressing_register[10];
             int block_iter = main_addressing_register[9];
             int display_block_iter = block_iter;  // Display previous block (just computed)
-            int write_wf_i = current_wf_i + 1;
+            int write_wf_i = gr[3] + 1;
+            if (write_wf_i >= N_WFS) write_wf_i = 0;
             int width = 3;
             int k = 0;
 
@@ -819,7 +820,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // gr[1] = index, result goes to gr[2]
             // Note: Bounds checking is done in ISA before calling this magic
             int idx = main_addressing_register[1];
-            int write_wf_i = current_wf_i + 1;
+            int write_wf_i = gr[3] + 1;
+            if (write_wf_i >= N_WFS) write_wf_i = 0;
 
             main_addressing_register[2] = past_wfs[write_wf_i][2][idx];
         } else {
