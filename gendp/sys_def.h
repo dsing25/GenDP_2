@@ -130,6 +130,7 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_MVD 19
 #define CTRL_SUBI 20
 #define CTRL_MVI 21
+#define CTRL_MVDQ 22
 
 // DEST/SRCS
 #define CTRL_REG 0
@@ -143,6 +144,7 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_IN_INSTR 8
 #define CTRL_OUT_PORT 9
 #define CTRL_OUT_INSTR 10
+#define CTRL_S2 15
 //FIFO [11, 12, 13, 14]
 
 // Address swizzling parameters for mvi instruction

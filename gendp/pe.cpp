@@ -768,6 +768,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         if (reg_auto_increasement_flag_1)
             addr_regfile_unit->buffer[reg_1]++;
         (*PC)++;
+    } else if (opcode == CTRL_MVDQ) {
+        fprintf(stderr, "not implemented yet\n");
+        exit(-1);
     } else if (opcode == CTRL_MVI) {
 #ifdef PROFILE
         printf("Move with Index Swizzle ");
@@ -817,4 +820,3 @@ void pe::show_comp_reg() {
     for (i = 0; i < REGFILE_ADDR_NUM; i++)
         regfile_unit->show_data(i);
 }
-

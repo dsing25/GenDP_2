@@ -11,6 +11,7 @@ in_port = 7
 in_instr = 8
 out_port = 9
 out_instr = 10
+S2 = 15
 fifo = [11, 12, 13, 14]
 
 #DATA MOVEMENT OPCODES
@@ -36,6 +37,7 @@ ANDI = 18
 mvd = 19
 subi = 20
 mvi = 21
+mvdq = 22
 # these instruction tags here are for data movement
 # use sys_def.h for compute tags
 

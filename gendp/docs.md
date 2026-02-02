@@ -52,6 +52,7 @@ The array controller (pe_array) contains:
 - **Addressing Register File (`gr`)**: 16 registers (gr[0..15])
 - **Input Buffer (`in_buf`)**: For loading data from external memory
 - **Output Buffer (`out_buf`)**: For storing results to external memory
+- **S2 Buffer (`S2`)**: Controller-local buffer for block data staging
 - **FIFOs**: 4 FIFOs for data buffering between iterations
 - **Compute Instruction Buffer**: Distributes compute instructions to PEs
 
@@ -178,6 +179,7 @@ else:
 | 9    | Output Port           | `out_port`   | Systolic output to next PE               |
 | 10   | Output Instruction    | `out_instr`  | Systolic instruction output              |
 | 11-14| FIFO 0-3              | `fifo[0-3]`  | FIFO queues for data buffering           |
+| 15   | S2 Buffer             | `S2`         | Controller-local buffer                  |
 
 ### PE Source/Destination Support
 
@@ -195,6 +197,7 @@ else:
 | 9    | out_port | -    | ✓     | Send to systolic chain                          |
 | 10   | out_instr| -    | ✓     | Send instruction to chain                       |
 | 11-14| fifo     | -    | -     | Controller only                                 |
+| 15   | S2       | -    | -     | Controller only                                 |
 
 ### Controller Source/Destination Support
 
@@ -212,14 +215,17 @@ else:
 | 9    | out_port | -    | ✓     | Valid for arithmetic ops                        |
 | 10   | out_instr| -    | ✓†    | †Move ops only (`mv`, `si`); crashes on arith   |
 | 11-14| fifo     | ✓    | ✓     | Pop on load, push on store                      |
+| 15   | S2       | ✓‡   | ✓‡    | ‡Controller-only via `mvdq` (SPM ↔ S2)          |
 
 **Controller Arithmetic Destination Restriction**: Arithmetic operations (`add`, `sub`, `addi`, `subi`, `shifti_*`, `andi`) on the controller can only write to `gr` (1), `out_buf` (6), or `out_port` (9). Using other destinations (e.g., `out_instr`, `fifo`) will crash the simulator. Move operations (`mv`, `si`) have broader destination support.
 
 **Note on out_instr (code 10) for Controller**: When the controller loads from `comp_ib`, the instruction is stored in an internal buffer (`PE_instruction`). Specifying `out_instr` as the destination in a `mv` operation causes the store function to do nothing, but the instruction is still transferred to PEs via the internal buffer. This is the mechanism for distributing compute instructions.
 
+**Note on S2 (code 15) for Controller**: The S2 buffer is only accessible via `mvdq` (opcode 22) for direct 8-word transfers between SPM and S2. Other operations do not support S2.
+
 ### Import Statement
 ```python
-from opcodes import reg, gr, SPM, comp_ib, ctrl_ib, in_buf, out_buf, in_port, in_instr, out_port, out_instr, fifo
+from opcodes import reg, gr, SPM, comp_ib, ctrl_ib, in_buf, out_buf, in_port, in_instr, out_port, out_instr, fifo, S2
 ```
 
 ### Systolic Data Flow
@@ -256,10 +262,11 @@ Controller.out_port → PE[0].in_port → PE[0].out_port → PE[1].in_port → .
 | 19   | Move Double           | `mvd`      | Move 2 words (64 bits)                       |
 | 20   | Subtract Immediate    | `subi`     | gr[rd] = gr[rs2] - imm                       |
 | 21   | Move Interleaved      | `mvi`      | Move with address swizzling                  |
+| 22   | Move Double Quad      | `mvdq`     | Move 8 words (block)                         |
 
 ### Import Statement
 ```python
-from opcodes import add, sub, addi, si, mv, bne, beq, bge, blt, jump, set_PC, none, halt, shifti_r, shifti_l, ANDI, mvd, subi, mvi
+from opcodes import add, sub, addi, si, mv, bne, beq, bge, blt, jump, set_PC, none, halt, shifti_r, shifti_l, ANDI, mvd, subi, mvi, mvdq
 ```
 
 ---
@@ -589,6 +596,50 @@ f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 0, 7*MEM_BLOCK_SIZE+b
 
 # SPM[gr[6]] = reg[24,25]  (store 2 words)
 f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 6, 0, 0, 24, 0, mvd))
+```
+
+---
+
+#### `mvdq` (opcode 22) - Move Double Quad
+
+**Summary**: Moves eight consecutive words (256 bits) between SPM and the controller S2 buffer. Controller-only and implemented as a direct buffer copy (no SPM event latency).
+
+**Syntax**:
+```
+mvdq dest[addr0], src[addr1]    # Moves 8 words
+```
+
+**Encoding**: Identical to `mv`, but uses opcode 22.
+
+```python
+data_movement_instruction(
+    dest,           # Destination location code (SPM or S2)
+    src,            # Source location code (S2 or SPM)
+    reg_immBar_0,   # Dest addr mode
+    auto_inc_0,     # Dest auto-increment (adds 8)
+    imm_0,          # Dest address
+    reg_0,          # Dest base register
+    reg_immBar_1,   # Src addr mode
+    auto_inc_1,     # Src auto-increment (adds 8)
+    imm_1,          # Src address
+    reg_1,          # Src base register
+    mvdq            # opcode: 22
+)
+```
+
+**Constraint**: Only `SPM` (2) and `S2` (15) are supported. One must be `SPM`, the other `S2`.
+
+**Controller Only**: On a PE, opcode 22 is reserved and currently unimplemented; executing it will error.
+
+**Auto-increment**: If enabled, base registers increment by 8 after the transfer.
+
+**Examples**:
+```python
+# S2[gr[10]] = SPM[gr[4]]  (copy 8 words from SPM to S2)
+f.write(data_movement_instruction(S2, SPM, 0, 0, 0, 10, 0, 0, 0, 4, mvdq))
+
+# SPM[gr[6]] = S2[gr[12]++]  (copy 8 words from S2 to SPM, auto-inc by 8)
+f.write(data_movement_instruction(SPM, S2, 0, 0, 0, 6, 0, 1, 0, 12, mvdq))
 ```
 
 ---
@@ -1316,13 +1367,13 @@ To change PADDING_SIZE from 30 to 64 words (to add more reserved space):
 ```python
 add=0, sub=1, addi=2, si=4, mv=5, bne=8, beq=9, bge=10, blt=11,
 jump=12, set_PC=13, none=14, halt=15, shifti_r=16, shifti_l=17,
-ANDI=18, mvd=19, subi=20, mvi=21
+ANDI=18, mvd=19, subi=20, mvi=21, mvdq=22
 ```
 
 ### Source/Destination Numbers
 ```python
 reg=0, gr=1, SPM=2, comp_ib=3, ctrl_ib=4, in_buf=5, out_buf=6,
-in_port=7, in_instr=8, out_port=9, out_instr=10, fifo=[11,12,13,14]
+in_port=7, in_instr=8, out_port=9, out_instr=10, fifo=[11,12,13,14], S2=15
 ```
 
 ### Key Constants (from sys_def.h)
