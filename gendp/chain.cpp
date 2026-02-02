@@ -181,7 +181,7 @@ void chain_simulation(char *inputFileName, char *outputFileName, FILE *fp, int s
 
     unsigned long chain_compute_instruction[CHAIN_COMPUTE_INSTRUCTION_NUM][COMP_INSTR_BUFFER_GROUP_SIZE];
     unsigned long chain_main_instruction[CTRL_INSTR_BUFFER_NUM][CTRL_INSTR_BUFFER_GROUP_SIZE];
-    unsigned long chain_pe_instruction[CHAIN_PE_GROUP_SIZE][CTRL_INSTR_BUFFER_NUM][CTRL_INSTR_BUFFER_GROUP_SIZE];
+    auto chain_pe_instruction = new unsigned long[CHAIN_PE_GROUP_SIZE][CTRL_INSTR_BUFFER_NUM][CTRL_INSTR_BUFFER_GROUP_SIZE];
     for (i = 0; i < CHAIN_COMPUTE_INSTRUCTION_NUM; i++) {
         chain_compute_instruction[i][0] = 0x20f7800000000;
         chain_compute_instruction[i][1] = 0x20f7800000000;
@@ -236,6 +236,7 @@ void chain_simulation(char *inputFileName, char *outputFileName, FILE *fp, int s
         }
     }
     
+    delete[] chain_pe_instruction;
     if (show_output) fclose(fp);
     free(chain_output);
 
