@@ -233,8 +233,23 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, ALIGN_B0_PC, 0, 0, 0, 0, 0, set_PC))             # PE_PC = ALIGN_B0_PC
     f.write(data_movement_instruction(0, 0, 0, 0, 1, 0, 1, 0, 0, 8, beq))                            # beq gr[0] gr[8] 1
     f.write(data_movement_instruction(gr, gr, 0, 0, ALIGN_B1_PC, 0, 0, 0, 0, 0, set_PC))             # PE_PC = ALIGN_B1_PC
+    # magic(3) setup (skip in C++)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 4, 0, 0, 0, 2, 12, shifti_r))                     # gr[4]=gr[12]>>2
+    f.write(data_movement_instruction(gr, gr, 0, 0, 4, 0, 0, 0, 1, 4, addi))                          # gr[4]+=1
+    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, MEM_BLOCK_SIZE_LG2, 9, shifti_l))    # gr[11]=gr[9]<<lg2(MEM_BLOCK_SIZE)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0, 4, 11, sub))                          # gr[6]=gr[4]-gr[11]
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 0, mv))                           # gr[2]=gr[11]
+    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 1, 3, addi))                         # gr[11]=gr[3]+1
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, N_WFS, 11, bne))                      # if gr[11] != N_WFS, skip reset
+    f.write(data_movement_instruction(gr, 0, 0, 0, 11, 0, 0, 0, 0, 0, si))                            # gr[11]=0
+    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, MAX_WF_LEN_LG2, 11, shifti_l))       # gr[11]=gr[11]<<lg2(MAX_WF_LEN)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                          # gr[2]+=gr[11]
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                          # gr[2]+=gr[11]
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                          # gr[2]+=gr[11]
+    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 0, 0, MEM_BLOCK_SIZE, 6, bge))                # if MEM_BLOCK_SIZE >= gr[6], skip clamp
+    f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, MEM_BLOCK_SIZE, 0, si))                # gr[6]=MEM_BLOCK_SIZE
     #load results m,i,d of THIS_BLOCK magic(3)
-    f.write(write_magic(3));
+    f.write(write_magic((3 << MAGIC_MASK_BITS) | 0x10));
     # Display combined inputs/outputs for debugging
     f.write(write_magic(6));
     #TODO wait lsq
@@ -244,7 +259,7 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, 11, 0, mv))                          # gr[8] = gr[11]
     #increment count
     f.write(data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 1, 9, addi))                         # gr[9]+=1
-    f.write(data_movement_instruction(gr, gr, 0, 0, -242, 0, 1, 0, 9, 7, blt))                       # blt gr[9] gr[7] -242
+    f.write(data_movement_instruction(gr, gr, 0, 0, -256, 0, 1, 0, 9, 7, blt))                       # blt gr[9] gr[7] -256
 #END BLOCK LOOP. NEW WF
     # Calculate idx = (text_len - pattern_len) + (wf_len / 2)
     f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 14, 15, sub))                        # gr[1] = gr[14] - gr[15] (target_k)
@@ -270,7 +285,7 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, N_WFS, 3, bne))                       # if gr[3] != N_WFS, skip reset
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))                            # gr[3] = 0
     #JMP LOOP PROCESS_WF
-    f.write(data_movement_instruction(0, 0, 0, 0, -496, 0, 0, 0, 0, 0, jump))                        # jump -496 (LOOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, -510, 0, 0, 0, 0, 0, jump))                        # jump -510 (LOOP)
 
 #EXIT:
     f.write(write_magic(5))                                                                           # magic(5) - print final state
