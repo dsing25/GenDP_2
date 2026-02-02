@@ -49,9 +49,11 @@
 ## Keywords
 - PLANMODE: If this is anywhere in the prompt, it means that you should be working on building an 
   ExecPlan. In this process do not write any code, or run any code. You should review the codebase
-  and prompt carefully and thing deeply, but you may take READONLY actions. You should ask many
+  and prompt carefully and thing deeply, but you may take READONLY actions with the exception of 
+  writing the plan file itself.
+  You should ask many
   questions in this phase. ALWAYS you should stop and wait for approval before you move on to
-  implementation.
+  implementation. 
 - READONLY: This means that you must not modify any files, inlcuding git history/commits, make
   commands, etc. You may run any commands which do not modify files, e.g. head, tail, cat, ls, grep,
   find, awk, ... You may also execute code, but only if it does not modify files, and this is 
