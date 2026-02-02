@@ -654,9 +654,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
 
         } else if (magic_payload == 2){
-        //INCREMENT CURRENT_WF_I
-            gr[3]++;
-            if (gr[3] >= N_WFS) gr[3] = 0;
+        //INCREMENT CURRENT_WF_I (no longer expected in ISA stream)
+            fprintf(stderr, "ERROR: magic payload 2 should no longer be used.\n");
+            exit(-1);
         } else if (magic_payload == 3){
         //WRITE MAIN MEM WITH RESULTS IN CURRENT_BLOCK_START (gr[8])
         //Register-mapped version with strided PE access: SPM -> past_wfs
