@@ -965,6 +965,41 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         if (reg_auto_increasement_flag_1)
             main_addressing_register[reg_1] += 8;
         (*PC)++;
+    } else if (opcode == CTRL_MVDQI) {      // mvdqi dest imm/reg(reg(++)) imm
+#ifdef PROFILE
+        printf("MoveDoubleQuadImm ");
+#endif
+        int dest_addr = 0;
+        if (reg_immBar_flag_0)
+            dest_addr = main_addressing_register[sext_imm_0] + main_addressing_register[reg_0];
+        else
+            dest_addr = sext_imm_0 + main_addressing_register[reg_0];
+
+        bool dest_is_spm = (dest == CTRL_SPM);
+        bool dest_is_s2 = (dest == CTRL_S2);
+        if (!(dest_is_spm || dest_is_s2)) {
+            fprintf(stderr, "main mvdqi only supports SPM or S2 destinations. dest=%d PC=%d\n", dest, *PC);
+            exit(-1);
+        }
+
+        int dest_limit = dest_is_spm ? SPM_unit->buffer_size : s2->buffer_size;
+        if (dest_addr < 0 || dest_addr + 7 >= dest_limit) {
+            fprintf(stderr, "main mvdqi dest addr %d out of bounds (limit %d). PC=%d\n", dest_addr, dest_limit, *PC);
+            exit(-1);
+        }
+
+        int imm_val = sext_imm_1;
+        if (dest_is_spm) {
+            for (i = 0; i < 8; i++)
+                SPM_unit->buffer[dest_addr + i] = imm_val;
+        } else {
+            for (i = 0; i < 8; i++)
+                s2->buffer[dest_addr + i] = imm_val;
+        }
+
+        if (reg_auto_increasement_flag_0)
+            main_addressing_register[reg_0] += 8;
+        (*PC)++;
 //     } else if (opcode == 6) {       // add_8 rd rs1 rs2
 //         rd = reg_imm_0;
 //         rs1 = reg_imm_1;

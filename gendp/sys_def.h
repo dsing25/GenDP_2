@@ -131,6 +131,7 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_SUBI 20
 #define CTRL_MVI 21
 #define CTRL_MVDQ 22
+#define CTRL_MVDQI 23
 
 // DEST/SRCS
 #define CTRL_REG 0

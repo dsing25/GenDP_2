@@ -221,7 +221,7 @@ else:
 
 **Note on out_instr (code 10) for Controller**: When the controller loads from `comp_ib`, the instruction is stored in an internal buffer (`PE_instruction`). Specifying `out_instr` as the destination in a `mv` operation causes the store function to do nothing, but the instruction is still transferred to PEs via the internal buffer. This is the mechanism for distributing compute instructions.
 
-**Note on S2 (code 15) for Controller**: The S2 buffer is only accessible via `mvdq` (opcode 22) for direct 8-word transfers between SPM and S2. Other operations do not support S2.
+**Note on S2 (code 15) for Controller**: The S2 buffer is only accessible via `mvdq` (opcode 22) and `mvdqi` (opcode 23) for direct 8-word transfers between SPM and S2 or immediate block writes. Other operations do not support S2.
 
 ### Import Statement
 ```python
@@ -263,10 +263,11 @@ Controller.out_port → PE[0].in_port → PE[0].out_port → PE[1].in_port → .
 | 20   | Subtract Immediate    | `subi`     | gr[rd] = gr[rs2] - imm                       |
 | 21   | Move Interleaved      | `mvi`      | Move with address swizzling                  |
 | 22   | Move Double Quad      | `mvdq`     | Move 8 words (block)                         |
+| 23   | Move Double Quad Imm  | `mvdqi`    | Write 8 words of immediate                   |
 
 ### Import Statement
 ```python
-from opcodes import add, sub, addi, si, mv, bne, beq, bge, blt, jump, set_PC, none, halt, shifti_r, shifti_l, ANDI, mvd, subi, mvi, mvdq
+from opcodes import add, sub, addi, si, mv, bne, beq, bge, blt, jump, set_PC, none, halt, shifti_r, shifti_l, ANDI, mvd, subi, mvi, mvdq, mvdqi
 ```
 
 ---
@@ -640,6 +641,50 @@ f.write(data_movement_instruction(S2, SPM, 0, 0, 0, 10, 0, 0, 0, 4, mvdq))
 
 # SPM[gr[6]] = S2[gr[12]++]  (copy 8 words from S2 to SPM, auto-inc by 8)
 f.write(data_movement_instruction(SPM, S2, 0, 0, 0, 6, 0, 1, 0, 12, mvdq))
+```
+
+---
+
+#### `mvdqi` (opcode 23) - Move Double Quad Immediate
+
+**Summary**: Writes eight consecutive words of the immediate value to SPM or S2. Controller-only and implemented as a direct buffer write (no SPM event latency).
+
+**Syntax**:
+```
+mvdqi dest[addr0], imm         # Writes 8 words
+```
+
+**Encoding**: Identical to `si`, but writes 8 words and uses opcode 23. The immediate value is taken from `imm_1`; `src` is unused.
+
+```python
+data_movement_instruction(
+    dest,           # Destination location code (SPM or S2)
+    src,            # Unused (set to 0)
+    reg_immBar_0,   # Dest addr mode
+    auto_inc_0,     # Dest auto-increment (adds 8)
+    imm_0,          # Dest address
+    reg_0,          # Dest base register
+    0,              # reg_immBar_1: unused
+    0,              # reg_auto_increase_1: unused
+    imm,            # imm_1: immediate value
+    0,              # reg_1: unused
+    mvdqi           # opcode: 23
+)
+```
+
+**Constraint**: Destination must be `SPM` (2) or `S2` (15).
+
+**Controller Only**: On a PE, opcode 23 is reserved and currently unimplemented; executing it will error.
+
+**Auto-increment**: If enabled, the base register increments by 8 after the write.
+
+**Examples**:
+```python
+# SPM[gr[4]] = 0x7f (write 8 words of 0x7f)
+f.write(data_movement_instruction(SPM, 0, 0, 0, 0, 4, 0, 0, 0x7f, 0, mvdqi))
+
+# S2[gr[10]++] = -1  (write 8 words of -1, auto-inc by 8)
+f.write(data_movement_instruction(S2, 0, 0, 1, 0, 10, 0, 0, -1, 0, mvdqi))
 ```
 
 ---
@@ -1367,7 +1412,7 @@ To change PADDING_SIZE from 30 to 64 words (to add more reserved space):
 ```python
 add=0, sub=1, addi=2, si=4, mv=5, bne=8, beq=9, bge=10, blt=11,
 jump=12, set_PC=13, none=14, halt=15, shifti_r=16, shifti_l=17,
-ANDI=18, mvd=19, subi=20, mvi=21, mvdq=22
+ANDI=18, mvd=19, subi=20, mvi=21, mvdq=22, mvdqi=23
 ```
 
 ### Source/Destination Numbers

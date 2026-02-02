@@ -38,6 +38,7 @@ mvd = 19
 subi = 20
 mvi = 21
 mvdq = 22
+mvdqi = 23
 # these instruction tags here are for data movement
 # use sys_def.h for compute tags
 
