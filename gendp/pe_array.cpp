@@ -315,7 +315,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         };
         static int past_wf_sizes[N_WFS];
         static std::ofstream magic_wfs_out("magic_wfs_out.txt");
-        static ModInt current_wf_i(N_WFS);
         assert(S2_BUFFER_INTS >= PAST_WFS_SIZE);
         int (&gr)[16] = main_addressing_register;
         auto mvdq = [&](int dst, int src, bool toSPM){
@@ -392,7 +391,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //WF 2
             for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
-                    past_wf_at(current_wf_i, k, j) = -99;
+                    past_wf_at(gr[3], k, j) = -99;
                 }
             }
             past_wf_sizes[gr[3]] = 1;
@@ -401,7 +400,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //WF 3
             for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
-                    past_wf_at(current_wf_i, k, j) = -99;
+                    past_wf_at(gr[3], k, j) = -99;
                 }
             }
             //Extra: first postpadding misses cause postpad is not on pe3. this lets us ignore that
