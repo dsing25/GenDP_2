@@ -127,6 +127,14 @@ Prefer additive code changes followed by subtractions that keep tests passing. P
 
     State the exact commands to run and where to run them (working directory). When a command generates output, show a short expected transcript so the reader can compare. This section must be updated as work proceeds.
 
+    ## Code Changes (verbose)
+
+    for each conrete step in the previous section, detail in extreme detail what changes to the code 
+    you plan to make. You should include diffs here of what you intend to change. Then you should think
+    carefully about whether your proposed code will work or not. Be critical, and iteratively make
+    changes to improve the planned code. This section is very important. If you do it correctly, a 
+    1st year Computer Science undergraduate student will be able to implement the changes.
+
     ## Validation and Acceptance
 
     Describe how to start or exercise the system and what to observe. Phrase acceptance as behavior, with specific inputs and outputs. If tests are involved, say "run <project’s test command> and expect <N> passed; the new test <name> fails before the change and passes after>".

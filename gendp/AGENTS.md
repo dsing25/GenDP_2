@@ -28,9 +28,10 @@
 - Correctness: `scripts/*_check_correctness.py` or `scripts/*_run_validation.sh` (e.g., `python3 scripts/wfa_check_correctness.py <out> <expected>`).
 - Throughput: `scripts/*_throughput.sh`. Store outputs in `*_sim_results/` or dataset folders.
 
-## Commit & Pull Request Guidelines
-- Commit messages are short, lowercase, imperative (e.g., `add validation scripts`). Keep commits focused; avoid mixing refactors with behavior changes.
-- PRs should include: description, commands run, dataset name/size, and correctness/perf impact; attach logs and link issues when relevant.
+## Git rules
+- Never run git commands that will change the state of the repo or git history. You may suggest, but 
+  do not run. This includes git pull, git push, git revert, git merge, git checkout, etc.
+- You may run non destructive git commands: e.g. git diff, git log.
 
 ## Configuration & Data Notes
 - Workflows assume `GenDP_WORK_DIR` and a sibling `gendp-datasets` directory.
@@ -42,3 +43,16 @@
 
 ## ExecPlans
 - When writing complex features or significant refactors, use an ExecPlan (as described in .agent/PLANS.md) from design to implementation.
+- You should ask many questions in this phase. Do not assume that you know what I'm thinking. If
+  you're unsure, ask.
+
+## Keywords
+- PLANMODE: If this is anywhere in the prompt, it means that you should be working on building an 
+  ExecPlan. In this process do not write any code, or run any code. You should review the codebase
+  and prompt carefully and thing deeply, but you may take READONLY actions. You should ask many
+  questions in this phase. ALWAYS you should stop and wait for approval before you move on to
+  implementation.
+- READONLY: This means that you must not modify any files, inlcuding git history/commits, make
+  commands, etc. You may run any commands which do not modify files, e.g. head, tail, cat, ls, grep,
+  find, awk, ... You may also execute code, but only if it does not modify files, and this is 
+  probably not required. Running code usually takes too long anyways.
