@@ -9,6 +9,9 @@ PE_ALIGN_SYNC = 9 + 5
 COMPUTE_LOOP_NEXT = 0
 N_PES = 4
 MIN_INT = -99
+N_WFS = 5
+MAX_WF_LEN = 5000
+MAGIC_MASK_BITS = 8
 #locations in PE ctrl
 INIT_WF = 2
 PE_ALIGN_SYNC = INIT_WF + 6
@@ -113,17 +116,19 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 3, 0, 1, 0, 1, 0, blt))                            # blt gr[1] gr[0] 3 (SKIP)
 
     # Bounds check 2: if idx >= wf_len, skip to CONTINUE
-    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 1, 0, 1, 12, bge))                           # bge gr[1] gr[12] 4 (SKIP)
+    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 1, 0, 1, 12, bge))                           # bge gr[1] gr[12] 2 (SKIP)
 
     # Check if M[idx] >= text_len (exit condition)
-    f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 1, 0, 2, 14, bge))                           # bge gr[2] gr[14] 4 (EXIT)
+    f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 1, 0, 2, 14, bge))                           # bge gr[2] gr[14] 6 (EXIT)
 
 #CONTINUE:
     f.write(data_movement_instruction(gr, gr, 0, 0, 12, 0, 0, 0, 2, 12, addi))                       # gr[12]+=2
-    #increment current wavefront
-    f.write(write_magic(2))
+    #increment current wavefront (gr[3] = (gr[3] + 1) mod N_WFS)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 3, 0, 0, 0, 1, 3, addi))                          # gr[3] += 1
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, N_WFS, 3, bne))                       # if gr[3] != N_WFS, skip reset
+    f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))                            # gr[3] = 0
     #JMP LOOP PROCESS_WF
-    f.write(data_movement_instruction(0, 0, 0, 0, -38, 0, 0, 0, 0, 0, jump))                         # jump -38 (LOOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, -40, 0, 0, 0, 0, 0, jump))                         # jump -40 (LOOP)
 
 #EXIT:
     f.write(write_magic(5))                                                                           # magic(5) - print final state
