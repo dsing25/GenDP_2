@@ -313,7 +313,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         auto past_wf_at = [&](int wf_i, int affine_i, int idx) -> int& {
             return s2->buffer[(wf_i * 3 + affine_i) * MAX_WF_LEN + idx];
         };
-        static int past_wf_sizes[N_WFS];
         static std::ofstream magic_wfs_out("magic_wfs_out.txt");
         assert(S2_BUFFER_INTS >= PAST_WFS_SIZE);
         int (&gr)[16] = main_addressing_register;
@@ -382,7 +381,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 s2->buffer[i] = -42;
             constexpr int INITIAL_WF_LEN = MEM_BLOCK_SIZE;
             //WF 0
-            past_wf_sizes[gr[3]] = 1;
             for (int j = 0; j < INITIAL_WF_LEN; j++) {
                 for (int k = 0; k < 3; k++) {
                     past_wf_at(gr[3], k, j) = -99;
@@ -395,7 +393,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     past_wf_at(gr[3], k, j) = -99;
                 }
             }
-            past_wf_sizes[gr[3]] = 1;
             gr[3]++; //2 wf all zero
             //WF 2
             for (int j = 0; j < INITIAL_WF_LEN; j++) {
@@ -403,7 +400,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     past_wf_at(gr[3], k, j) = -99;
                 }
             }
-            past_wf_sizes[gr[3]] = 1;
             past_wf_at(gr[3], 2, 0) = first_extend_len; //middle m wavefront
             gr[3]++; //4 should have a 1, but it's never used
             //WF 3
@@ -418,7 +414,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     past_wf_at(gr[3] + 1, k, j) = -99;
                 }
             }
-            past_wf_sizes[gr[3]] = 3;
             past_wf_at(gr[3], 2, 1) = first_extend_len; //middle m wavefront
 
             //at this point the first four wavefronts have been defined initialized with dummy, and 
@@ -742,11 +737,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             } else { //gr[8] == BLOCK_1_START
                 gr[10] = BLOCK_0_START;
             }
-
-            // Update past_wf_sizes
-            gr[11] = gr[3] + 1;
-            if (gr[11] >= N_WFS) gr[11] = 0;
-            past_wf_sizes[gr[11]] = gr[12];
 
         } else if (magic_payload == 5) {
             // Exit condition reached - print final score (wf_len - 1)
