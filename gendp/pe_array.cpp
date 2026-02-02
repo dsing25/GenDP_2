@@ -686,9 +686,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
              *      gr1, gr2, gr5, gr6, gr11
              */
             auto storeSpmToWavefrontStrided = [&](int affine_i) {
-                // SPM row mapping: D=row5, I=row6, M=row4
-                static constexpr int SPM_ROW_FOR_AFFINE[3] = {5, 6, 4};
-                
                 //cache gr[1] and gr[2] to temps
                 gr[10] = gr[1];
                 gr[5]  = gr[2];
