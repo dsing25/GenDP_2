@@ -205,7 +205,7 @@ else:
 |:----:|:---------|:----:|:-----:|:------------------------------------------------|
 | 0    | reg      | -    | -     | PE only                                         |
 | 1    | gr       | ✓    | ✓     | Valid for arithmetic ops                        |
-| 2    | SPM      | ✓*   | ✓*    | *Planned but not yet implemented                |
+| 2    | SPM      | ✓†   | ✓†    | †Controller `mv`/`si` direct access (no latency) |
 | 3    | comp_ib  | ✓    | -     | Load instructions to distribute to PEs         |
 | 4    | ctrl_ib  | -    | -     | Not supported                                   |
 | 5    | in_buf   | ✓    | -     | Load from external input                        |
@@ -215,13 +215,15 @@ else:
 | 9    | out_port | -    | ✓     | Valid for arithmetic ops                        |
 | 10   | out_instr| -    | ✓†    | †Move ops only (`mv`, `si`); crashes on arith   |
 | 11-14| fifo     | ✓    | ✓     | Pop on load, push on store                      |
-| 15   | S2       | ✓‡   | ✓‡    | ‡Controller-only via `mvdq` (SPM ↔ S2)          |
+| 15   | S2       | ✓‡   | ✓‡    | ‡Controller `mv`/`si` and block ops (`mvdq`/`mvdqi`) |
 
 **Controller Arithmetic Destination Restriction**: Arithmetic operations (`add`, `sub`, `addi`, `subi`, `shifti_*`, `andi`) on the controller can only write to `gr` (1), `out_buf` (6), or `out_port` (9). Using other destinations (e.g., `out_instr`, `fifo`) will crash the simulator. Move operations (`mv`, `si`) have broader destination support.
 
 **Note on out_instr (code 10) for Controller**: When the controller loads from `comp_ib`, the instruction is stored in an internal buffer (`PE_instruction`). Specifying `out_instr` as the destination in a `mv` operation causes the store function to do nothing, but the instruction is still transferred to PEs via the internal buffer. This is the mechanism for distributing compute instructions.
 
-**Note on S2 (code 15) for Controller**: The S2 buffer is only accessible via `mvdq` (opcode 22) and `mvdqi` (opcode 23) for direct 8-word transfers between SPM and S2 or immediate block writes. Other operations do not support S2.
+**Note on SPM (code 2) for Controller**: Controller `mv`/`si` to SPM uses direct buffer reads/writes (no event latency). PE SPM access remains evented and latency-modeled.
+
+**Note on S2 (code 15) for Controller**: The S2 buffer is accessible via controller `mv`/`si` for single entries and via `mvdq`/`mvdqi` for 8-word block operations. Other operations do not support S2.
 
 ### Import Statement
 ```python
@@ -480,7 +482,7 @@ data_movement_instruction(
 **Operand Mapping**:
 | Field              | Usage                                                    |
 |--------------------|:---------------------------------------------------------|
-| `dest`             | PE: `gr`, `reg`, `SPM`, `comp_ib`, `out_port`, `out_instr`. Controller: `gr`, `out_buf`, `out_port`, `fifo` |
+| `dest`             | PE: `gr`, `reg`, `SPM`, `comp_ib`, `out_port`, `out_instr`. Controller: `gr`, `SPM`, `S2`, `out_buf`, `out_port`, `fifo` |
 | `reg_immBar_0`     | Address mode: 0=immediate offset, 1=register indirect   |
 | `reg_auto_increase_0` | 1 to auto-increment `reg_0`                            |
 | `imm_0`            | Address offset or register index                        |

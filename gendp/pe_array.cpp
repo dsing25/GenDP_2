@@ -124,6 +124,32 @@ LoadResult pe_array::load(int source_pos, int reg_immBar_flag, int rs1, int rs2,
     else
         printf("%d from main addr reg[%d] to ", data.data[0], source_addr);
 #endif
+    } else if (source_pos == CTRL_SPM) {
+        if (source_addr >= 0 && source_addr < SPM_unit->buffer_size) {
+            data.data[0] = SPM_unit->buffer[source_addr];
+#ifdef PROFILE
+    if (simd)
+        printf("%lx from SPM[%d] to ", data.data[0], source_addr);
+    else
+        printf("%d from SPM[%d] to ", data.data[0], source_addr);
+#endif
+        } else {
+            fprintf(stderr, "main load SPM addr %d error.\n", source_addr);
+            exit(-1);
+        }
+    } else if (source_pos == CTRL_S2) {
+        if (source_addr >= 0 && source_addr < s2->buffer_size) {
+            data.data[0] = s2->buffer[source_addr];
+#ifdef PROFILE
+    if (simd)
+        printf("%lx from S2[%d] to ", data.data[0], source_addr);
+    else
+        printf("%d from S2[%d] to ", data.data[0], source_addr);
+#endif
+        } else {
+            fprintf(stderr, "main load S2 addr %d error.\n", source_addr);
+            exit(-1);
+        }
     } else if (source_pos == 3) {
         PE_instruction[0] = compute_instruction_buffer[source_addr][0];
         PE_instruction[1] = compute_instruction_buffer[source_addr][1];
@@ -186,6 +212,26 @@ void pe_array::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, LoadRe
 #ifdef PROFILE
         printf("main addr register[%d].\n", dest_addr);
 #endif
+    } else if(dest_pos == CTRL_SPM) {
+        if (dest_addr >= 0 && dest_addr < SPM_unit->buffer_size) {
+            SPM_unit->buffer[dest_addr] = data.data[0];
+#ifdef PROFILE
+            printf("SPM[%d].\n", dest_addr);
+#endif
+        } else {
+            fprintf(stderr, "main store SPM addr %d error.\n", dest_addr);
+            exit(-1);
+        }
+    } else if(dest_pos == CTRL_S2) {
+        if (dest_addr >= 0 && dest_addr < s2->buffer_size) {
+            s2->buffer[dest_addr] = data.data[0];
+#ifdef PROFILE
+            printf("S2[%d].\n", dest_addr);
+#endif
+        } else {
+            fprintf(stderr, "main store S2 addr %d error.\n", dest_addr);
+            exit(-1);
+        }
     } else if(dest_pos == 6) {
         if (dest_addr >= 0 && dest_addr < output_buffer_size) {
             output_buffer[dest_addr] = data.data[0];
