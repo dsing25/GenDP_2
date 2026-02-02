@@ -383,8 +383,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
         };
 
+        constexpr int MAGIC_MASK_BITS = 8;
+        constexpr int MAGIC_MASK = (1 << MAGIC_MASK_BITS) - 1;
+        int magic_id = magic_payload;
+        int magic_mask = 0;
+        if (magic_payload >= (1 << MAGIC_MASK_BITS)) {
+            magic_id = magic_payload >> MAGIC_MASK_BITS;
+            magic_mask = magic_payload & MAGIC_MASK;
+        }
 
-        if (magic_payload == 4) {
+        if (magic_id == 4) {
         //INITIALIZATION BEGINING OF TIME
             int (&gr)[16] = main_addressing_register;
             int current_wf_size = 0;
@@ -496,7 +504,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // Free allocated memory
             free(pattern_seq);
             free(text_seq);
-        } else if (magic_payload == 1){
+        } else if (magic_id == 1){
             int (&gr)[16] = main_addressing_register;
         //READ FROM MAIN MEM. WRITE TO NEXT_BLOCK_START (gr[10)
             int current_wf_size = main_addressing_register[12];
@@ -505,6 +513,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int block_iter = main_addressing_register[9];
             int next_block_iter = block_iter +1; //we operate on this cause we're writing to next
             int width = 3; // for display
+            bool do_setup = (magic_mask & 0x10) == 0;
+            bool do_o = (magic_mask & 0x1) == 0;
+            bool do_m = (magic_mask & 0x2) == 0;
+            bool do_i = (magic_mask & 0x4) == 0;
+            bool do_d = (magic_mask & 0x8) == 0;
                            
             /*
              * Preconditions:
@@ -620,44 +633,56 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
             };
 
-            //temporary increase gr[9] because we are processing the next block_iter
-            gr[9]+=1;
-            //diags_per_pe
-            gr[4] = gr[12] >> 2;
-            gr[4] += 1;
-            //true end is gr4
-            //local end is min(MEM_BLOCK_SIZE or remainder gr[4])
-            gr[11] = MEM_BLOCK_SIZE * gr[9];
-            gr[2] = gr[4] - gr[11]; //gr2 as tmp. holds remainder
-            if (gr[2] < MEM_BLOCK_SIZE){
-                gr[6] = gr[2];
-            } else {
-                gr[6] = MEM_BLOCK_SIZE;
-            }
-            if (gr[6] < 0){
-                gr[6] = 0;
+            if (do_setup) {
+                //temporary increase gr[9] because we are processing the next block_iter
+                gr[9]+=1;
+                //diags_per_pe
+                gr[4] = gr[12] >> 2;
+                gr[4] += 1;
+                //true end is gr4
+                //local end is min(MEM_BLOCK_SIZE or remainder gr[4])
+                gr[11] = MEM_BLOCK_SIZE * gr[9];
+                gr[2] = gr[4] - gr[11]; //gr2 as tmp. holds remainder
+                if (gr[2] < MEM_BLOCK_SIZE){
+                    gr[6] = gr[2];
+                } else {
+                    gr[6] = MEM_BLOCK_SIZE;
+                }
+                if (gr[6] < 0){
+                    gr[6] = 0;
+                }
             }
             //Write fullOs
-            gr[1] = 0*MEM_BLOCK_SIZE + gr[10]; //offset into PEs (O is row 0)
-            loadSpmRegMapped(3, 5, 2, 3, true);  // prepad=3, postpad=5, affineInd=2, wf_i_offset=3, isO=true
+            if (do_o) {
+                gr[1] = 0*MEM_BLOCK_SIZE + gr[10]; //offset into PEs (O is row 0)
+                loadSpmRegMapped(3, 5, 2, 3, true);  // prepad=3, postpad=5, affineInd=2, wf_i_offset=3, isO=true
+            }
 
             //Write fullMs
-            gr[1] = 1*MEM_BLOCK_SIZE + gr[10]; //offset into PEs
-            loadSpmRegMapped(2, 2, 2, 1, false);  // prepad=2, postpad=2, affineInd=2, isO=false
+            if (do_m) {
+                gr[1] = 1*MEM_BLOCK_SIZE + gr[10]; //offset into PEs
+                loadSpmRegMapped(2, 2, 2, 1, false);  // prepad=2, postpad=2, affineInd=2, isO=false
+            }
             //Write fullIs
-            gr[1] = 2*MEM_BLOCK_SIZE + gr[10]; //offset into PEs
-            loadSpmRegMapped(2, 0, 1, 0, false);  // isO=false
+            if (do_i) {
+                gr[1] = 2*MEM_BLOCK_SIZE + gr[10]; //offset into PEs
+                loadSpmRegMapped(2, 0, 1, 0, false);  // isO=false
+            }
             //Write the fullDs
-            gr[1] = 3*MEM_BLOCK_SIZE + gr[10]; //offset into PEs
-            loadSpmRegMapped(0, 2, 0, 0, false);  // isO=false
-            gr[9]-=1;
+            if (do_d) {
+                gr[1] = 3*MEM_BLOCK_SIZE + gr[10]; //offset into PEs
+                loadSpmRegMapped(0, 2, 0, 0, false);  // isO=false
+            }
+            if (do_setup) {
+                gr[9]-=1;
+            }
 
 
-        } else if (magic_payload == 2){
+        } else if (magic_id == 2){
         //INCREMENT CURRENT_WF_I (no longer expected in ISA stream)
             fprintf(stderr, "ERROR: magic payload 2 should no longer be used.\n");
             exit(-1);
-        } else if (magic_payload == 3){
+        } else if (magic_id == 3){
         //WRITE MAIN MEM WITH RESULTS IN CURRENT_BLOCK_START (gr[8])
         //Register-mapped version with strided PE access: SPM -> past_wfs
             /*
@@ -782,10 +807,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[10] = BLOCK_0_START;
             }
 
-        } else if (magic_payload == 5) {
+        } else if (magic_id == 5) {
             // Exit condition reached - print final score (wf_len - 1)
             printf("qqq %d qqq\n", main_addressing_register[12] - 1);
-        } else if (magic_payload == 6) {
+        } else if (magic_id == 6) {
             // Display inputs and outputs for the same wavefront block
             int current_wf_size = main_addressing_register[12];
             int this_block_start = main_addressing_register[8];
@@ -872,7 +897,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
 
             magic_wfs_out << std::endl;
-        } else if (magic_payload == 7) {
+        } else if (magic_id == 7) {
             // Load M[idx] from past_wfs into a register
             // gr[1] = index, result goes to gr[2]
             // Note: Bounds checking is done in ISA before calling this magic
@@ -882,7 +907,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
             main_addressing_register[2] = past_wf_at(write_wf_i, 2, idx);
         } else {
-            fprintf(stderr, "ERROR: PE_ARRAY PC=%d cycle=%d unknown magic instruction payload %d.\n", *PC, cycle, magic_payload);
+            fprintf(stderr, "ERROR: PE_ARRAY PC=%d cycle=%d unknown magic id %d (payload %d mask 0x%x).\n",
+                    *PC, cycle, magic_id, magic_payload, magic_mask);
             exit(-1);
         }
 

@@ -33,6 +33,7 @@ SWIZZLED_PATTERN_START = PATTERN_START << 2 # need to reverse swizzle to hit 226
 SWIZZLED_TEXT_START = TEXT_START << 2 
 ALIGN_B0_PC = 7 + 6
 ALIGN_B1_PC = 58
+EXTRA_O_LOAD_ADDR = 7 * MEM_BLOCK_SIZE
 
 
 
@@ -40,6 +41,121 @@ ALIGN_B1_PC = 58
 def wfa_main_instruction():
     
     f = InstructionWriter("instructions/wfa/main_instruction.txt");
+
+    def loadSpmRegMapped(prepad_len, postpad_len, affineInd, wf_i_offset, isO):
+        '''
+        Pre:
+            gr[4] = diags per PE
+            gr[6] = diags to execute this block
+            gr[3] = current_wf_i
+            gr[1] = SPM row base
+            gr[9] = block_iter (temporary increment already applied)
+            gr[10]= next_block_start
+            gr[12]= wavefront len
+        Post:
+            gr[1] preserved, gr[2]/gr[5]/gr[11] destroyed
+        '''
+        # gr[11] = gr[3] - wf_i_offset (mod N_WFS)
+        f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 3, 0, mv))                        # gr[11]=gr[3]
+        for _ in range(wf_i_offset):
+            f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 1, 11, subi))                 # gr[11]--
+            f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 1, 0, 11, 0, bge))                     # if gr[11] >= 0 skip reset
+            f.write(data_movement_instruction(gr, 0, 0, 0, 11, 0, 0, 0, N_WFS - 1, 0, si))             # gr[11]=N_WFS-1
+
+        # gr[5] = gr[11] * MAX_WF_LEN
+        f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 0, 0, si))                          # gr[5]=0 (acc)
+        f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, MAX_WF_LEN, 0, si))                 # gr[2]=MAX_WF_LEN
+        f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 1, 0, 11, 0, beq))                         # if gr[11]==0 skip loop
+        f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 2, 5, add))                        # gr[5]+=gr[2]
+        f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 1, 11, subi))                     # gr[11]--
+        f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 11, 0, bne))                        # loop if gr[11]!=0
+        f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 5, 0, mv))                        # gr[11]=gr[5]
+
+        # gr[2] = affineInd * MAX_WF_LEN
+        if affineInd == 0:
+            f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si))                      # gr[2]=0
+        elif affineInd == 1:
+            f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, MAX_WF_LEN, 0, si))             # gr[2]=MAX_WF_LEN
+        else:
+            f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, MAX_WF_LEN, 0, si))             # gr[2]=MAX_WF_LEN
+            f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, MAX_WF_LEN, 2, addi))          # gr[2]+=MAX_WF_LEN
+
+        # gr[2] += gr[11] * 3
+        f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                       # gr[2]+=gr[11]
+        f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                       # gr[2]+=gr[11]
+        f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                       # gr[2]+=gr[11]
+
+        # if isO: gr[5]=gr[2] (wf start for bounds)
+        if isO:
+            f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 2, 0, mv))                      # gr[5]=gr[2]
+
+        # gr[11] = gr[9] * MEM_BLOCK_SIZE; gr[2] += gr[11]
+        f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, MEM_BLOCK_SIZE_LG2, 9, shifti_l)) # gr[11]=gr[9]<<lg2
+        f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                        # gr[2]+=gr[11]
+
+        # Extra O load for EXTRA_O_LOAD_ADDR
+        if isO:
+            f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 2, 0, mv))                     # gr[11]=gr[2]
+            f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 5, 11, subi))                  # gr[11]-=5
+
+            for pe_i in range(N_PES):
+                # value 0
+                f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 11, 5, sub))               # gr[11]-=gr[5]
+                f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 1, 0, 11, 0, blt))                 # if gr[11] < 0 -> MIN_INT
+                f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 5, 11, add))               # restore gr[11]
+                f.write(data_movement_instruction(SPM, S2, 0, 0, EXTRA_O_LOAD_ADDR + BANK_SIZE * pe_i, 10, 0, 0, 11, 0, mv)) # SPM[...] = S2[gr[11]]
+                f.write(data_movement_instruction(0, 0, 0, 0, 3, 0, 0, 0, 0, 0, jump))                 # skip MIN_INT write
+                f.write(data_movement_instruction(SPM, 0, 0, 0, EXTRA_O_LOAD_ADDR + BANK_SIZE * pe_i, 10, 0, 0, MIN_INT, 0, si)) # SPM[...] = MIN_INT
+                f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 5, 11, add))               # restore gr[11]
+
+                f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 1, 11, addi))             # gr[11]++
+                # value 1
+                f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 11, 5, sub))               # gr[11]-=gr[5]
+                f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 1, 0, 11, 0, blt))                 # if gr[11] < 0 -> MIN_INT
+                f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 5, 11, add))               # restore gr[11]
+                f.write(data_movement_instruction(SPM, S2, 0, 0, EXTRA_O_LOAD_ADDR + BANK_SIZE * pe_i + 1, 10, 0, 0, 11, 0, mv)) # SPM[...] = S2[gr[11]]
+                f.write(data_movement_instruction(0, 0, 0, 0, 3, 0, 0, 0, 0, 0, jump))                 # skip MIN_INT write
+                f.write(data_movement_instruction(SPM, 0, 0, 0, EXTRA_O_LOAD_ADDR + BANK_SIZE * pe_i + 1, 10, 0, 0, MIN_INT, 0, si)) # SPM[...] = MIN_INT
+                f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 5, 11, add))               # restore gr[11]
+
+                f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 1, 11, subi))             # gr[11]--
+                if pe_i != N_PES - 1:
+                    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 4, 11, add))          # gr[11]+=gr[4]
+
+        # if first block, prepad + first mvdq
+        f.write(data_movement_instruction(0, 0, 0, 0, 10, 0, 1, 0, 9, 0, bne))                         # if gr[9] != 0 jump to else
+        for j in range(prepad_len):
+            f.write(data_movement_instruction(SPM, 0, 0, 0, j, 1, 0, 0, MIN_INT, 0, si))               # prepad MIN_INT
+        f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 1, 6, add))                        # gr[5]=gr[1]+gr[6]
+        f.write(data_movement_instruction(SPM, S2, 0, 0, prepad_len, 1, 0, 0, 0, 2, mvdq))             # SPM<-S2 (pe0)
+        f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, prepad_len, 6, subi))             # gr[11]=gr[6]-prepad_len
+        f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 1, 0, 11, 0, blt))                         # if gr[11] < 0 skip sub
+        f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, prepad_len, 2, subi))              # gr[2]-=prepad_len
+        f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 2, 0, mv))                        # gr[11]=gr[2]
+        for pe_i in range(1, N_PES):
+            f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 4, 11, add))                  # gr[11]+=gr[4]
+            f.write(data_movement_instruction(SPM, S2, 0, 0, BANK_SIZE * pe_i, 1, 0, 0, 0, 11, mvdq))  # SPM<-S2
+        f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 8, 1, addi))                       # gr[1]+=8
+        f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 8, 2, addi))                       # gr[2]+=8
+        f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 0, 0, 0, 0, jump))                         # jump to loop start
+
+        # else branch setup
+        f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 1, 6, add))                        # gr[5]=gr[1]+gr[6]
+        f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, prepad_len, 2, subi))              # gr[2]-=prepad_len
+
+        # main loop: while gr[1] < gr[5]
+        f.write(data_movement_instruction(0, 0, 0, 0, 9, 0, 1, 0, 1, 5, bge))                          # if gr[1] >= gr[5] exit
+        f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 2, 0, mv))                        # gr[11]=gr[2]
+        for pe_i in range(N_PES):
+            f.write(data_movement_instruction(SPM, S2, 0, 0, BANK_SIZE * pe_i, 1, 0, 0, 0, 11, mvdq))  # SPM<-S2
+            if pe_i != N_PES - 1:
+                f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 4, 11, add))              # gr[11]+=gr[4]
+        f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 8, 1, addi))                       # gr[1]+=8
+        f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 8, 2, addi))                       # gr[2]+=8
+        f.write(data_movement_instruction(0, 0, 0, 0, -7, 0, 0, 0, 0, 0, jump))                        # loop
+
+        # restore gr[1]
+        f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 5, 6, sub))                        # gr[1]=gr[5]-gr[6]
     #begining of time magic
     f.write(write_magic(4));
 
@@ -62,7 +178,19 @@ def wfa_main_instruction():
     #next block
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, BLOCK_0_START, 0, si))               # gr[10] = BLOCK_0_START
     #load o, m, i, d inputs to next block
-    f.write(write_magic(1));
+    #magic(1) setup (skip in C++)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 1, 9, addi))                          # gr[9]+=1
+    f.write(data_movement_instruction(gr, gr, 0, 0, 4, 0, 0, 0, 2, 12, shifti_r))                      # gr[4]=gr[12]>>2
+    f.write(data_movement_instruction(gr, gr, 0, 0, 4, 0, 0, 0, 1, 4, addi))                           # gr[4]+=1
+    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, MEM_BLOCK_SIZE_LG2, 9, shifti_l))     # gr[11]=gr[9]<<log2(MEM_BLOCK_SIZE)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 4, 11, sub))                           # gr[2]=gr[4]-gr[11]
+    f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, MEM_BLOCK_SIZE, 0, si))                 # gr[6]=MEM_BLOCK_SIZE
+    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 1, 0, 2, 6, bge))                              # if gr[2] >= gr[6] skip mv
+    f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0, 2, 0, mv))                             # gr[6]=gr[2]
+    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 1, 0, 6, 0, bge))                              # if gr[6] >= gr[0] skip zero
+    f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, 0, 0, si))                              # gr[6]=0
+    f.write(write_magic((1 << MAGIC_MASK_BITS) | 0x10))
+    f.write(data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 1, 9, subi))                           # gr[9]-=1
     #flip blocks
     f.write(data_movement_instruction(gr, 0, 0, 0, 8, 0, 0, 0, BLOCK_0_START, 0, si))                 # gr[8] = BLOCK_0_START
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, BLOCK_1_START, 0, si))                 # gr[10] = BLOCK_1_START
@@ -79,7 +207,19 @@ def wfa_main_instruction():
 
 #BLOCK LOOP
     #load inputs o,m,i,d to NEXT_BLOCK magic(2)
-    f.write(write_magic(1));
+    #magic(1) setup (skip in C++)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 1, 9, addi))                          # gr[9]+=1
+    f.write(data_movement_instruction(gr, gr, 0, 0, 4, 0, 0, 0, 2, 12, shifti_r))                      # gr[4]=gr[12]>>2
+    f.write(data_movement_instruction(gr, gr, 0, 0, 4, 0, 0, 0, 1, 4, addi))                           # gr[4]+=1
+    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, MEM_BLOCK_SIZE_LG2, 9, shifti_l))     # gr[11]=gr[9]<<log2(MEM_BLOCK_SIZE)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 4, 11, sub))                           # gr[2]=gr[4]-gr[11]
+    f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, MEM_BLOCK_SIZE, 0, si))                 # gr[6]=MEM_BLOCK_SIZE
+    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 1, 0, 2, 6, bge))                              # if gr[2] >= gr[6] skip mv
+    f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0, 2, 0, mv))                             # gr[6]=gr[2]
+    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 1, 0, 6, 0, bge))                              # if gr[6] >= gr[0] skip zero
+    f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, 0, 0, si))                              # gr[6]=0
+    f.write(write_magic((1 << MAGIC_MASK_BITS) | 0x10))
+    f.write(data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 1, 9, subi))                           # gr[9]-=1
     #TODO wait lsq
     #wait pe
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # bne 1 gr[13] 0
@@ -102,7 +242,7 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, 11, 0, mv))                          # gr[8] = gr[11]
     #increment count
     f.write(data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 1, 9, addi))                         # gr[9]+=1
-    f.write(data_movement_instruction(gr, gr, 0, 0, -13, 0, 1, 0, 9, 7, blt))                        # blt gr[9] gr[7] -13
+    f.write(data_movement_instruction(gr, gr, 0, 0, -25, 0, 1, 0, 9, 7, blt))                        # blt gr[9] gr[7] -25
 #END BLOCK LOOP. NEW WF
     # Calculate idx = (text_len - pattern_len) + (wf_len / 2)
     f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 14, 15, sub))                        # gr[1] = gr[14] - gr[15] (target_k)
@@ -128,7 +268,7 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, N_WFS, 3, bne))                       # if gr[3] != N_WFS, skip reset
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))                            # gr[3] = 0
     #JMP LOOP PROCESS_WF
-    f.write(data_movement_instruction(0, 0, 0, 0, -40, 0, 0, 0, 0, 0, jump))                         # jump -40 (LOOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, -62, 0, 0, 0, 0, 0, jump))                         # jump -62 (LOOP)
 
 #EXIT:
     f.write(write_magic(5))                                                                           # magic(5) - print final state
