@@ -904,6 +904,55 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         if (reg_auto_increasement_flag_1)
             main_addressing_register[reg_1]++;
         (*PC)++;
+    } else if (opcode == CTRL_MVDQ) {      // mvdq dest src imm/reg(reg(++)) imm/reg(reg(++))
+#ifdef PROFILE
+        printf("MoveDoubleQuad ");
+#endif
+        int dest_addr = 0;
+        int src_addr = 0;
+        if (reg_immBar_flag_0)
+            dest_addr = main_addressing_register[sext_imm_0] + main_addressing_register[reg_0];
+        else
+            dest_addr = sext_imm_0 + main_addressing_register[reg_0];
+        if (reg_immBar_flag_1)
+            src_addr = main_addressing_register[sext_imm_1] + main_addressing_register[reg_1];
+        else
+            src_addr = sext_imm_1 + main_addressing_register[reg_1];
+
+        bool src_is_spm = (src == CTRL_SPM);
+        bool src_is_s2 = (src == CTRL_S2);
+        bool dest_is_spm = (dest == CTRL_SPM);
+        bool dest_is_s2 = (dest == CTRL_S2);
+
+        if (!((src_is_spm && dest_is_s2) || (src_is_s2 && dest_is_spm))) {
+            fprintf(stderr, "main mvdq only supports SPM <-> S2. src=%d dest=%d PC=%d\n", src, dest, *PC);
+            exit(-1);
+        }
+
+        int src_limit = src_is_spm ? SPM_unit->buffer_size : s2->buffer_size;
+        int dest_limit = dest_is_spm ? SPM_unit->buffer_size : s2->buffer_size;
+        if (src_addr < 0 || src_addr + 8 > src_limit) {
+            fprintf(stderr, "main mvdq src addr %d out of bounds (limit %d). PC=%d\n", src_addr, src_limit, *PC);
+            exit(-1);
+        }
+        if (dest_addr < 0 || dest_addr + 8 > dest_limit) {
+            fprintf(stderr, "main mvdq dest addr %d out of bounds (limit %d). PC=%d\n", dest_addr, dest_limit, *PC);
+            exit(-1);
+        }
+
+        if (src_is_spm && dest_is_s2) {
+            for (i = 0; i < 8; i++)
+                s2->buffer[dest_addr + i] = SPM_unit->buffer[src_addr + i];
+        } else {
+            for (i = 0; i < 8; i++)
+                SPM_unit->buffer[dest_addr + i] = s2->buffer[src_addr + i];
+        }
+
+        if (reg_auto_increasement_flag_0)
+            main_addressing_register[reg_0] += 8;
+        if (reg_auto_increasement_flag_1)
+            main_addressing_register[reg_1] += 8;
+        (*PC)++;
 //     } else if (opcode == 6) {       // add_8 rd rs1 rs2
 //         rd = reg_imm_0;
 //         rs1 = reg_imm_1;
