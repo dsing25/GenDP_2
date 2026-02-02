@@ -327,6 +327,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
             }
         };
+        auto mvdqi = [&](int dst, int val, bool toSPM){
+            for (int i =0; i < 8; i++){
+                if (toSPM){
+                    SPM_unit->buffer[dst+i] = val;
+                } else {
+                    s2->buffer[dst+i] = val;
+                }
+            }
+        };
 
 
         if (magic_payload == 4) {
@@ -604,15 +613,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
         } else if (magic_payload == 2){
         //INCREMENT CURRENT_WF_I
-            //printf("score %d:\n", past_wf_sizes[current_wf_i]+3);
             gr[3]++;
             if (gr[3] >= N_WFS) gr[3] = 0;
-            //Do an extra write of buffer MIN_INTS to wfs
-            for (int i = 0; i < 16; i++){
-                for (int affine_i = 0; affine_i < 3; affine_i++){
-                    past_wf_at(gr[3], affine_i, past_wf_sizes[gr[3]] + i) = MIN_INT;
-                }
-            }
         } else if (magic_payload == 3){
         //WRITE MAIN MEM WITH RESULTS IN CURRENT_BLOCK_START (gr[8])
         //Register-mapped version with strided PE access: SPM -> past_wfs
@@ -672,7 +674,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[2] += 1;
                 }
 
-
                 //restore gr[1] and gr[2]
                 gr[1] = gr[10];
                 gr[2] = gr[5];
@@ -713,6 +714,28 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[2] += MAX_WF_LEN; //M
                 storeSpmToWavefrontStrided(2);
             }
+
+            //do post padding
+            //recompute gr2, the offset into this wavefront (not including affine offset)
+            //gr2 = (wf_i+1)*max_wf_len*3
+            //modular add for current_wf_i
+            gr[11] = gr[3] + 1;
+            if (gr[11] >= N_WFS) gr[11] = 0;
+            gr[11] *= MAX_WF_LEN;
+                //multiply by 3
+            for (int i = 0; i < 3; i++){
+                if (i == 0){
+                    gr[2] = gr[11] + gr[12];
+                } else {
+                    gr[2] += gr[11];
+                }
+            }
+            for (int affine_i = 0; affine_i < 3; affine_i++){
+                //postpadding: write MIN_INT to end of wf
+                mvdqi(gr[2], MIN_INT, false);
+                if (affine_i < 2) gr[2] += MAX_WF_LEN; //add in affine offset
+            }
+
             //restore gr10 via recomputation
             if (gr[8] == 0){
                 gr[10] = BLOCK_1_START;
