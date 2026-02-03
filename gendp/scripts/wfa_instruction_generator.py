@@ -228,9 +228,6 @@ def wfa_main_instruction():
     #optional, branch and skip some extra comps for wf smaller than 128
     #prime PE compute for current block before entering block loop
     # NOTE: do not reset PE PC here; allow INIT_WF to complete (gr14 setup) before block compute.
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                            # No-op (was set_PC ALIGN_B0_PC)
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                            # No-op (was beq gr[0] gr[8] 2)
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                            # No-op (was set_PC ALIGN_B1_PC)
     #skip block loop if no remaining blocks
     f.write(data_movement_instruction(0, 0, 0, 0, 255, 0, 1, 0, 7, 0, beq))                          # beq gr[7] gr[0] 255
 
@@ -389,7 +386,7 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, N_WFS, 3, bne))                       # if gr[3] != N_WFS, skip reset
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))                            # gr[3] = 0
     #JMP LOOP PROCESS_WF
-    f.write(data_movement_instruction(0, 0, 0, 0, -530, 0, 0, 0, 0, 0, jump))                        # jump -530 (LOOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, -527, 0, 0, 0, 0, 0, jump))                        # jump -527 (LOOP)
 
 #EXIT:
     f.write(write_magic(5))                                                                           # magic(5) - print final state
