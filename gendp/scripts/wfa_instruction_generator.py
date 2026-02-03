@@ -227,9 +227,10 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 1, 9, addi))                         # gr[9]+=1
     #optional, branch and skip some extra comps for wf smaller than 128
     #prime PE compute for current block before entering block loop
-    f.write(data_movement_instruction(gr, gr, 0, 0, ALIGN_B0_PC, 0, 0, 0, 0, 0, set_PC))             # PE_PC = ALIGN_B0_PC
-    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 1, 0, 0, 8, beq))                            # beq gr[0] gr[8] 2
-    f.write(data_movement_instruction(gr, gr, 0, 0, ALIGN_B1_PC, 0, 0, 0, 0, 0, set_PC))             # PE_PC = ALIGN_B1_PC
+    # NOTE: do not reset PE PC here; allow INIT_WF to complete (gr14 setup) before block compute.
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                            # No-op (was set_PC ALIGN_B0_PC)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                            # No-op (was beq gr[0] gr[8] 2)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                            # No-op (was set_PC ALIGN_B1_PC)
     #skip block loop if no remaining blocks
     f.write(data_movement_instruction(0, 0, 0, 0, 255, 0, 1, 0, 7, 0, beq))                          # beq gr[7] gr[0] 255
 
@@ -307,7 +308,7 @@ def wfa_main_instruction():
         f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 1, 0, 0, 8, beq))                            # if gr[8]==0 skip
         f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, BLOCK_0_START, 0, si))                # gr[10]=BLOCK_0_START
     #load results m,i,d of NEXT_BLOCK magic(3)
-    f.write(write_magic((3 << MAGIC_MASK_BITS) | 0x10));
+    f.write(write_magic(3 << MAGIC_MASK_BITS));
     # Display combined inputs/outputs for debugging
     f.write(write_magic(6));
     #TODO wait lsq
@@ -361,7 +362,7 @@ def wfa_main_instruction():
         f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 1, 0, 0, 8, beq))                            # if gr[8]==0 skip
         f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, BLOCK_0_START, 0, si))                # gr[10]=BLOCK_0_START
     #load results m,i,d of NEXT_BLOCK magic(3)
-    f.write(write_magic((3 << MAGIC_MASK_BITS) | 0x10));
+    f.write(write_magic(3 << MAGIC_MASK_BITS));
     # Display combined inputs/outputs for debugging
     f.write(write_magic(6));
     # Calculate idx = (text_len - pattern_len) + (wf_len / 2)

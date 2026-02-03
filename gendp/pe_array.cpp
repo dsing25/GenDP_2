@@ -667,9 +667,36 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             if (write_wf_i >= N_WFS) write_wf_i = 0;
             int width = 3;
             int k = 0;
+            static std::ofstream magic_spm_out("magic_spm_out.txt");
 
             // Calculate PE distribution
             int n_diags_per_pe = current_wf_size / 4 + 1; //ceil div
+
+            // DEBUG: dump SPM output regions (M/D/I) for comparison with past_wfs
+            magic_spm_out << "Block " << display_block_iter << " (Score " << current_wf_size - 1 << ") SPM_OUT:" << std::endl << std::endl;
+            auto dump_spm_region = [&](int region_offset) {
+                for (int i = 0; i < 4; i++) {
+                    int start = i * n_diags_per_pe + display_block_iter * MEM_BLOCK_SIZE;
+                    int end_this_pe_comp_region = std::min(n_diags_per_pe * (i + 1), current_wf_size);
+                    int end = std::min(start + MEM_BLOCK_SIZE, end_this_pe_comp_region);
+                    for (int j = start; j < end; j++) {
+                        magic_spm_out << std::setw(width) << SPM_unit->access_magic(i, region_offset + this_block_start + j - start);
+                    }
+                }
+                magic_spm_out << std::endl;
+            };
+            // M output region (4*MEM_BLOCK_SIZE), then D (5*MEM_BLOCK_SIZE), then I (6*MEM_BLOCK_SIZE)
+            dump_spm_region(4 * MEM_BLOCK_SIZE);
+            dump_spm_region(5 * MEM_BLOCK_SIZE);
+            dump_spm_region(6 * MEM_BLOCK_SIZE);
+            // Extra O load scratch region (two values per PE)
+            magic_spm_out << "EXTRA_O:" << std::endl;
+            for (int i = 0; i < 4; i++) {
+                int base = EXTRA_O_LOAD_ADDR;
+                magic_spm_out << std::setw(width) << SPM_unit->access_magic(i, base)
+                              << std::setw(width) << SPM_unit->access_magic(i, base + 1);
+            }
+            magic_spm_out << std::endl;
 
             // Section header
             magic_wfs_out << "Block " << display_block_iter << " (Score " << current_wf_size - 1 << "):" << std::endl << std::endl;
