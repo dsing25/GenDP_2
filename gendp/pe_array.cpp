@@ -509,7 +509,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             fprintf(stderr, "ERROR: magic payload 2 should no longer be used.\n");
             exit(-1);
         } else if (magic_id == 3){
-        //WRITE MAIN MEM WITH RESULTS IN CURRENT_BLOCK_START (gr[8])
+        //WRITE MAIN MEM WITH RESULTS IN NEXT_BLOCK_START (gr[10])
         //Register-mapped version with strided PE access: SPM -> past_wfs
             bool do_setup = (magic_mask & 0x10) == 0;
             bool do_bulk = (magic_mask & 0x01) == 0;
@@ -530,7 +530,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
              *
              *      gr3: current_wf_i
              *      gr4: n_diags_per_pe
-             *      gr8: this_block_start (0 or BLOCK_1_START) - read only
+             *      gr10: next_block_start (0 or BLOCK_1_START) - read only
              *      gr9: block_iter - read only
              *      gr12: current_wf_size - read only
              *
@@ -547,6 +547,14 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[5]  = gr[2];
 
                 gr[6] -= 8; //exit early. Do 8wide writes until boundary
+                if (!do_bulk) {
+                    int diff = gr[6] - gr[1];
+                    if (diff > 0) {
+                        int iters = (diff + 7) / 8;
+                        gr[1] += iters * 8;
+                        gr[2] += iters * 8;
+                    }
+                }
                 if (do_bulk) {
                     while (gr[1] < gr[6]) {
                         gr[11] = gr[2];
@@ -601,7 +609,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
             if (gr[6] > 0){
                 // Process each affine type: D=0, I=1, M=2
-                gr[1] = 5*MEM_BLOCK_SIZE + gr[8];
+                gr[1] = 5*MEM_BLOCK_SIZE + gr[10];
                 gr[6] += gr[1];
                 //gr[2] starts at D
                 storeSpmToWavefrontStrided(0);
@@ -651,8 +659,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         } else if (magic_id == 6) {
             // Display inputs and outputs for the same wavefront block
             int current_wf_size = main_addressing_register[12];
-            int this_block_start = main_addressing_register[8];
-            int next_block_start = main_addressing_register[10];
+            int this_block_start = main_addressing_register[10];
+            int next_block_start = main_addressing_register[8];
             int block_iter = main_addressing_register[9];
             int display_block_iter = block_iter;  // Display previous block (just computed)
             int write_wf_i = gr[3] + 1;
