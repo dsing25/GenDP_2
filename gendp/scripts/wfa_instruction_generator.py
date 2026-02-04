@@ -13,7 +13,7 @@ PE_BOOT_PAIRS = PE_BOOT_STALL_PAIRS + PE_BOOT_RX_PAIRS
 COMPUTE_LOOP_NEXT = 0
 MIN_INT = -99
 N_WFS = 5
-MAX_WF_LEN = 4096
+MAX_WF_LEN = 16384
 MAX_WF_LEN_LG2 = int(log(MAX_WF_LEN, 2)+1e-9) # in words
 S2_META_BASE = N_WFS * 3 * MAX_WF_LEN
 MAGIC_MASK_BITS = 8
@@ -26,7 +26,7 @@ COMPUTE_H = 0
 COMPUTE_D = COMPUTE_H + SPM_BANDWIDTH // 2 + 1 #1 is halts
 COMPUTE_I = COMPUTE_D + SPM_BANDWIDTH // 2 + 1 #1 is halts
 #MEMORY LOCATIONS
-BANK_SIZE = 1024
+BANK_SIZE = 8192
 MEM_BLOCK_SIZE = 32 # in words
 MEM_BLOCK_SIZE_LG2 = int(log(MEM_BLOCK_SIZE, 2)+1e-9) # in words
 PADDING_SIZE = 30 # in words, added at end of each mem_block
@@ -414,7 +414,8 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, MAX_WF_LEN_LG2, 11, shifti_l))       # gr[11]=gr[11]<<lg2(MAX_WF_LEN)
     f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 11, add))                         # gr[2]=2*gr[11]
     f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 11, 2, add))                         # gr[11]=3*gr[11]
-    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 2*MAX_WF_LEN, 11, addi))             # gr[11]+=2*MAX_WF_LEN
+    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, MAX_WF_LEN, 11, addi))               # gr[11]+=MAX_WF_LEN
+    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, MAX_WF_LEN, 11, addi))               # gr[11]+=MAX_WF_LEN
     f.write(data_movement_instruction(gr, S2, 0, 0, 2, 0, 1, 0, 11, 1, mv))                           # gr[2]=S2[gr[11]+gr[1]]
 
     # Bounds check 1: if idx < 0, skip to CONTINUE
@@ -433,7 +434,7 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, N_WFS, 3, bne))                       # if gr[3] != N_WFS, skip reset
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))                            # gr[3] = 0
     #JMP LOOP PROCESS_WF
-    f.write(data_movement_instruction(0, 0, 0, 0, -754, 0, 0, 0, 0, 0, jump))                        # jump -754 (LOOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, -755, 0, 0, 0, 0, 0, jump))                        # jump -755 (LOOP)
 
 #EXIT:
     f.write(write_magic(5))                                                                           # magic(5) - print final state

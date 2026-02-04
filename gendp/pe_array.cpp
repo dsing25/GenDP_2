@@ -369,7 +369,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         constexpr int EXTRA_O_LOAD_ADDR = 7*MEM_BLOCK_SIZE;
         constexpr int BLOCK_0_START = 0;
         constexpr int BLOCK_1_START = MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE;
-        constexpr int MAX_WF_LEN = 4096;
+        constexpr int MAX_WF_LEN = 16384;
         constexpr int N_WFS = 5;
         constexpr int PAST_WFS_SIZE = N_WFS * 3 * MAX_WF_LEN;
         //4 previous scores, 3 affine wavefronts, each wavefront MEM_BLOCK entries. Rotating buffer

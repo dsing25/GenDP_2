@@ -12,8 +12,17 @@ import shlex
 import tempfile
 from pathlib import Path
 
+# Resolve repository root and submodule paths robustly
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+WFA_PROXY_DIR = REPO_ROOT / 'kernel' / 'WFA-proxy'
+if not WFA_PROXY_DIR.exists():
+    alt_proxy = REPO_ROOT / 'kernel' / 'WfaProxy'
+    if alt_proxy.exists():
+        WFA_PROXY_DIR = alt_proxy
+
 # Import reference WFA implementation from submodule
-sys.path.insert(0, str(Path(__file__).parent / '../kernel/WFA-proxy'))
+sys.path.insert(0, str(WFA_PROXY_DIR))
 from wfa_align import wfa_align
 
 def read_seq_file(filename):
@@ -40,7 +49,22 @@ def read_seq_file(filename):
 
     return pairs
 
-def run_simulator(pattern, text, sim_path='./sim', verbose=False):
+def resolve_short_seq(seq_file):
+    candidates = []
+    if seq_file:
+        seq_path = Path(seq_file).resolve()
+        candidates.append(seq_path.with_name('shortSeq.seq'))
+    candidates.append(REPO_ROOT / 'kernel' / 'Datasets' / 'shortSeq.seq')
+    # Try repo ancestor layouts (e.g., monorepo with sibling kernel/)
+    candidates.append(REPO_ROOT.parent.parent / 'kernel' / 'Datasets' / 'shortSeq.seq')
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def run_simulator(pattern, text, seq_file, sim_path='./sim', verbose=False):
     """
     Run the GenDP simulator with given pattern and text
     Returns the score extracted from output
@@ -145,7 +169,7 @@ def main():
         print(f"Test {i+1}/{len(pairs)}: ", end='')
 
         # Run simulator
-        sim_score = run_simulator(pattern, text, verbose=verbose)
+        sim_score = run_simulator(pattern, text, seq_file, verbose=verbose)
 
         # Run kernel
         kernel_score = run_kernel(pattern, text, verbose=verbose)

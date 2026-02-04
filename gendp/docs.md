@@ -36,7 +36,7 @@ GenDP is a domain-specific accelerator organized as a hierarchical system of Pro
      └─────────────┴─────────────┴─────────────┘
                          │
                     Shared SPM
-                  (4096 addresses)
+                  (32768 addresses)
 ```
 
 ### PE Resources
@@ -704,19 +704,19 @@ mvi dest[addr0], src[addr1]    # With address swizzling
 
 **Address Swizzling**: The lower 2 bits of the address are moved to the high bits:
 ```c
-// N_SWIZZLE_BITS = 2, ADDR_LEN = 11
+// N_SWIZZLE_BITS = 2, ADDR_LEN = 15
 int lower_bits = addr & 0x3;           // Extract bits [1:0]
-int upper_bits = addr >> 2;            // Extract bits [10:2]
-int swizzled = upper_bits | (lower_bits << 9);  // Recombine
+int upper_bits = addr >> 2;            // Extract bits [14:2]
+int swizzled = upper_bits | (lower_bits << 13);  // Recombine
 ```
 
 **Physical Addressing**: Unlike `mv` and `mvd`, `mvi` uses **physical addressing** (not virtual) after applying the swizzle. This means the swizzled address directly indexes into the global SPM space without the per-PE bank offset.
 
 **Use Case**: When data is distributed across PE banks in round-robin fashion, `mvi` allows any PE to access any element by index:
 - Address 0 → SPM bank 0 (physical address 0)
-- Address 1 → SPM bank 1 (physical address 512)
-- Address 2 → SPM bank 2 (physical address 1024)
-- Address 3 → SPM bank 3 (physical address 1536)
+- Address 1 → SPM bank 1 (physical address 8192)
+- Address 2 → SPM bank 2 (physical address 16384)
+- Address 3 → SPM bank 3 (physical address 24576)
 
 **Examples**:
 ```python
@@ -1094,8 +1094,8 @@ The SPM is a shared memory accessible by all PEs. It is organized into 4 banks, 
 
 | Parameter           | Value       | Description                        |
 |:-------------------|:------------|:----------------------------------|
-| Total Size         | 4096 words  | Total addressable words            |
-| Bank Size          | 1024 words  | Words per PE bank                  |
+| Total Size         | 32768 words | Total addressable words            |
+| Bank Size          | 8192 words  | Words per PE bank                  |
 | Word Size          | 32 bits     | Single word                        |
 | Double Word        | 64 bits     | Two consecutive words              |
 | Access Latency     | 2 cycles    | Cycles from request to data        |
@@ -1140,27 +1140,27 @@ f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 0, 0, 2, mv))  # load
 Each PE sees its own "virtual" address space. Physical address = virtual address + PE_ID * BANK_SIZE.
 
 ```
-PE[0]: virtual 0-1023  → physical 0-1023
-PE[1]: virtual 0-1023  → physical 1024-2047
-PE[2]: virtual 0-1023  → physical 2048-3071
-PE[3]: virtual 0-1023  → physical 3072-4095
+PE[0]: virtual 0-8191  → physical 0-8191
+PE[1]: virtual 0-8191  → physical 8192-16383
+PE[2]: virtual 0-8191  → physical 16384-24575
+PE[3]: virtual 0-8191  → physical 24576-32767
 ```
 
 **Accessing Own Bank**:
 ```python
-# PE accesses its own bank with addresses 0-1023
+# PE accesses its own bank with addresses 0-8191
 f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 32, 0, mv))  # SPM[32] in own bank
 ```
 
 **Accessing Other Banks** (negative or >1023 addresses):
 ```python
 # PE[0] accessing PE[1]'s data at offset 32:
-# Virtual address = 32 + 1024 = 1056
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 1056, 0, mv))
+# Virtual address = 32 + 8192 = 8224
+f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 8224, 0, mv))
 
 # PE[1] accessing PE[0]'s data at offset 32:
-# Virtual address = 32 - 1024 = -992
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, -992, 0, mv))
+# Virtual address = 32 - 8192 = -8160
+f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, -8160, 0, mv))
 ```
 
 #### Interleaved Addressing (`mvi`)
@@ -1169,11 +1169,11 @@ For data distributed round-robin across PEs, use `mvi` which swizzles addresses:
 
 ```
 Index 0 → PE[0], physical 0
-Index 1 → PE[1], physical 1024
-Index 2 → PE[2], physical 2048
-Index 3 → PE[3], physical 3072
+Index 1 → PE[1], physical 8192
+Index 2 → PE[2], physical 16384
+Index 3 → PE[3], physical 24576
 Index 4 → PE[0], physical 1
-Index 5 → PE[1], physical 1025
+Index 5 → PE[1], physical 8193
 ...
 ```
 
@@ -1338,12 +1338,12 @@ f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
 
 ### Changing the Scratchpad Bank Size
 
-The scratchpad memory size is parameterized but requires coordinated changes across multiple files. To change the bank size (currently 1024 words per bank), you must update the following parameters:
+The scratchpad memory size is parameterized but requires coordinated changes across multiple files. To change the bank size (currently 8192 words per bank), you must update the following parameters:
 
 **1. Update System Constants (sys_def.h)**
-- `SPM_BANK_SIZE` - Words per bank (e.g., 1024)
-- `SPM_ADDR_NUM` - Total words = `SPM_BANK_SIZE * 4` (e.g., 4096 for 4 PEs)
-- `ADDR_LEN` - Address bits = `log2(SPM_ADDR_NUM)` (e.g., 12 bits for 4096 addresses)
+- `SPM_BANK_SIZE` - Words per bank (e.g., 8192)
+- `SPM_ADDR_NUM` - Total words = `SPM_BANK_SIZE * 4` (e.g., 32768 for 4 PEs)
+- `ADDR_LEN` - Address bits = `log2(SPM_ADDR_NUM)` (e.g., 15 bits for 32768 addresses)
 - `PATTERN_START` - Start address for pattern DNA sequence storage
 - `TEXT_START` - Start address for text DNA sequence storage
 
@@ -1378,13 +1378,13 @@ Each memory block in the WFA algorithm contains 7 core sections of `MEM_BLOCK_SI
 - PADDING (reserved space) - 30 words
 - 2-word gap - reserved space
 
-**Current Configuration (BANK_SIZE = 1024):**
+**Current Configuration (BANK_SIZE = 8192):**
 - Block 0: 254 words (7×32 + 30 padding) + 2 words (gap) = 256 words total
 - Block 1: 254 words (7×32 + 30 padding) + 2 words (gap) = 256 words total
 - Total blocks: 512 words
-- Pattern region: 256 words (addresses 512-767)
-- Text region: 256 words (addresses 768-1023)
-- Total per bank: 512 + 256 + 256 = 1024 words ✓
+- Pattern region: 3840 words (addresses 512-4351)
+- Text region: 3840 words (addresses 4352-8191)
+- Total per bank: 512 + 3840 + 3840 = 8192 words ✓
 
 ### Critical Constraints
 
@@ -1402,7 +1402,7 @@ To change PADDING_SIZE from 30 to 64 words (to add more reserved space):
 3. Recalculate BLOCK_1_START: `32*7 + 2 + 64 = 290`
 4. Recalculate PATTERN_START: `290 + 32*7 + 2 + 64 = 580`
 5. Update sys_def.h: PATTERN_START = 580
-6. Verify: With BANK_SIZE=1024, SEQ_LEN_ALLOC = (1024-580)//2 = 222, which leaves room for pattern (222 words) and text (222 words) each
+6. Verify: With BANK_SIZE=8192, SEQ_LEN_ALLOC = (8192-580)//2 = 3806, which leaves room for pattern (3806 words) and text (3806 words) each
 
 **Note:** The formula-based approach (`MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE`) enables this single-point-of-change capability. Changing PADDING_SIZE only requires editing the constant in two files; dependent values recalculate automatically.
 
@@ -1425,15 +1425,15 @@ in_port=7, in_instr=8, out_port=9, out_instr=10, fifo=[11,12,13,14], S2=15
 
 ### Key Constants (from sys_def.h)
 ```c
-SPM_BANK_SIZE = 1024
-SPM_ADDR_NUM = 4096
+SPM_BANK_SIZE = 8192
+SPM_ADDR_NUM = 32768
 SPM_ACCESS_LATENCY = 2
 SPM_BANDWIDTH = 2
 ADDR_REGISTER_NUM = 16    // gr[0..15]
 REGFILE_ADDR_NUM = 32     // reg[0..31]
 PATTERN_START = 512       // Derived: BLOCK_1_START + 7*32 + 2 + PADDING_SIZE = 256 + 224 + 2 + 30
-TEXT_START = 768          // Derived: PATTERN_START + SEQ_LEN_ALLOC = 512 + 256
-ADDR_LEN = 12             // For address swizzling (log2(4096))
+TEXT_START = 4352         // Derived: PATTERN_START + SEQ_LEN_ALLOC = 512 + 3840
+ADDR_LEN = 15             // For address swizzling (log2(32768))
 ```
 
 **Memory Block Constants (from wfa_instruction_generator.py):**
@@ -1441,5 +1441,5 @@ ADDR_LEN = 12             // For address swizzling (log2(4096))
 PADDING_SIZE = 30         // Adjustable padding per block (enables single-point-of-change)
 BLOCK_1_START = 256       // = MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE
 PATTERN_START = 512       // = BLOCK_1_START + MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE
-SEQ_LEN_ALLOC = 256       // = (BANK_SIZE - PATTERN_START) // 2
+SEQ_LEN_ALLOC = 3840      // = (BANK_SIZE - PATTERN_START) // 2
 ```

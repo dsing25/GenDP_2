@@ -2,7 +2,7 @@
 #include "wfa.h"
 
 namespace {
-constexpr int MAX_WF_LEN = 4096;
+constexpr int MAX_WF_LEN = 16384;
 constexpr int N_WFS = 5;
 constexpr int MEM_BLOCK_SIZE = 32;
 constexpr int PAST_WFS_SIZE = N_WFS * 3 * MAX_WF_LEN;

@@ -28,8 +28,8 @@
 
 #define SPM_ACCESS_LATENCY 2
 #define SPM_BANDWIDTH 2
-#define SPM_ADDR_NUM 4096
-#define SPM_BANK_SIZE 1024
+#define SPM_ADDR_NUM 32768
+#define SPM_BANK_SIZE 8192
 #define S2_BUFFER_BYTES (1024 * 1024) // 1 MB, int-addressable (4 bytes per int)
 #define S2_BUFFER_INTS (S2_BUFFER_BYTES / 4)
 #define MAIN_ADDR_REGISTER_NUM 16
@@ -150,10 +150,10 @@ inline int get_base_opcode(int opcode) {
 
 // Address swizzling parameters for mvi instruction
 #define N_SWIZZLE_BITS 2
-#define ADDR_LEN 12
+#define ADDR_LEN 15
 
 // DNA sequence start addresses for magic instruction initialization. No swizzle start
 #define PATTERN_START 512
-#define TEXT_START 768
+#define TEXT_START 4352
 
 #endif
