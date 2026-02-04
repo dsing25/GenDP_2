@@ -4,18 +4,22 @@ from utils import *
 from opcodes import *
 from math import log
 
-SPM_BANDWIDTH = 2 # in words
-PE_ALIGN_SYNC = 9 + 5
-COMPUTE_LOOP_NEXT = 0
 N_PES = 4
+SPM_BANDWIDTH = 2 # in words
+S2_LATENCY = 5
+PE_BOOT_STALL_PAIRS = S2_LATENCY + 1
+PE_BOOT_RX_PAIRS = 2 * N_PES
+PE_BOOT_PAIRS = PE_BOOT_STALL_PAIRS + PE_BOOT_RX_PAIRS
+COMPUTE_LOOP_NEXT = 0
 MIN_INT = -99
 N_WFS = 5
 MAX_WF_LEN = 4096
 MAX_WF_LEN_LG2 = int(log(MAX_WF_LEN, 2)+1e-9) # in words
+S2_META_BASE = N_WFS * 3 * MAX_WF_LEN
 MAGIC_MASK_BITS = 8
 PE_BLOCK_STALL = 0  # extra PE-side stall before each block compute (debug)
 #locations in PE ctrl
-INIT_WF = 2
+INIT_WF = 2 + PE_BOOT_PAIRS
 PE_ALIGN_SYNC = INIT_WF + 6
 # locations in compute
 COMPUTE_H = 0
@@ -33,8 +37,8 @@ SEQ_LEN_ALLOC = (BANK_SIZE-PATTERN_START) // 2
 TEXT_START = PATTERN_START + SEQ_LEN_ALLOC
 SWIZZLED_PATTERN_START = PATTERN_START << 2 # need to reverse swizzle to hit 226 at the start
 SWIZZLED_TEXT_START = TEXT_START << 2 
-ALIGN_B0_PC = 7 + 6
-ALIGN_B1_PC = 58
+ALIGN_B0_PC = 7 + 6 + PE_BOOT_PAIRS
+ALIGN_B1_PC = 58 + PE_BOOT_PAIRS
 EXTRA_O_LOAD_ADDR = 7 * MEM_BLOCK_SIZE
 
 
@@ -180,8 +184,18 @@ def wfa_main_instruction():
         #restore gr[1] and gr[2]
         f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 10, 0, mv))                        # gr[1]=gr[10]
         f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 5, 0, mv))                         # gr[2]=gr[5]
-    #begining of time magic
-    f.write(write_magic(4));
+    #beginning of time: load lengths and initialize controller state
+    f.write(data_movement_instruction(gr, 0, 0, 0, 11, 0, 0, 0, N_WFS * 3, 0, si))                    # gr[11]=N_WFS*3
+    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, MAX_WF_LEN_LG2, 11, shifti_l))       # gr[11]<<=lg2(MAX_WF_LEN)
+    f.write(data_movement_instruction(gr, S2, 0, 0, 14, 0, 0, 1, 0, 11, mv))                          # gr[14]=S2[gr[11]]; gr[11]++
+    f.write(data_movement_instruction(gr, S2, 0, 0, 15, 0, 0, 0, 0, 11, mv))                          # gr[15]=S2[gr[11]] (text_len)
+    f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 3, 0, si))                             # gr[3]=3
+    for _ in range(S2_LATENCY - 2):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # stall
+    for _ in range(N_PES):
+        f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 14, 0, mv))                # out = gr[14] (pattern_len)
+    for _ in range(N_PES):
+        f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 15, 0, mv))                # out = gr[15] (text_len)
 
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # bne 1 gr[13] 0
 
@@ -387,12 +401,21 @@ def wfa_main_instruction():
     # Display combined inputs/outputs for debugging
     f.write(write_magic(6));
     # Calculate idx = (text_len - pattern_len) + (wf_len / 2)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 14, 15, sub))                        # gr[1] = gr[14] - gr[15] (target_k)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 15, 14, sub))                        # gr[1] = gr[15] - gr[14] (target_k)
     f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 1, 12, shifti_r))                    # gr[2] = gr[12] >> 1 (center)
     f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 2, add))                          # gr[1] = gr[1] + gr[2] (idx in gr[1])
 
-    # Load M[idx] via magic(7) - reads past_wfs[write_wf_i][2][gr[1]] into gr[2]
-    f.write(write_magic(7))
+    # Load M[idx] from past_wfs into gr[2] (speculative, before bounds checks)
+    # write_wf_i = (gr[3] + 1) mod N_WFS
+    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 1, 3, addi))                         # gr[11]=gr[3]+1
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, N_WFS, 11, bne))                      # if gr[11] != N_WFS, skip reset
+    f.write(data_movement_instruction(gr, 0, 0, 0, 11, 0, 0, 0, 0, 0, si))                            # gr[11]=0
+    # base = (write_wf_i * 3 + 2) * MAX_WF_LEN
+    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, MAX_WF_LEN_LG2, 11, shifti_l))       # gr[11]=gr[11]<<lg2(MAX_WF_LEN)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 11, add))                         # gr[2]=2*gr[11]
+    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 11, 2, add))                         # gr[11]=3*gr[11]
+    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 2*MAX_WF_LEN, 11, addi))             # gr[11]+=2*MAX_WF_LEN
+    f.write(data_movement_instruction(gr, S2, 0, 0, 2, 0, 1, 0, 11, 1, mv))                           # gr[2]=S2[gr[11]+gr[1]]
 
     # Bounds check 1: if idx < 0, skip to CONTINUE
     f.write(data_movement_instruction(0, 0, 0, 0, 3, 0, 1, 0, 1, 0, blt))                            # blt gr[1] gr[0] 3 (SKIP)
@@ -401,7 +424,7 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 1, 0, 1, 12, bge))                           # bge gr[1] gr[12] 2 (SKIP)
 
     # Check if M[idx] >= text_len (exit condition)
-    f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 1, 0, 2, 14, bge))                           # bge gr[2] gr[14] 6 (EXIT)
+    f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 1, 0, 2, 15, bge))                           # bge gr[2] gr[15] 6 (EXIT)
 
 #CONTINUE:
     f.write(data_movement_instruction(gr, gr, 0, 0, 12, 0, 0, 0, 2, 12, addi))                       # gr[12]+=2
@@ -410,7 +433,7 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, N_WFS, 3, bne))                       # if gr[3] != N_WFS, skip reset
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))                            # gr[3] = 0
     #JMP LOOP PROCESS_WF
-    f.write(data_movement_instruction(0, 0, 0, 0, -747, 0, 0, 0, 0, 0, jump))                        # jump -747 (LOOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, -754, 0, 0, 0, 0, 0, jump))                        # jump -754 (LOOP)
 
 #EXIT:
     f.write(write_magic(5))                                                                           # magic(5) - print final state
@@ -469,6 +492,29 @@ def wfa_compute():
 def pe_instruction(pe_id):
     
     f = InstructionWriter("instructions/wfa/pe_{}_instruction.txt".format(pe_id));
+
+    for _ in range(PE_BOOT_STALL_PAIRS):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # stall
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # stall
+
+    # Receive pattern_len then text_len, forwarding systolically
+    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 8, 0, 0, 0, 0, 0, mv))                      # gr[8] = in (pattern_len)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+
+    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(out_port, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                # out = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 13, 0, 0, 0, 0, 0, mv))                     # gr[13] = in (text_len)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                           # No-op
 
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                           # gr[10] = 1
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 0, 0, si))                           # set gr[0]=0 to start (just setting const)

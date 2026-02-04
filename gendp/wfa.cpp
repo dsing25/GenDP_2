@@ -1,6 +1,14 @@
 #include "sys_def.h"
 #include "wfa.h"
 
+namespace {
+constexpr int MAX_WF_LEN = 4096;
+constexpr int N_WFS = 5;
+constexpr int MEM_BLOCK_SIZE = 32;
+constexpr int PAST_WFS_SIZE = N_WFS * 3 * MAX_WF_LEN;
+constexpr int S2_META_BASE = PAST_WFS_SIZE;
+} // namespace
+
 int wfa_simulate(pe_array *pe_array_unit, align_input_t& align_input, int n, FILE* fp, 
                  int show_output) {
 
@@ -45,6 +53,77 @@ int wfa_simulate(pe_array *pe_array_unit, align_input_t& align_input, int n, FIL
     //}
     //for (i = 0; i < (int)bsw_input->max_qlen; i++)
     //    pe_array_unit->input_buffer_write_from_ddr_unsigned(i+11+bsw_input->max_tlen*2+bsw_input->max_qlen, &bsw_input->H_row32[i]);
+
+    int pattern_len_raw = align_input.pattern_length;
+    int text_len_raw = align_input.text_length;
+
+    std::string pattern_seq(align_input.pattern, pattern_len_raw);
+    pattern_seq.push_back('D');
+    std::string text_seq(align_input.text, text_len_raw);
+    text_seq.push_back('L');
+
+    int first_extend_len = 0;
+    int min_len = (pattern_len_raw < text_len_raw) ? pattern_len_raw : text_len_raw;
+    while (first_extend_len < min_len &&
+           align_input.pattern[first_extend_len] == align_input.text[first_extend_len]) {
+        first_extend_len++;
+    }
+
+    for (int i = 0; i < PAST_WFS_SIZE; i++) {
+        pe_array_unit->write_s2(i, -42);
+    }
+    auto past_wf_index = [](int wf_i, int affine_i, int idx) {
+        return (wf_i * 3 + affine_i) * MAX_WF_LEN + idx;
+    };
+    constexpr int INITIAL_WF_LEN = MEM_BLOCK_SIZE;
+    int wf_i = 0;
+    for (int j = 0; j < INITIAL_WF_LEN; j++) {
+        for (int k = 0; k < 3; k++) {
+            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), -99);
+        }
+    }
+    wf_i++;
+    for (int j = 0; j < INITIAL_WF_LEN; j++) {
+        for (int k = 0; k < 3; k++) {
+            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), -99);
+        }
+    }
+    wf_i++;
+    for (int j = 0; j < INITIAL_WF_LEN; j++) {
+        for (int k = 0; k < 3; k++) {
+            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), -99);
+        }
+    }
+    pe_array_unit->write_s2(past_wf_index(wf_i, 2, 0), first_extend_len);
+    wf_i++;
+    for (int j = 0; j < INITIAL_WF_LEN; j++) {
+        for (int k = 0; k < 3; k++) {
+            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), -99);
+        }
+    }
+    for (int j = 0; j < INITIAL_WF_LEN; j++) {
+        for (int k = 0; k < 3; k++) {
+            pe_array_unit->write_s2(past_wf_index(wf_i + 1, k, j), -99);
+        }
+    }
+    pe_array_unit->write_s2(past_wf_index(wf_i, 2, 1), first_extend_len);
+
+    for (int i = 0; i < static_cast<int>(text_seq.size()); i++) {
+        int pe_id = i % 4;
+        int local_addr = TEXT_START + (i / 4);
+        int raw_addr = pe_id * SPM_BANK_SIZE + local_addr;
+        pe_array_unit->write_spm_magic(raw_addr, static_cast<int>(text_seq[i]));
+    }
+
+    for (int i = 0; i < static_cast<int>(pattern_seq.size()); i++) {
+        int pe_id = i % 4;
+        int local_addr = PATTERN_START + (i / 4);
+        int raw_addr = pe_id * SPM_BANK_SIZE + local_addr;
+        pe_array_unit->write_spm_magic(raw_addr, static_cast<int>(pattern_seq[i]));
+    }
+
+    pe_array_unit->write_s2(S2_META_BASE + 0, pattern_len_raw);
+    pe_array_unit->write_s2(S2_META_BASE + 1, text_len_raw);
 
     pe_array_unit->run(n, simd, PE_4_SETTING, MAIN_INSTRUCTION_1);
 

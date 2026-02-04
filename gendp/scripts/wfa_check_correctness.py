@@ -9,6 +9,7 @@ import os
 import subprocess
 import re
 import shlex
+import tempfile
 from pathlib import Path
 
 # Import reference WFA implementation from submodule
@@ -44,18 +45,19 @@ def run_simulator(pattern, text, sim_path='./sim', verbose=False):
     Run the GenDP simulator with given pattern and text
     Returns the score extracted from output
     """
-    # Set environment variables
-    env = os.environ.copy()
-    env['PATTERN_WFA'] = pattern
-    env['TEXT_WFA'] = text
-
-    # Run simulator
-    cmd = [sim_path, '-k', '5', '-i', '../../kernel/Datasets/shortSeq.seq',
-           '-o', '/dev/null', '-s', '-n', '-1']
-
+    temp_path = None
     try:
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.seq') as tmp:
+            temp_path = tmp.name
+            tmp.write(f">{pattern}\n")
+            tmp.write(f"<{text}\n")
+
+        # Run simulator
+        cmd = [sim_path, '-k', '5', '-i', temp_path,
+               '-o', '/dev/null', '-s', '-n', '1']
+
         # Capture stdout for score parsing, but let stderr pass through to the terminal.
-        result = subprocess.run(cmd, env=env, stdout=subprocess.PIPE,
+        result = subprocess.run(cmd, stdout=subprocess.PIPE,
                               stderr=None, text=True, timeout=30)
 
         if verbose:
@@ -75,6 +77,9 @@ def run_simulator(pattern, text, sim_path='./sim', verbose=False):
     except Exception as e:
         print(f"ERROR: Simulator failed: {e}")
         return None
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
 
 def run_kernel(pattern, text, verbose=False):
     """
@@ -155,14 +160,15 @@ def main():
             passed += 1
         else:
             print(f"FAIL (sim={sim_score}, kernel={kernel_score})")
-            sim_cmd = ['./sim', '-k', '5', '-i', seq_file,
+            sim_cmd = ['./sim', '-k', '5', '-i', 'lastFailedSeq.seq',
                        '-o', '/dev/null', '-s', '-n', '-1']
             gdb_cmd = ['gdb', '--args'] + sim_cmd
             print(f"  GenDP command: {shlex.join(sim_cmd)}")
             try:
+                with open('lastFailedSeq.seq', 'w') as f:
+                    f.write('>' + pattern + '\n')
+                    f.write('<' + text + '\n')
                 with open('lastFailedGdb', 'w') as f:
-                    f.write('export PATTERN_WFA=' + shlex.quote(pattern) + '\n')
-                    f.write('export TEXT_WFA=' + shlex.quote(text) + '\n')
                     f.write(shlex.join(gdb_cmd) + '\n')
                 print("  Wrote gdb command to: lastFailedGdb")
             except Exception as e:

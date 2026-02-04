@@ -43,6 +43,8 @@ class pe_array {
         void pe_comp_instruction_buffer_write_from_ddr(int addr, unsigned long data[], int id);
 
         void buffer_reset(int* buffer, int num);
+        void write_spm_magic(int addr, int value);
+        void write_s2(int addr, int value);
 
         int decode(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting);
         int decode_output(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting);

@@ -48,6 +48,22 @@ void pe_array::buffer_reset(int* buffer, int num) {
         buffer[i] = 0;
 }
 
+void pe_array::write_spm_magic(int addr, int value) {
+    if (addr < 0 || addr >= SPM_ADDR_NUM) {
+        fprintf(stderr, "write_spm_magic addr %d out of range.\n", addr);
+        exit(-1);
+    }
+    SPM_unit->buffer[addr] = value;
+}
+
+void pe_array::write_s2(int addr, int value) {
+    if (addr < 0 || addr >= s2->buffer_size) {
+        fprintf(stderr, "write_s2 addr %d out of range.\n", addr);
+        exit(-1);
+    }
+    s2->buffer[addr] = value;
+}
+
 void pe_array::input_buffer_write_from_ddr(int addr, int* data) {
 
     if (addr >= 0 && addr < input_buffer_size) {
@@ -393,117 +409,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         }
 
         if (magic_id == 4) {
-        //INITIALIZATION BEGINING OF TIME
-            int (&gr)[16] = main_addressing_register;
-            int current_wf_size = 0;
-            gr[3] = 0; //current_wf_i
-
-            // Read base sequences from environment variables
-            const char* pattern_base = getenv("PATTERN_WFA");
-            const char* text_base = getenv("TEXT_WFA");
-
-            // Error checking for environment variables
-            if (pattern_base == NULL || text_base == NULL) {
-                fprintf(stderr, "ERROR: Environment variables PATTERN_WFA and TEXT_WFA must be set\n");
-                fprintf(stderr, "Usage: export PATTERN_WFA=\"your_pattern\" TEXT_WFA=\"your_text\"\n");
-                exit(-1);
-            }
-
-            // Allocate memory for sequences with suffixes
-            int pattern_base_len = strlen(pattern_base);
-            int text_base_len = strlen(text_base);
-            char* pattern_seq = (char*)malloc(pattern_base_len + 2); // +1 for 'D', +1 for '\0'
-            char* text_seq = (char*)malloc(text_base_len + 2);       // +1 for 'L', +1 for '\0'
-
-            // Copy base sequences and append suffixes
-            strcpy(pattern_seq, pattern_base);
-            strcat(pattern_seq, "D");
-            strcpy(text_seq, text_base);
-            strcat(text_seq, "L");
-
-            // Calculate lengths (including the appended character)
-            int text_len = strlen(text_seq);
-            int pattern_len = strlen(pattern_seq);
-            int first_extend_len = 0;
-            while (pattern_base[first_extend_len] != '\0' && 
-                   text_base[first_extend_len] != '\0' && 
-                   pattern_base[first_extend_len] == text_base[first_extend_len]) {
-                first_extend_len++;
-            }
-            //loading the first wavefront. Initialization of this alignment
-            //initialization logic
-            for (int i = 0; i < PAST_WFS_SIZE; i++)
-                s2->buffer[i] = -42;
-            constexpr int INITIAL_WF_LEN = MEM_BLOCK_SIZE;
-            //WF 0
-            for (int j = 0; j < INITIAL_WF_LEN; j++) {
-                for (int k = 0; k < 3; k++) {
-                    past_wf_at(gr[3], k, j) = -99;
-                }
-            }
-            gr[3]++; //0 wf all zero
-            //WF 1
-            for (int j = 0; j < INITIAL_WF_LEN; j++) {
-                for (int k = 0; k < 3; k++) {
-                    past_wf_at(gr[3], k, j) = -99;
-                }
-            }
-            gr[3]++; //2 wf all zero
-            //WF 2
-            for (int j = 0; j < INITIAL_WF_LEN; j++) {
-                for (int k = 0; k < 3; k++) {
-                    past_wf_at(gr[3], k, j) = -99;
-                }
-            }
-            past_wf_at(gr[3], 2, 0) = first_extend_len; //middle m wavefront
-            gr[3]++; //4 should have a 1, but it's never used
-            //WF 3
-            for (int j = 0; j < INITIAL_WF_LEN; j++) {
-                for (int k = 0; k < 3; k++) {
-                    past_wf_at(gr[3], k, j) = -99;
-                }
-            }
-            //Extra: first postpadding misses cause postpad is not on pe3. this lets us ignore that
-            for (int j = 0; j < INITIAL_WF_LEN; j++) {
-                for (int k = 0; k < 3; k++) {
-                    past_wf_at(gr[3] + 1, k, j) = -99;
-                }
-            }
-            past_wf_at(gr[3], 2, 1) = first_extend_len; //middle m wavefront
-
-            //at this point the first four wavefronts have been defined initialized with dummy, and 
-            //the correct middle m for last two. The score is 2. The size was 3.
-
-            current_wf_size = 5;
-
-
-            // Write TEXT sequence with round-robin interleaving across PEs
-            for (int i = 0; i < text_len; i++) {
-                int pe_id = i % 4;
-                int local_addr = TEXT_START + (i / 4);
-                SPM_unit->access_magic(pe_id, local_addr) = (int)text_seq[i];
-            }
-
-            // Write PATTERN sequence with round-robin interleaving across PEs
-            for (int i = 0; i < pattern_len; i++) {
-                int pe_id = i % 4;
-                int local_addr = PATTERN_START + (i / 4);
-                SPM_unit->access_magic(pe_id, local_addr) = (int)pattern_seq[i];
-            }
-
-            // Initialize register values for each PE
-            for (int i = 0; i < 4; i++) {
-                pe_unit[i]->addr_regfile_unit->buffer[13] = text_len;
-                pe_unit[i]->addr_regfile_unit->buffer[8] = pattern_len;
-            }
-            // Initialize main controller registers for exit condition
-            main_addressing_register[14] = text_len - 1;    // gr[14] = text_len
-            main_addressing_register[15] = pattern_len - 1; // gr[15] = pattern_len
-            magic_wfs_out << "lkjsdfoih"; //helps vimdiff
-
-            // Free allocated memory
-            free(pattern_seq);
-            free(text_seq);
+            fprintf(stderr, "ERROR: magic payload 4 should no longer be used.\n");
+            exit(-1);
         } else if (magic_id == 2){
         //INCREMENT CURRENT_WF_I (no longer expected in ISA stream)
             fprintf(stderr, "ERROR: magic payload 2 should no longer be used.\n");
@@ -629,14 +536,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
             magic_wfs_out << std::endl;
         } else if (magic_id == 7) {
-            // Load M[idx] from past_wfs into a register
-            // gr[1] = index, result goes to gr[2]
-            // Note: Bounds checking is done in ISA before calling this magic
-            int idx = main_addressing_register[1];
-            int write_wf_i = gr[3] + 1;
-            if (write_wf_i >= N_WFS) write_wf_i = 0;
-
-            main_addressing_register[2] = past_wf_at(write_wf_i, 2, idx);
+            fprintf(stderr, "ERROR: magic payload 7 should no longer be used.\n");
+            exit(-1);
         } else {
             fprintf(stderr, "ERROR: PE_ARRAY PC=%d cycle=%d unknown magic id %d (payload %d mask 0x%x).\n",
                     *PC, cycle, magic_id, magic_payload, magic_mask);
