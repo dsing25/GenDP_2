@@ -10,7 +10,7 @@ COMPUTE_LOOP_NEXT = 0
 N_PES = 4
 MIN_INT = -99
 N_WFS = 5
-MAX_WF_LEN = 4096
+MAX_WF_LEN = 16384
 MAX_WF_LEN_LG2 = int(log(MAX_WF_LEN, 2)+1e-9) # in words
 MAGIC_MASK_BITS = 8
 PE_BLOCK_STALL = 0  # extra PE-side stall before each block compute (debug)
@@ -22,7 +22,7 @@ COMPUTE_H = 0
 COMPUTE_D = COMPUTE_H + SPM_BANDWIDTH // 2 + 1 #1 is halts
 COMPUTE_I = COMPUTE_D + SPM_BANDWIDTH // 2 + 1 #1 is halts
 #MEMORY LOCATIONS
-BANK_SIZE = 1024
+BANK_SIZE = 8192
 MEM_BLOCK_SIZE = 32 # in words
 MEM_BLOCK_SIZE_LG2 = int(log(MEM_BLOCK_SIZE, 2)+1e-9) # in words
 PADDING_SIZE = 30 # in words, added at end of each mem_block

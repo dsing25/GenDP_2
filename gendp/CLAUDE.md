@@ -113,7 +113,7 @@ Array Controller (pe_array)
     │   (systolic data flow)
     │
     └── Shared Scratchpad Memory (SPM)
-        └── 4 banks × 1024 words = 4096 words total
+        └── 4 banks × 8192 words = 32768 words total
 ```
 
 ### Key Components
@@ -130,7 +130,7 @@ Array Controller (pe_array)
   - Synchronization via gr[13] (AND of all PE gr[10] flags)
 
 - **Scratchpad Memory (SPM)**: `data_buffer.cpp/h` - Shared memory accessible by all PEs
-  - 4096 words total (4 banks × 1024 words)
+  - 32768 words total (4 banks × 8192 words)
   - 2-cycle access latency
   - 1 port per PE (read OR write, not both)
   - Virtual addressing per PE (with bank offset)
@@ -257,7 +257,7 @@ SPM size is parameterized across multiple files. To change `SPM_BANK_SIZE`:
 2. `scripts/wfa_instruction_generator.py`: Update `BANK_SIZE`, `PATTERN_START`, derived constants
 3. `pe_array.cpp`: Update `PADDING_SIZE`, `BLOCK_1_START` (magic instruction constants)
 
-Current configuration: 1024 words/bank × 4 banks = 4096 words total.
+Current configuration: 8192 words/bank × 4 banks = 32768 words total.
 
 ## Development Workflow
 
@@ -396,15 +396,15 @@ Memory Block Structure (per iteration):
 - Block 0: 7 × 32-word sections + 30-word padding + 2-word gap = 256 words
   - Sections: O (Open), M_in, I_in, D_in, M_out, I_out, D_out
 - Block 1: Same structure = 256 words
-- Pattern sequence region: 256 words (addresses 512-767)
-- Text sequence region: 256 words (addresses 768-1023)
+- Pattern sequence region: 3840 words (addresses 512-4351)
+- Text sequence region: 3840 words (addresses 4352-8191)
 ```
 
 Constants defined in `scripts/wfa_instruction_generator.py`:
 - `MEM_BLOCK_SIZE = 32` - Size of each wavefront section
 - `PADDING_SIZE = 30` - Reserved padding per block
 - `PATTERN_START = 512` - Start address for pattern DNA sequence
-- `TEXT_START = 768` - Start address for text DNA sequence
+- `TEXT_START = 4352` - Start address for text DNA sequence
 - `SWIZZLED_PATTERN_START`, `SWIZZLED_TEXT_START` - For interleaved access via `mvi` instruction
 
 ### Common WFA-Specific Issues
