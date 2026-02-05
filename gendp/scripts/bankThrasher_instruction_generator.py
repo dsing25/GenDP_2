@@ -55,11 +55,8 @@ def pe_instruction(pe_id):
 
     # PC=16: nop (data ready) + decrement gr[2]
     f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 1, 2, subi))
-    f.write(nop())
-
     # PC=17: bne - if gr[2] != gr[0], jump to PC=13 (offset = 13 - 17 = -4)
-    f.write(data_movement_instruction(0, 0, 0, 0, -4, 0, 1, 0, 2, 0, bne))
-    f.write(nop())
+    f.write(data_movement_instruction(0, 0, 0, 0, -1, 0, 1, 0, 2, 0, bne))
 
     # PC=18: Signal done gr[10] = 1
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))
