@@ -225,7 +225,7 @@ def gbv_compute_v2(): # 16 instruction trace
 
 def gbv_compute_v3():
 
-    f = InstructionWriter("instructions/gbv/compute_inst.txt")
+    f = InstructionWriter("instructions/gbv/compute_instruction.txt")
 
     # getScoreBeforeStart (2)
     f.write(compute_instruction(COPY, POPCOUNT, SUBTRACTION, 11, 0, 0, 0, 23, 0, 25)) # scoreEnd - pc(VP) = temp6
@@ -495,20 +495,25 @@ def gbv_compute_v3():
     # Cycle 0
     f.write(compute_instruction(BWISE_OR, INVALID, COPY, 1, 2, 0, 0, 0, 0, 7))  # Xv = Eq | VN
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
     f.write(compute_instruction(BWISE_OR, INVALID, COPY, 1, 4, 0, 0, 0, 0, 1))  # Eq = Eq | hinN
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
     f.write(compute_instruction(BWISE_AND, COPY, ADD, 1, 3, 3, 0, 0, 0, 20)) # temp1 = ((Eq & VP) copied, then + VP)
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
     f.write(compute_instruction(BWISE_XOR, COPY, BWISE_OR, 20, 3, 1, 0, 0, 0, 6))  # Xh = (temp1 ^ VP) copied, then OR with Eq
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
     
     f.write(compute_instruction(BWISE_OR, COPY, BWISE_NOT, 3, 6, 0, 0, 0, 0, 21)) # temp2 = (~(VP | Xh)) after copy
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
     f.write(compute_instruction(BWISE_OR, INVALID, COPY, 2, 21, 0, 0, 0, 0, 8))     # Ph = VN | temp2        
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))                             
     
     f.write(compute_instruction(BWISE_AND, INVALID, COPY, 3, 6, 0, 0, 0, 0, 9))  # Mh = VP & Xh
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
     f.write(compute_instruction(LSHIFT_1, COPY, BWISE_OR, 9, 0, 4, 0, 0, 0, 22)) # tempMh = ((Mh << 1) copied, then OR with hinN)
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
     #Cycle 8 below
@@ -517,6 +522,7 @@ def gbv_compute_v3():
 
     f.write(compute_instruction(BWISE_OR, COPY, BWISE_NOT, 7, 23, 0, 0, 0, 0, 20)) # temp1 = (~(Xv | tempPh)) after copy
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
     f.write(compute_instruction(BWISE_OR, INVALID, COPY, 22, 20, 0, 0, 0, 0, 3))    # slice.VP = tempMh | temp1
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
@@ -525,10 +531,13 @@ def gbv_compute_v3():
 
     f.write(compute_instruction(SUBTRACTION, INVALID, COPY, 11, 4, 0, 0, 0, 0, 11))  # scoreEnd = scoreEnd - hinN
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
     f.write(compute_instruction(ADD, INVALID, COPY, 11, 5, 0, 0, 0, 0, 11))  # scoreEnd = scoreEnd + hinP
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
     f.write(compute_instruction(POPCOUNT, POPCOUNT, SUBTRACTION, 3, 0, 0, 0, 2, 0, 20))  # temp1 = popcount(VP) - popcount(VN)
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    
     f.write(compute_instruction(ADD, INVALID, ADD, 20, 10, 11, 0, 0, 0, 11)) # scoreEnd = (temp1 + scorebefore) + scoreEnd
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) # cycle 15 finished here
 
@@ -541,7 +550,7 @@ def gbv_main_instruction():
     # mergeTwoSlices 2 Input Data Movement
     # Get Left/Right Slices Into PE Array
 
-    f = InstructionWriter("instructions/gbv/main_inst.txt");
+    f = InstructionWriter("instructions/gbv/main_instruction.txt");
 
     f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 0, 0, si)) # gr[1] = 0 counter for input data buffer
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -589,7 +598,7 @@ def pe_0_instruction():
      # dest, src, flag_0, flag_1, imm/reg_0, reg_0(++), 
      # flag_2, flag_3, imm/reg_1, reg_1(++), opcode
 
-    f = InstructionWriter("instructions/gbv/pe_0_inst.txt");
+    f = InstructionWriter("instructions/gbv/pe_0_instruction.txt");
 
     f.write(data_movement_instruction(reg, in_port, 0, 0, 12, 0, 0, 0, 0, 0, mv)) # reg[12] = in
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          
@@ -826,7 +835,7 @@ def pe_1_instruction():
      # dest, src, flag_0, flag_1, imm/reg_0, reg_0(++), 
      # flag_2, flag_3, imm/reg_1, reg_1(++), opcode
 
-    f = InstructionWriter("instructions/gbv/pe_1_inst.txt");
+    f = InstructionWriter("instructions/gbv/pe_1_instruction.txt");
 
     f.write(data_movement_instruction(reg, in_port, 0, 0, 12, 0, 0, 0, 0, 0, mv)) # reg[12] = in
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          
@@ -1064,7 +1073,7 @@ def pe_2_instruction():
      # dest, src, flag_0, flag_1, imm/reg_0, reg_0(++), 
      # flag_2, flag_3, imm/reg_1, reg_1(++), opcode
 
-    f = InstructionWriter("instructions/gbv/pe_2_inst.txt");
+    f = InstructionWriter("instructions/gbv/pe_2_instruction.txt");
 
     f.write(data_movement_instruction(reg, in_port, 0, 0, 12, 0, 0, 0, 0, 0, mv)) # reg[12] = in
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          
@@ -1302,7 +1311,7 @@ def pe_3_instruction():
      # dest, src, flag_0, flag_1, imm/reg_0, reg_0(++), 
      # flag_2, flag_3, imm/reg_1, reg_1(++), opcode
 
-    f = InstructionWriter("instructions/gbv/pe_3_inst.txt");
+    f = InstructionWriter("instructions/gbv/pe_3_instruction.txt");
 
     f.write(data_movement_instruction(reg, in_port, 0, 0, 12, 0, 0, 0, 0, 0, mv)) # reg[12] = in
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          

@@ -60,6 +60,7 @@ int main(int argc, char *argv[]) {
     else if (kernel == 3) poa_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
     else if (kernel == 4) chain_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
     else if (kernel == 5) wfa_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
+    else if (kernel == 6) gbv_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
 
     timenow = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::cout << "End Simulation: " << ctime(&timenow) << std::endl;
