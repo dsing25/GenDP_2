@@ -173,6 +173,12 @@ std::pair<bool, std::list<Event>*> SPM::tick(){
         OutstandingRequest* req = requests[i];
         if (req == nullptr) continue;
         int phys_addr = req->isVirtualAddr ? (i * SPM_BANK_SIZE + req->addr) : req->addr;
+        if (phys_addr < 0 || phys_addr >= buffer_size) {
+            fprintf(stderr, "SPM tick error: phys_addr=%d out of bounds (buf_size=%d) for PE[%d] "
+                    "vaddr=%d isVirtual=%d\n",
+                    phys_addr, buffer_size, i, req->addr, req->isVirtualAddr);
+            exit(-1);
+        }
         req->cycles_left--;
         if(req->cycles_left == 0){
             if(req->access_t == SpmAccessT::WRITE){
