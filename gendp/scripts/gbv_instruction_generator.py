@@ -307,7 +307,10 @@ def gbv_compute_v3():
     # ADD THE DATA MOVEMENT scoreDifference checks for these (if regfile(22) > 0)
     # do a for loop for the scoreDifference here
 
-    f.write(compute_instruction(ADD_I, INVALID, BWISE_NOT, 27, -1, 0, 0, 0, 0, 23)) # reg23 = ~(onebigger - 1)
+    f.write(compute_instruction(ADD_I, INVALID, COPY, 23, 1, 0, 0, 0, 0, 23)) # reg23 = 1
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(SUBTRACTION, INVALID, BWISE_NOT, 27, 23, 0, 0, 0, 0, 23)) # reg23 = ~(onebigger - reg23)
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
     f.write(compute_instruction(BWISE_AND, INVALID, COPY, 23, 27, 0, 0, 0, 0, 23)) # leastSignificant = onebigger & reg23
@@ -323,13 +326,19 @@ def gbv_compute_v3():
     # return std::make_pair(WordConfiguration<Word>::AllOnes, WordConfiguration<Word>::AllZeros);
     # end for loop for scoreDifference 
 
-    f.write(compute_instruction(ADD_I, INVALID, BWISE_NOT, 27, -1, 0, 0, 0, 0, 23)) # reg23 = ~(onebigger - 1)
+    f.write(compute_instruction(ADD_I, INVALID, COPY, 23, 1, 0, 0, 0, 0, 23)) # reg23 = 1
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(SUBTRACTION, INVALID, BWISE_NOT, 27, 23, 0, 0, 0, 0, 23)) # reg23 = ~(onebigger - reg23)
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
     f.write(compute_instruction(BWISE_AND, INVALID, COPY, 23, 27, 0, 0, 0, 0, 23)) # leastSignificant = onebigger & reg23
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
-    f.write(compute_instruction(ADD_I, COPY, BWISE_OR, 23, -1, 0, 0, 20, 0, 20)) # leftSmaller |= leastSignificant - 1
+    f.write(compute_instruction(ADD_I, INVALID, COPY, 30, 1, 0, 0, 0, 0, 30)) # reg30 = 1
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(SUBTRACTION, COPY, BWISE_OR, 23, 30, 0, 0, 20, 0, 20)) # leftSmaller |= leastSignificant - reg30
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
     f.write(compute_instruction(BWISE_NOT, COPY, BWISE_AND, 28, 0, 0, 0, 23, 0, 24)) # reg24 = ~twoBigger & leastSignificant
@@ -343,8 +352,10 @@ def gbv_compute_v3():
     # start of for loop for wordsize i++ 
     # if statement for regfile26 == 0
     # if statement regfile27 == 0 then break DATA MOVEMENT 
+    f.write(compute_instruction(ADD_I, INVALID, COPY, 23, 1, 0, 0, 0, 0, 23)) # reg23 = 1
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
-    f.write(compute_instruction(ADD_I, INVALID, BWISE_NOT, 27, -1, 0, 0, 0, 0, 23)) # reg23 = ~(onebigger - 1) 
+    f.write(compute_instruction(SUBTRACTION, INVALID, BWISE_NOT, 27, 23, 0, 0, 0, 0, 23)) # reg23 = ~(onebigger - reg23) 
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
     f.write(compute_instruction(BWISE_AND, INVALID, COPY, 23, 27, 0, 0, 0, 0, 23)) # leastsignificant = reg23 & onebigger
@@ -354,8 +365,10 @@ def gbv_compute_v3():
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
     # break statement end of if regfile26 == 0 statement
     # start if reg27 == 0 statement DATA MOVEMENT 
+    f.write(compute_instruction(ADD_I, INVALID, COPY, 23, 1, 0, 0, 0, 0, 23)) # reg23 = 1
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
-    f.write(compute_instruction(ADD_I, INVALID, BWISE_NOT, 26, -1, 0, 0, 0, 0, 23)) # reg23 = ~(onesmaller - 1)
+    f.write(compute_instruction(SUBTRACTION, INVALID, BWISE_NOT, 26, 23, 0, 0, 0, 0, 23)) # reg23 = ~(onesmaller - reg23)
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
     f.write(compute_instruction(BWISE_AND, INVALID, COPY, 23, 26, 0, 0, 0, 0, 23)) # leastsignificant = onesmaller & reg23
@@ -365,14 +378,19 @@ def gbv_compute_v3():
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
     #break statement end of if regfile27==0 DATA MOVEMENT 
+    f.write(compute_instruction(ADD_I, INVALID, COPY, 23, 1, 0, 0, 0, 0, 23)) # reg23 = 1
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
-    f.write(compute_instruction(ADD_I, INVALID, BWISE_NOT, 27, -1, 0, 0, 0, 0, 29)) # reg29 = ~(onebigger - 1)
+    f.write(compute_instruction(SUBTRACTION, INVALID, BWISE_NOT, 27, 23, 0, 0, 0, 0, 29)) # reg29 = ~(onebigger - reg23)
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
     f.write(compute_instruction(BWISE_AND, INVALID, COPY, 29, 27, 0, 0, 0, 0, 29)) # leastSignificantBigger = onebigger & reg29
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
-    f.write(compute_instruction(ADD_I, INVALID, BWISE_NOT, 26, -1, 0, 0, 0, 0, 30)) # reg30 = ~(onesmaller - 1)
+    f.write(compute_instruction(ADD_I, INVALID, COPY, 23, 1, 0, 0, 0, 0, 23)) # reg23 = 1
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(SUBTRACTION, INVALID, BWISE_NOT, 26, 23, 0, 0, 0, 0, 30)) # reg30 = ~(onesmaller - reg23)
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
     f.write(compute_instruction(BWISE_AND, INVALID, COPY, 30, 26, 0, 0, 0, 0, 30)) # leastSignificantSmaller = onesmaller & reg30
@@ -698,8 +716,11 @@ def pe_0_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 5, 0, 0, 0, 5, 0, beq)) # beq gr[5] gr[0] 5 (FIX THIS OFFSET CURRENTLY 5)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) 
 
-    f.write(data_movement_instruction(reg, 0, 0, 0, 20, 0, 0, 0, FFFF_FFFF, 0, si)) # reg[20] = 0xFFFF_FFFF (CHECK THIS?)
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(reg, reg, 1, 0, 20, 0, 0, 0, 1, 0, subi)) # reg[20] = reg[0] - 1                        
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) 
+
+    # f.write(data_movement_instruction(reg, 0, 0, 0, 20, 0, 0, 0, 1, 0, subi)) # reg[20] = 0xFFFF_FFFF (CHECK THIS?)
+    # f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(reg, 0, 0, 0, 21, 0, 0, 0, 1, 0, si)) # reg[21] = 0x0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -932,8 +953,11 @@ def pe_1_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 5, 0, 0, 0, 5, 0, beq)) # beq gr[5] gr[0] 5 (FIX THIS OFFSET CURRENTLY 5)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) 
 
-    f.write(data_movement_instruction(reg, 0, 0, 0, 20, 0, 0, 0, FFFF_FFFF, 0, si)) # reg[20] = 0xFFFF_FFFF (CHECK THIS?)
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(reg, reg, 1, 0, 20, 0, 0, 0, 1, 0, subi)) # reg[20] = reg[0] - 1                        
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) 
+
+    # f.write(data_movement_instruction(reg, 0, 0, 0, 20, 0, 0, 0, 1, 0, subi)) # reg[20] = 0xFFFF_FFFF (CHECK THIS?)
+    # f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(reg, 0, 0, 0, 21, 0, 0, 0, 1, 0, si)) # reg[21] = 0x0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -1167,8 +1191,11 @@ def pe_2_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 5, 0, 0, 0, 5, 0, beq)) # beq gr[5] gr[0] 5 (FIX THIS OFFSET CURRENTLY 5)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) 
 
-    f.write(data_movement_instruction(reg, 0, 0, 0, 20, 0, 0, 0, FFFF_FFFF, 0, si)) # reg[20] = 0xFFFF_FFFF (CHECK THIS?)
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(reg, reg, 1, 0, 20, 0, 0, 0, 1, 0, subi)) # reg[20] = reg[0] - 1                        
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) 
+
+    # f.write(data_movement_instruction(reg, 0, 0, 0, 20, 0, 0, 0, 1, 0, subi)) # reg[20] = 0xFFFF_FFFF (CHECK THIS?)
+    # f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(reg, 0, 0, 0, 21, 0, 0, 0, 1, 0, si)) # reg[21] = 0x0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -1402,8 +1429,11 @@ def pe_3_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 5, 0, 0, 0, 5, 0, beq)) # beq gr[5] gr[0] 5 (FIX THIS OFFSET CURRENTLY 5)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) 
 
-    f.write(data_movement_instruction(reg, 0, 0, 0, 20, 0, 0, 0, FFFF_FFFF, 0, si)) # reg[20] = 0xFFFF_FFFF (CHECK THIS?)
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(reg, reg, 1, 0, 20, 0, 0, 0, 1, 0, subi)) # reg[20] = reg[0] - 1                        
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) 
+
+    # f.write(data_movement_instruction(reg, 0, 0, 0, 20, 0, 0, 0, 1, 0, subi)) # reg[20] = 0xFFFF_FFFF (CHECK THIS?)
+    # f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(reg, 0, 0, 0, 21, 0, 0, 0, 1, 0, si)) # reg[21] = 0x0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
