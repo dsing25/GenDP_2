@@ -342,7 +342,7 @@ def wfa_main_instruction():
     #TODO wait lsq
     #increment count
     f.write(data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 1, 9, addi))                         # gr[9]+=1
-    f.write(data_movement_instruction(gr, gr, 0, 0, -362, 0, 1, 0, 9, 7, blt))                       # blt gr[9] gr[7] -362
+    f.write(data_movement_instruction(gr, gr, 0, 0, -363, 0, 1, 0, 9, 7, blt))                       # blt gr[9] gr[7] -363
 
 #END BLOCK LOOP. NEW WF
     #flush final computed block (drain NEXT)
