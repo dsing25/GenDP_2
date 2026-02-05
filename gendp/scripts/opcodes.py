@@ -63,6 +63,6 @@ BWISE_NOT = 19
 BWISE_XOR = 20
 LSHIFT_1 =  21
 RSHIFT_WORD = 22
-ADD_I = 23
+ADD_I = 23 # Note to Fix -1 not working for ADDI instructions or any negative number
 COPY_I = 24
 POPCOUNT = 25 

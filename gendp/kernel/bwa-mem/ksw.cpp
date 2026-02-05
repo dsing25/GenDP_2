@@ -893,8 +893,8 @@ int main(int argc, char *argv[])
 		if(output) fprintf(fp_out, "%d,%d,%d,%d,%d,%d\n", SeqPairArr[numLinesRead].score, SeqPairArr[numLinesRead].qle, SeqPairArr[numLinesRead].tle, SeqPairArr[numLinesRead].gtle, SeqPairArr[numLinesRead].gscore, SeqPairArr[numLinesRead].max_off);
 		
 		numLinesRead += 1;
-		free(SeqPairArr[numLinesRead].read_ar);
-		free(SeqPairArr[numLinesRead].ref_ar);
+		// free(SeqPairArr[numLinesRead].read_ar);
+		// free(SeqPairArr[numLinesRead].ref_ar);
 		if (input_size == input_index) break;
 	}
 	printf("Update %ld cells\n", numCellsComputed);
@@ -997,5 +997,12 @@ int main(int argc, char *argv[])
 	}
 
 	fclose(fp_out);
+	
+			for (int i = 0; i < numLinesRead; ++i) {
+    free(SeqPairArr[i].read_ar);
+    free(SeqPairArr[i].ref_ar);
+}
+free(SeqPairArr);
+
 	return 0;
 }

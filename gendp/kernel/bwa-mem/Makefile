@@ -6,6 +6,7 @@ SIMULATOR_PATH=../../
 INCLUDES= -I$(SIMULATOR_PATH)
 LIBS=
 CXXFLAGS+= $(INCLUDES)
+CXXFLAGS+= -fsanitize=address
 
 OBJECTS=ksw.o
 
