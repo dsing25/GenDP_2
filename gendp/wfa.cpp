@@ -79,31 +79,31 @@ int wfa_simulate(pe_array *pe_array_unit, align_input_t& align_input, int n, FIL
     int wf_i = 0;
     for (int j = 0; j < INITIAL_WF_LEN; j++) {
         for (int k = 0; k < 3; k++) {
-            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), -99);
+            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), MIN_INT);
         }
     }
     wf_i++;
     for (int j = 0; j < INITIAL_WF_LEN; j++) {
         for (int k = 0; k < 3; k++) {
-            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), -99);
+            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), MIN_INT);
         }
     }
     wf_i++;
     for (int j = 0; j < INITIAL_WF_LEN; j++) {
         for (int k = 0; k < 3; k++) {
-            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), -99);
+            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), MIN_INT);
         }
     }
     pe_array_unit->write_s2(past_wf_index(wf_i, 2, 0), first_extend_len);
     wf_i++;
     for (int j = 0; j < INITIAL_WF_LEN; j++) {
         for (int k = 0; k < 3; k++) {
-            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), -99);
+            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), MIN_INT);
         }
     }
     for (int j = 0; j < INITIAL_WF_LEN; j++) {
         for (int k = 0; k < 3; k++) {
-            pe_array_unit->write_s2(past_wf_index(wf_i + 1, k, j), -99);
+            pe_array_unit->write_s2(past_wf_index(wf_i + 1, k, j), MIN_INT);
         }
     }
     pe_array_unit->write_s2(past_wf_index(wf_i, 2, 1), first_extend_len);

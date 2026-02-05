@@ -66,7 +66,7 @@
 
 #define COMP_NOP_INSTRUCTION 0x1ef7800000000
 #define CTRL_NOP_INSTRUCTION 0xe
-#define MIN_INT -99
+#define MIN_INT -9999
 
 // Opcode
 #define ADDITION 0
