@@ -18,7 +18,7 @@ fifo = [11, 12]
 # parents:0, scorebefore:1, index:2, 
 # Eq:5 , VN:6 , VP:7 , hinN:8, hinP:9, Xh:10, Xv:11, Ph:12, Mh:13, tempMh:14, tempPh:15, scoreEnd:16
 # temp1:17, temp2:18, temp3:19, temp4:20, child_vn:21, child_vp:22, child_sbefore:23, child_send:24, 
-# temp9:25, temp10:26, temp11:27
+# merged_vn:25, merged_vp: 26, merged_sbef: 27, merged_send:28
 
 
 #PE ARRAY General Registers?
@@ -169,27 +169,125 @@ def gbv_compute_v2(): # 16 instruction trace
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
     f.write(compute_instruction(ADDITION, INVALID, ADDITION, temp1, scoreBefore, scoreEnd, 0, 0, 0, scoreEnd)) # scoreEnd = (temp1 + scorebefore) + scoreEnd
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) # cycle 15 finished here
+    
     # another instruction here does a popcount. lets say it takes 2 cycles. probably will take a lot more... unfortunately 
     # add a copy instruction for vp/vn/
     f.write(compute_instruction(COPY, INVALID, INVALID, VN, 0, 0, 0, 0, 0, child_vn)) # copy vn into child_vn
     f.write(compute_instruction(COPY, INVALID, INVALID, VP, 0, 0, 0, 0, 0, child_vp)) # copy vp into child_vp
+
     # merge is done here
     # minimum of 
-
-
     # added new merge operations
-    # parents come into regular registers, do a compute based on 
+    # move temp3 and temp4 as childsbefore and sbefore using data moves instead of compute
+    # LOOP this 32 times for each bit with a new bitmask 
+    f.write(compute_instruction(BWISE_OR, BWISE_OR, SUBTRACTION, VP, bitmasks[0], 0, 0, VN, bitmasks[0], temp1))  # temp1 = (VP | bitmask0) - (VN | bitmask0)
+    f.write(compute_instruction(BWISE_OR, BWISE_OR, SUBTRACTION, child_vp, bitmasks[0], 0, 0, child_vn, bitmasks[0], temp2))  # temp2 = (child_vp | bitmask0) - (child_vn | bitmask0)
     
+    f.write(compute_instruction(ADDITION, ADDITION, CMP_2INP, scoreBefore, temp1, 0, 0, child_sbefore, temp2, temp3)) # compares Sa>Sb and sets Ma>b vector
+    f.write(compute_instruction(ADDITION, ADDITION, CMP_2INP, scoreBefore, temp1, 0, 0, child_sbefore, temp2, temp4)) # compares Sa>Sb and sets Mb>a vector
+
+    f.write(compute_instruction(BWISE_OR, LSHIFT_1, SUBTRACTION, temp4, temp3, 0, 0, temp3, 0, temp5)) # (Mba | Mab) - Mab <<1
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    f.write(compute_instruction(BWISE_OR, BWISE_NOT, BWISE_AND, temp5, temp3, 0, 0, temp4, 0, temp6)) # Mp is saved
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    # if i am passing through an ALU, do I need to just use copy or invalid? or what
+    f.write(compute_instruction(INVALID, LSHIFT_1, BWISE_AND, temp4, 0, 0, 0, temp3, 0, temp7)) # Mba & Mab<<1
+    f.write(compute_instruction(INVALID, LSHIFT_1, BWISE_AND, temp3, 0, 0, 0, temp4, 0, temp8)) # Mab & Mba<<1
+
+    f.write(compute_instruction(BWISE_NOT, INVALID, BWISE_AND, temp7, 0, 0, 0, VN, 0, temp1)) # VnA reduced
+    f.write(compute_instruction(BWISE_NOT, INVALID, BWISE_AND, temp8, 0, 0, 0, child_vn, 0, temp2)) # VnB reduced
+
+    f.write(compute_instruction(INVALID, INVALID, BWISE_AND, child_vp, 0, 0, 0, temp6, 0, temp5)) # VpB & Mp
+    f.write(compute_instruction(BWISE_NOT, INVALID, BWISE_AND, temp6, 0, 0, 0, VP, 0, temp9)) # VpA & ~Mp
+
+    f.write(compute_instruction(INVALID, INVALID, BWISE_AND, temp2, 0, 0, 0, temp6, 0, temp7)) # VnB reduced & Mp
+    f.write(compute_instruction(BWISE_NOT, INVALID, BWISE_AND, temp6, 0, 0, 0, temp1, 0, temp8)) # VnA reduced & ~Mp
+
+    f.write(compute_instruction(ADDITION, INVALID, INVALID, temp5, temp9, 0, 0, 0, 0, merged_vp)) # VpOut
+    f.write(compute_instruction(ADDITION, INVALID, INVALID, temp7, temp8, 0, 0, 0, 0, merged_vn)) # VnOut
+
+    f.write(compute_instruction(POPCOUNT, POPCOUNT, SUBTRACTION, merged_vp, 0, 0, 0, merged_vn, 0, temp1)) # temp1 = popcount(VP) - popcount(VN)
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    f.write(compute_instruction(ADDITION, INVALID, INVALID, temp1, merged_sbef, 0, 0, 0, 0, merged_send)) # send = sbefore + temp1
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
     f.close()
 
 def pe_0_instruction():
-    
+    # dest, src, reg_immBar_0, reg_auto_increase_0, imm_0, reg_0, reg_immBar_1, reg_auto_increase_1, imm_1, reg_1, opcode
     f = open("instructions/gbv/pe_0_instruction.txt", "w")
 
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 3, 0, 0, 0, 0, 0, mv))                             # gr[3] = in
 
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 3, mv))                                # reg[0] = SPM[gr[3]]
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 3, 0, mv))                            # out = gr[3]
+
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 4, 0, mv))                            # out = gr[4]
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 4, 0, 0, 0, 0, 0, mv))                             # gr[4] = in
+
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 1, 0, 0, 1, 0, 4, mv))                                # reg[1] = SPM[gr[4]++]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 2, 0, 0, 1, 0, 4, mv))                                # reg[2] = SPM[gr[4]++]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 3, 0, 0, 1, 0, 4, mv))                                # reg[3] = SPM[gr[4]++]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 1, 0, 4, mv))                                # reg[4] = SPM[gr[4]++]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 11, 0, 0, 1, 0, 4, mv))                                # reg[11] = SPM[gr[4]++]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+
+    f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 12, 0, mv))                            # out = reg[12]
+    f.write(data_movement_instruction(reg, in_port, 0, 0, 11, 0, 0, 0, 0, 0, mv))                             # reg[11] = in
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 1, 0, 0, 0, 230, 21, bge))                                 # bge (line 230?) reg[21] 2
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+
+
+    f.write(data_movement_instruction(SPM, gr, 0, 0, 7, 0, 0, 1, 0, 4, mv))                                 # gr[7] = SPM[gr[4]++]
+
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 3, 0, 0, 0, 272, 8, mv))                              # reg[3] = SPM[gr[3]]
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 7, 0, 0, 1, 0, 4, mv))                                 # gr[7] = SPM[gr[4]++]
+
+
+    f.write(data_movement_instruction(SPM, in_port, 0, 1, 0, 3, 0, 0, 0, 0, mv))                            # SPM[gr[3]++] = in
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                             # gr[1] = in
+    f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 5, 0, mv))                           # out = reg[5]
+    f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, 0, 0, 0, 0, 0, 0, mv))                       # ir[0] = in
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 5, 0, mv))                            # out = gr[1]                   
 
     f.close()
+
+
+
+def pe_1_instruction():
+
+f = open("instructions/gbv/pe_1_instruction.txt", "w")
+
+
+
+f.close()
+
+
+
+def pe_2_instruction():
+
+f = open("instructions/gbv/pe_2_instruction.txt", "w")
+
+
+
+f.close()
+
+
+
+def pe_3_instruction():
+
+f = open("instructions/gbv/pe_3_instruction.txt", "w")
+
+
+
+f.close()
 
 if not os.path.exists("instructions/gbv"):
     os.makedirs("instructions/gbv")
