@@ -8,6 +8,15 @@ enum class SpmAccessT {
     WRITE
 };
 
+struct OutstandingRequest {
+    int addr;
+    int peid;
+    SpmAccessT access_t;
+    bool single_data;
+    LoadResult data;
+    bool isVirtualAddr = true;
+};
+
 class S2 {
 
     public:
@@ -64,15 +73,6 @@ class addr_regfile {
 
 class SPM : EventProducer{
     private:
-        struct OutstandingRequest {
-            int addr;
-            int peid;
-            int cycles_left;
-            SpmAccessT access_t;
-            bool single_data;
-            LoadResult data;
-            bool isVirtualAddr = true;
-        };
         void mark_active_producer();
 
     public:
@@ -85,13 +85,17 @@ class SPM : EventProducer{
         void show_data(int addr);
         void show_data(int start_addr, int end_addr, int line_width=64);
         void access(int addr, int peid, SpmAccessT accessT, bool single_data, LoadResult data=LoadResult(), bool isVirtualAddr=true);
-        int& access_magic(int peid, int addr) { return buffer[peid * SPM_BANK_SIZE + addr]; }
+        int& access_magic(int peid, int addr) { return buffer[peid * SPM_BANK_GROUP_SIZE + addr]; }
         std::pair<bool, std::list<Event>*> tick() override;
+
+        int getBank(int addr, int peid, bool isVirtualAddr);
+        bool portIsBusy(int addr, int peid, bool isVirtualAddr);
 
         int *buffer;
         int buffer_size;
-        
-        OutstandingRequest* requests[PE_4_SETTING];
+
+        OutstandingRequest* requests[SPM_NUM_BANKS];  // 8 banks now
+        int cycles_left[SPM_NUM_BANKS];  // Tracks latency countdown for each bank
 
         PushableProducerSet active_producers;
 

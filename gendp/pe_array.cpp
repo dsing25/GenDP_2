@@ -11,6 +11,9 @@
 #define MAX_RANGE NUM_FRACTION_BITS
 #define NUM_INTEGER_BITS 5
 
+PerfCounter bankConflictStalls = 0;
+PerfCounter totalSpmRequests = 0;
+
 pe_array::pe_array(int input_size, int output_size) {
 
     int i;
@@ -1189,6 +1192,10 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
 
         if (setting == PE_4_SETTING) {
             for (i = 0; i < 4; i++) {
+                // Skip stalled PEs (freeze execution and block systolic forwarding)
+                if (pe_unit[i]->stalled()) {
+                    continue;
+                }
 #ifdef PROFILE
                 printf("PE[%d]\t", i);
 #endif
@@ -1227,6 +1234,28 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                 }
             }
         }
+
+        // SPM bank arbitration with conflict detection (round-robin)
+        int start_pe = cycle % 4;
+        for (int offset = 0; offset < 4; offset++) {
+            int pe_idx = (start_pe + offset) % 4;
+            OutstandingRequest* req = pe_unit[pe_idx]->spmReqPort;
+            if (req == nullptr) continue;
+
+            totalSpmRequests++;
+            // Check if SPM bank is available
+            if (SPM_unit->portIsBusy(req->addr, req->peid, req->isVirtualAddr)) {
+                // Bank conflict - PE stays stalled, increment counter
+                bankConflictStalls++;
+            } else {
+                // Grant access
+                SPM_unit->access(req->addr, req->peid, req->access_t,
+                                 req->single_data, req->data, req->isVirtualAddr);
+                delete pe_unit[pe_idx]->spmReqPort;
+                pe_unit[pe_idx]->spmReqPort = nullptr;
+            }
+        }
+
         from_fifo = 0;
         
         if (main_instruction_setting == MAIN_INSTRUCTION_1)
@@ -1243,6 +1272,10 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             break;
         }
     }
+
+    printf("=== Performance Counters ===\n");
+    printf("TotalSpmRequests: %d\n", totalSpmRequests);
+    printf("BankConflictStalls: %d\n", bankConflictStalls);
 
     // fprintf(stderr, "Finish simulation.\n");
 }

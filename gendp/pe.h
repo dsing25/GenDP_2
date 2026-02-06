@@ -43,6 +43,11 @@ class pe {
 
         void show_comp_reg();
 
+        // SPM request port - populated by PE, consumed by pe_array arbitration
+        OutstandingRequest* spmReqPort = nullptr;
+
+        bool stalled() const { return spmReqPort != nullptr; }
+
         // ld/st data
         int load_data, store_data;
         unsigned long store_instruction[COMP_INSTR_BUFFER_GROUP_SIZE], load_instruction[COMP_INSTR_BUFFER_GROUP_SIZE];

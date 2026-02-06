@@ -193,6 +193,14 @@ void pe::run(int simd) {
 #endif
 
     // Control
+    if (PC[1] < 0 || PC[1] >= CTRL_INSTR_BUFFER_NUM) {
+        fprintf(stderr, "PE[%d] PC[1]=%d out of bounds\n", id, PC[1]);
+        exit(-1);
+    }
+    if (PC[0] < 0 || PC[0] >= CTRL_INSTR_BUFFER_NUM) {
+        fprintf(stderr, "PE[%d] PC[0]=%d out of bounds\n", id, PC[0]);
+        exit(-1);
+    }
     decode(ctrl_instr_buffer_unit->buffer[PC[1]][1], &PC[1], src_dest[1], &ctrl_op[1], simd, &ctrl_write_addrs[0], &ctrl_write_data[0]);
     decode(ctrl_instr_buffer_unit->buffer[PC[0]][0], &PC[0], src_dest[0], &ctrl_op[0], simd, &ctrl_write_addrs[1], &ctrl_write_data[1]);
 
@@ -297,7 +305,13 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
         //    printf("%d=id; %d '%c'\n", id, access_addr, (char)SPM_unit->buffer[access_addr]);
         //}
         bool isVirtualAddr = !swizzle;
-        SPM_unit->access(access_addr, id, SpmAccessT::READ, single_data, LoadResult(), isVirtualAddr);
+        // Populate SPM request port instead of direct access
+        spmReqPort = new OutstandingRequest();
+        spmReqPort->addr = access_addr;
+        spmReqPort->peid = id;
+        spmReqPort->access_t = SpmAccessT::READ;
+        spmReqPort->single_data = single_data;
+        spmReqPort->isVirtualAddr = isVirtualAddr;
 #ifdef PROFILE
     if (simd)
         printf("%lx from SPM[%d]%s to ", SPM_unit->access_magic(id, access_addr), source_addr, swizzle ? " (swizzled)" : "");
@@ -399,7 +413,14 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
         } else if (dest_pos == 2) {
             int access_addr = swizzle ? apply_address_swizzle(dest_addr) : dest_addr;
             bool isVirtualAddr = !swizzle;
-            SPM_unit->access(access_addr, id, SpmAccessT::WRITE, single_data, data, isVirtualAddr);
+            // Populate SPM request port instead of direct access
+            spmReqPort = new OutstandingRequest();
+            spmReqPort->addr = access_addr;
+            spmReqPort->peid = id;
+            spmReqPort->access_t = SpmAccessT::WRITE;
+            spmReqPort->single_data = single_data;
+            spmReqPort->data = data;
+            spmReqPort->isVirtualAddr = isVirtualAddr;
 #ifdef PROFILE
             printf("SPM[%d]%s.\t", dest_addr, swizzle ? " (swizzled)" : "");
 #endif

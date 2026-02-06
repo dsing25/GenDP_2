@@ -103,14 +103,16 @@ void addr_regfile::show_data(int addr) {
 SPM::SPM(int size, std::set<EventProducer*>* producers) : active_producers(producers) {
     buffer = (int*)malloc(size * sizeof(int));
     buffer_size = size;
-    for (int i = 0; i < PE_4_SETTING; i++)
+    for (int i = 0; i < SPM_NUM_BANKS; i++) {
         requests[i] = nullptr;
+        cycles_left[i] = 0;
+    }
     reset();
 }
 
 SPM::~SPM() {
     free(buffer);
-    for (int i = 0; i < PE_4_SETTING; i++)
+    for (int i = 0; i < SPM_NUM_BANKS; i++)
         if (requests[i] != nullptr)
             delete requests[i];
 }
@@ -142,23 +144,28 @@ void SPM::show_data(int start_addr, int end_addr, int line_width) {
 }
 
 void SPM::access(int addr, int peid, SpmAccessT access_t, bool single_data, LoadResult data, bool isVirtualAddr){
-    if (requests[peid] != nullptr) {
-        fprintf(stderr, "PE[%d] load SPM addr %d error. Request already exists\n", peid, addr);
+    // Validate physical address (compute from virtual if needed)
+    int phys_addr = isVirtualAddr ? (peid * SPM_BANK_GROUP_SIZE + addr) : addr;
+    if (phys_addr < 0 || phys_addr >= SPM_ADDR_NUM) {
+        fprintf(stderr, "PE[%d] load SPM addr %d (phys %d) error.\n", peid, addr, phys_addr);
         exit(-1);
     }
-    if (addr < 0 || addr >= SPM_ADDR_NUM) {
-        fprintf(stderr, "PE[%d] load SPM addr %d error.\n", peid, addr);
+    // Index by bank, not by peid
+    int bank = getBank(addr, peid, isVirtualAddr);
+    if (requests[bank] != nullptr) {
+        fprintf(stderr, "PE[%d] load SPM addr %d error. Bank %d already has pending request\n",
+                peid, addr, bank);
         exit(-1);
     }
     OutstandingRequest* newReq = new OutstandingRequest();
     newReq->addr        = addr;
-    newReq->cycles_left = SPM_ACCESS_LATENCY;
     newReq->peid        = peid;
     newReq->access_t    = access_t;
     newReq->data        = data;
     newReq->single_data = single_data;
     newReq->isVirtualAddr = isVirtualAddr;
-    requests[peid]      = newReq;
+    requests[bank]      = newReq;
+    cycles_left[bank]   = SPM_ACCESS_LATENCY;
     mark_active_producer();
 }
 
@@ -166,34 +173,57 @@ void SPM::mark_active_producer(){
     active_producers.push(this);
 }
 
+int SPM::getBank(int addr, int peid, bool isVirtualAddr) {
+    int phys_addr = isVirtualAddr ? (peid * SPM_BANK_GROUP_SIZE + addr) : addr;
+    // 8-bank scheme: bank-group (high bits) + bank-within-group (bit 1)
+    // Bank = bank_group * 2 + bank_in_group
+    int bank_group = phys_addr / SPM_BANK_GROUP_SIZE;  // 0-3
+    int bank_in_group = (phys_addr >> 1) & 1;          // bit[1] selects sub-bank
+    return bank_group * 2 + bank_in_group;             // 0-7
+}
+
+bool SPM::portIsBusy(int addr, int peid, bool isVirtualAddr) {
+    int bank = getBank(addr, peid, isVirtualAddr);
+    return requests[bank] != nullptr;  // Check if bank has pending request
+}
+
 std::pair<bool, std::list<Event>*> SPM::tick(){
     std::list<Event>* events = new std::list<Event>();
     bool requestsOutstanding = false;
-    for(int i = 0; i < PE_4_SETTING; i++){
-        OutstandingRequest* req = requests[i];
+    // Iterate over all 8 banks
+    for(int bank = 0; bank < SPM_NUM_BANKS; bank++){
+        OutstandingRequest* req = requests[bank];
         if (req == nullptr) continue;
-        int phys_addr = req->isVirtualAddr ? (i * SPM_BANK_SIZE + req->addr) : req->addr;
-        req->cycles_left--;
-        if(req->cycles_left == 0){
+        // Use req->peid for physical address calculation (not the bank index)
+        int phys_addr = req->isVirtualAddr ? (req->peid * SPM_BANK_GROUP_SIZE + req->addr) : req->addr;
+        if (phys_addr < 0 || phys_addr >= buffer_size) {
+            fprintf(stderr, "SPM tick error: phys_addr=%d out of bounds (buf_size=%d) for PE[%d] "
+                    "vaddr=%d isVirtual=%d\n",
+                    phys_addr, buffer_size, req->peid, req->addr, req->isVirtualAddr);
+            exit(-1);
+        }
+        cycles_left[bank]--;
+        if(cycles_left[bank] == 0){
             if(req->access_t == SpmAccessT::WRITE){
                 // write data to SPM
                 int n_writes = req->single_data ? 1 : SPM_BANDWIDTH;
                 for (int j = 0; j < n_writes; j++){
                     buffer[phys_addr + j] = req->data.data[j];
 #ifdef PROFILE
-                    printf("PE[%d]@%d write SPM[%d] = %d\n", i, cycle, req->addr+j, req->data.data[j]);
+                    printf("PE[%d]@%d write SPM[%d] = %d\n", req->peid, cycle, req->addr+j,
+                           req->data.data[j]);
 #endif
                 }
             } else if (req->access_t == SpmAccessT::READ){
-                // generate SpmDataReadyEv
-                void* data = static_cast<void*>(new SpmDataReadyData(i, &buffer[phys_addr]));
+                // generate SpmDataReadyEv - use req->peid as requestor ID
+                void* data = static_cast<void*>(new SpmDataReadyData(req->peid, &buffer[phys_addr]));
                 events->push_back(Event(EventType::SPM_DATA_READY, data));
             } else {
                 fprintf(stderr, "SPM tick error: unknown access type.\n");
                 exit(-1);
             }
-            delete requests[i];
-            requests[i] = nullptr;
+            delete requests[bank];
+            requests[bank] = nullptr;
         } else {
             requestsOutstanding = true;
         }

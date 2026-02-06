@@ -29,7 +29,9 @@
 #define SPM_ACCESS_LATENCY 2
 #define SPM_BANDWIDTH 2
 #define SPM_ADDR_NUM 32768
-#define SPM_BANK_SIZE 8192
+#define SPM_BANK_GROUP_SIZE 8192  // Size of each bank-group (1 per PE)
+#define SPM_BANK_SIZE 4096        // Actual bank size (2 banks per bank-group)
+#define SPM_NUM_BANKS 8           // 4 bank-groups × 2 banks each
 #define S2_BUFFER_BYTES (1024 * 1024) // 1 MB, int-addressable (4 bytes per int)
 #define S2_BUFFER_INTS (S2_BUFFER_BYTES / 4)
 #define MAIN_ADDR_REGISTER_NUM 16
