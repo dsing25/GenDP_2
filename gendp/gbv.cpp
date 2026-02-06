@@ -15,7 +15,9 @@ int gbv_simulate(pe_array *pe_array_unit, gbv_align_input_t& align_input, int n,
         pe_array_unit->pe_unit[i]->reset();
     }
 
-    // TODO: Add GBV-specific input buffer setup here if needed
+    // Example: Write query and ref_basepair to input buffer if needed
+    // pe_array_unit->input_buffer_write_from_ddr_unsigned(0, &align_input.query);
+    // pe_array_unit->input_buffer_write_from_ddr_unsigned(1, &align_input.ref_basepair);
 
     pe_array_unit->run(n, simd, PE_4_SETTING, MAIN_INSTRUCTION_1);
 
@@ -123,30 +125,31 @@ void gbv_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
         exit(EXIT_FAILURE);
     }
 
-    char *line1 = NULL, *line2 = NULL;
-    int line1_length=0, line2_length=0;
-    size_t line1_allocated=0, line2_allocated=0;
-    gbv_align_input_t align_input;
+        gbv_align_input_t align_input;
+    char charline[256];
     while (true) {
-        line1_length = getline(&line1, &line1_allocated, input_file);
-        if (line1_length == -1) break;
-        line2_length = getline(&line2, &line2_allocated, input_file);
-        if (line1_length == -1) break;
+        // Read 7 lines for each input struct
+        if (!fgets(charline, sizeof(charline), input_file)) break;
+        align_input.ref_basepair = (uint8_t)strtoul(charline, nullptr, 10);
 
-        align_input.pattern = line1 + 1;
-        align_input.pattern_length = line1_length - 2;
-        align_input.pattern[align_input.pattern_length] = '\0';
-        align_input.text = line2 + 1;
-        align_input.text_length = line2_length - 2;
-        align_input.text[align_input.text_length] = '\0';
+        for (int i = 0; i < 4; ++i) {
+            if (!fgets(charline, sizeof(charline), input_file)) break;
+            align_input.eq_vector[i] = strtoul(charline, nullptr, 10);
+        }
+
+        if (!fgets(charline, sizeof(charline), input_file)) break;
+        align_input.hinN = atoi(charline);
+
+        if (!fgets(charline, sizeof(charline), input_file)) break;
+        align_input.hinP = atoi(charline);
+
+        // Optionally, check for incomplete input here
 
         int score_out = gbv_simulate(pe_array_unit, align_input, GBV_MAX_CYCLES, fp, show_output);
         gbv_output.push_back(score_out);
     }
 
     fclose(input_file);
-    free(line1);
-    free(line2);
 
     delete pe_array_unit;
 }

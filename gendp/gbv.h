@@ -12,12 +12,15 @@
 
 /*
  * Alignment Input for GBV kernel
+ * - query: 32-bit integer (can represent 16 2-bit basepairs, or 4 8-bit chars, etc.)
+ * - ref_basepair: 2-bit value (0-3, e.g. for A/C/G/T)
  */
+
 typedef struct {
-  char* pattern;
-  int pattern_length;
-  char* text;
-  int text_length;
+  uint8_t ref_basepair;     // 2-bit basepair (use only 2 bits)
+  uint32_t eq_vector[4];    // Equality vector (4 elements, adjust size if needed)
+  int hinN;                 // hinN value
+  int hinP;                 // hinP value
 } gbv_align_input_t;
 
 // High-level simulation function for GBV kernel

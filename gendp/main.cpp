@@ -1,6 +1,7 @@
 #include "pe_array.h"
 #include "sys_def.h"
 #include "bsw.h"
+#include "gbv.h"
 #include "wfa.h"
 #include "phmm.h"
 #include "poa.h"
@@ -22,6 +23,7 @@ void help() {
         "            3 - poa\n"
         "            4 - chain\n"
         "            5 - wfa\n"
+        "            6 - gbv\n"
         "        -i <input file>\n"
         "            default: NULL\n"
         "        -o <output file>\n"
@@ -66,3 +68,4 @@ int main(int argc, char *argv[]) {
     std::cout << "End Simulation: " << ctime(&timenow) << std::endl;
     return 0;
 }
+
