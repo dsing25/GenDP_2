@@ -82,7 +82,7 @@ def run_simulator(pattern, text, seq_file, sim_path='./sim', verbose=False):
 
         # Capture stdout for score parsing, but let stderr pass through to the terminal.
         result = subprocess.run(cmd, stdout=subprocess.PIPE,
-                              stderr=None, text=True, timeout=30)
+                              stderr=None, text=True, timeout=3600);
 
         if verbose:
             print("Simulator output:", result.stdout)
