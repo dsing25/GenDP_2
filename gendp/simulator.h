@@ -7,6 +7,10 @@
 
 extern int cycle;
 
+typedef int PerfCounter;
+extern PerfCounter totalSpmRequests;
+extern PerfCounter bankConflictStalls;
+
 enum EventType {
     SPM_DATA_READY
 };

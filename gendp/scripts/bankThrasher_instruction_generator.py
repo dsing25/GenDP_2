@@ -12,10 +12,15 @@ from opcodes import *
 
 N_PES = 4
 LOOP_ITERATIONS = 10000
+BANK_GROUP_SIZE = 8192  # Size of each bank group in bytes
 
 def nop():
     """Generate a no-op instruction"""
     return data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)
+
+def halt_instr():
+    """Generate a halt instruction (for both VLIW slots when waiting)"""
+    return data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt)
 
 PE_START = 10  # PEs start executing at PC=10 after main calls set_PC
 
@@ -32,39 +37,50 @@ def pe_instruction(pe_id):
     """
     f = InstructionWriter(f"instructions/bankThrasher/pe_{pe_id}_instruction.txt")
 
+    # Calculate address that maps to PE0's bank for this PE
+    # PE0: 0, PE1: -8192, PE2: -16384, PE3: -24576
+    # This creates bank conflicts since all access PE0's physical bank
+
     # PC=0 to PC=9: Halts - PEs wait here until main calls set_PC
+    # Both VLIW slots must be halt so both PC[0] and PC[1] stay frozen
     for _ in range(PE_START):
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
-        f.write(nop())
+        f.write(halt_instr())
+        f.write(halt_instr())
 
     # PC=10: Initialize gr[0] = 0 (keep 0 for base)
     f.write(data_movement_instruction(gr, 0, 0, 0, 0, 0, 0, 0, 0, 0, si))
     f.write(nop())
 
-    # PC=11: Initialize gr[1] = 0 (SPM address)
-    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 0, 0, si))
+    
+    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, -pe_id*BANK_GROUP_SIZE + pe_id, 0, si))
     f.write(nop())
 
     # PC=12: Initialize gr[2] = LOOP_ITERATIONS (counter)
     f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, LOOP_ITERATIONS, 0, si))
     f.write(nop())
 
-    # PC=13 (LOOP_START): Load from SPM[gr[1]] into reg[0]
+    # PC=13 (LOOP_START): Load from SPM[gr[1]] into reg[0] (virtual addr, maps to PE0's bank)
     f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))
     f.write(nop())
 
-    # PC=16: nop (data ready) + decrement gr[2]
+    # PC=14: decrement gr[2] (slot 0) + bne (slot 1)
+    # In VLIW, slot 1 executes FIRST. So bne executes first checking old gr[2],
+    # then subi in slot 0 is skipped if branch taken.
+    # To fix: put decrement BEFORE the branch instruction (separate PC)
     f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 1, 2, subi))
-    # PC=17: bne - if gr[2] != gr[0], jump to PC=13 (offset = 13 - 17 = -4)
-    f.write(data_movement_instruction(0, 0, 0, 0, -1, 0, 1, 0, 2, 0, bne))
+    f.write(nop())
+
+    # PC=15: bne - if gr[2] != gr[0], jump to PC=13 (offset = 13 - 15 = -2)
+    f.write(data_movement_instruction(0, 0, 0, 0, -2, 0, 1, 0, 2, 0, bne))
+    f.write(nop())
 
     # PC=18: Signal done gr[10] = 1
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))
     f.write(nop())
 
-    # PC=19: halt
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
-    f.write(nop())
+    # PC=17: halt (both slots to keep PC[0] and PC[1] frozen)
+    f.write(halt_instr())
+    f.write(halt_instr())
 
     f.close()
 
@@ -93,10 +109,12 @@ def main_instruction():
 
     # Start PEs at PC = PE_START (where actual code begins)
     f.write(data_movement_instruction(0, 0, 0, 0, PE_START, 0, 0, 0, 0, 0, set_PC))
+    f.write(nop())  # Complete this PC before the spin loop
 
     # Wait for all PEs to finish (gr[13] = AND of all PE gr[10])
     # Spin until gr[13] == 1 (loop back to same PC if not equal)
     f.write(data_movement_instruction(gr, gr, 0, 0, -1, 0, 0, 0, 1, 13, bne))
+    f.write(nop())
 
     # All done - halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
