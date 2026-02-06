@@ -8,7 +8,7 @@
 // GBV kernel configuration
 #define GBV_COMPUTE_INSTRUCTION_NUM 90
 #define GBV_PE_GROUP_SIZE 4
-#define GBV_MAX_CYCLES 1600
+#define GBV_MAX_CYCLES 100
 
 /*
  * Alignment Input for GBV kernel

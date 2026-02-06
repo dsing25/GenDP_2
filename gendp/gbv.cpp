@@ -19,7 +19,7 @@ int gbv_simulate(pe_array *pe_array_unit, gbv_align_input_t& align_input, int n,
     // pe_array_unit->input_buffer_write_from_ddr_unsigned(0, &align_input.query);
     // pe_array_unit->input_buffer_write_from_ddr_unsigned(1, &align_input.ref_basepair);
 
-    pe_array_unit->run(n, simd, PE_4_SETTING, MAIN_INSTRUCTION_1);
+    pe_array_unit->run(n, simd, PE_4_SETTING, MAIN_INSTRUCTION_2);
 
     return 0; // TODO: Return actual score/output if needed
     // if (show_output) pe_array_unit->show_output_buffer(fp);

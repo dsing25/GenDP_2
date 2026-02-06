@@ -30,6 +30,7 @@ class pe_array {
         void run(int cycle_limit, int simd, int setting, int main_instruction_setting);
         void show_gr();
         void show_compute_instruction_buffer();
+        void show_main_instruction_buffer();
         void poa_show_output_buffer(int len_y, int len_x, FILE* fp);
         void bsw_show_output_buffer(FILE* fp);
         void chain_show_output_buffer(int n, FILE* fp);
