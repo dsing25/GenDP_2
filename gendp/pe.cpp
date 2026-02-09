@@ -74,40 +74,42 @@ void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
 #ifdef PROFILE
     printf("PE[%d] @%d recv SPM: ", id, cycle);
 #endif
+    int odd = lineOffset(outstanding_req.spm_addr);
     switch (outstanding_req.dst){
         case CTRL_REG:
             if (outstanding_req.single_load) {
-                regfile_unit->register_file[outstanding_req.addr] =
-                    data[outstanding_req.addr_odd];
+                regfile_unit->register_file[
+                    outstanding_req.addr] = data[odd];
 #ifdef PROFILE
-            printf("reg[%d] = %d\n", outstanding_req.addr,
-                   data[outstanding_req.addr_odd]);
+                printf("reg[%d] = %d\n",
+                    outstanding_req.addr, data[odd]);
 #endif
             } else {
-                for (int i = 0; i < SPM_BANDWIDTH; i++)
+                for (int i = 0;
+                     i < SPM_BANDWIDTH; i++)
                     regfile_unit->register_file[
-                        outstanding_req.addr + i] = data[i];
+                        outstanding_req.addr + i] =
+                        data[i];
 #ifdef PROFILE
                 printf("reg[%d,%d] = [%d,%d]\n",
-                       outstanding_req.addr,
-                       outstanding_req.addr+1,
-                       data[0], data[1]);
+                    outstanding_req.addr,
+                    outstanding_req.addr+1,
+                    data[0], data[1]);
 #endif
             }
             break;
         case CTRL_GR:
-            addr_regfile_unit->buffer[outstanding_req.addr] =
-                data[outstanding_req.addr_odd];
+            addr_regfile_unit->buffer[
+                outstanding_req.addr] = data[odd];
 #ifdef PROFILE
-            printf("gr[%d] = %d\n", outstanding_req.addr,
-                   data[outstanding_req.addr_odd]);
+            printf("gr[%d] = %d\n",
+                outstanding_req.addr, data[odd]);
 #endif
             break;
         case CTRL_OUT_PORT:
-            store_data = data[outstanding_req.addr_odd];
+            store_data = data[odd];
 #ifdef PROFILE
-            printf("out = %d\n",
-                   data[outstanding_req.addr_odd]);
+            printf("out = %d\n", data[odd]);
 #endif
             break;
         default:
@@ -308,14 +310,15 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
 #endif
     } else if (source_pos == CTRL_SPM) {
         int access_addr = swizzle
-            ? apply_address_swizzle(source_addr) : source_addr;
+            ? apply_address_swizzle(source_addr)
+            : source_addr;
         bool isVirtualAddr = !swizzle;
-        last_spm_load_addr_odd = access_addr & 1;
+        last_spm_load_addr = access_addr;
         spmReqPort = new OutstandingRequest();
-        spmReqPort->addr = lineAddr(access_addr);
+        spmReqPort->addr = access_addr;
         spmReqPort->peid = id;
         spmReqPort->access_t = SpmAccessT::READ;
-        spmReqPort->single_data = false;  // always full line
+        spmReqPort->single_data = false;
         spmReqPort->isVirtualAddr = isVirtualAddr;
 #ifdef PROFILE
     if (simd)
@@ -382,7 +385,7 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
         outstanding_req.single_load = single_data;
         outstanding_req.dst = dest_pos;
         outstanding_req.addr = dest_addr;
-        outstanding_req.addr_odd = last_spm_load_addr_odd;
+        outstanding_req.spm_addr = last_spm_load_addr;
         //still log the dest we're sending to
 #ifdef PROFILE
         switch (dest_pos) {
@@ -427,14 +430,15 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
             spmReqPort->peid = id;
             spmReqPort->access_t = SpmAccessT::WRITE;
             spmReqPort->isVirtualAddr = isVirtualAddr;
+            spmReqPort->addr = access_addr;
             if (single_data) {
-                spmReqPort->addr = lineAddr(access_addr);
                 spmReqPort->single_data = true;
-                spmReqPort->write_slot = access_addr & 1;
-                spmReqPort->data.data[access_addr & 1] =
-                    data.data[0];
+                int s = lineOffset(access_addr);
+                spmReqPort->data.data[s] = data.data[0];
             } else {
-                spmReqPort->addr = lineAddr(access_addr);
+                assert(lineOffset(access_addr) == 0
+                    && "Double-data SPM write "
+                       "requires even addr");
                 spmReqPort->single_data = false;
                 spmReqPort->data = data;
             }

@@ -628,7 +628,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                   + main_addressing_register[reg_0]
                 : sext_imm_0
                   + main_addressing_register[reg_0];
-            if (lsq->spmBankFull(spmAddr)) {
+            if (lsq->spmBankFull(spmAddr) ||
+                lsq->s2BankFull(s2Addr)) {
                 lsqFullStalls++;
                 return 0;
             }
@@ -637,7 +638,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                    s2Addr, spmAddr);
 #endif
             lsq->enqueueS2ToSpm(
-                s2Addr, spmAddr, true, s2);
+                s2Addr, spmAddr, true);
         } else if (src == CTRL_SPM && dest == CTRL_S2) {
             int spmAddr = reg_immBar_flag_1
                 ? main_addressing_register[sext_imm_1]
@@ -707,66 +708,66 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             exit(-1);
         }
 
-        {
-            // Compute entry addresses and check capacity
-            int nEntries;
-            int spmAddrs[8], s2Addrs[8];
-            if (src_addr % 2 == 0
-                && dest_addr % 2 == 0) {
-                nEntries = 4;
-                for (i = 0; i < 4; i++) {
-                    spmAddrs[i] = (dest_is_spm
-                        ? dest_addr : src_addr) + 2*i;
-                    s2Addrs[i] = (dest_is_s2
-                        ? dest_addr : src_addr) + 2*i;
-                }
-            } else {
-                nEntries = 8;
-                for (i = 0; i < 8; i++) {
-                    spmAddrs[i] = (dest_is_spm
-                        ? dest_addr : src_addr) + i;
-                    s2Addrs[i] = (dest_is_s2
-                        ? dest_addr : src_addr) + i;
-                }
+        if (src_addr % 2 == 0
+            && dest_addr % 2 == 0) {
+            // Aligned: 4 double-word transfers
+            int spmAddrs[4], s2Addrs[4];
+            for (i = 0; i < 4; i++) {
+                spmAddrs[i] = (dest_is_spm
+                    ? dest_addr : src_addr) + 2*i;
+                s2Addrs[i] = (dest_is_s2
+                    ? dest_addr : src_addr) + 2*i;
             }
-            // Check all entries fit before issuing any
             bool canFit;
             if (src_is_s2 && dest_is_spm)
                 canFit = lsq->canEnqueueS2ToSpm(
-                    spmAddrs, nEntries);
+                    spmAddrs, s2Addrs, 4);
             else
                 canFit = lsq->canEnqueueSpmToS2(
-                    spmAddrs, s2Addrs, nEntries);
+                    spmAddrs, s2Addrs, 4);
             if (!canFit) {
                 lsqFullStalls++;
                 return 0;
             }
-            // Enqueue all entries
-            if (src_addr % 2 == 0
-                && dest_addr % 2 == 0) {
-                for (i = 0; i < 4; i++) {
-                    if (src_is_s2 && dest_is_spm)
-                        lsq->enqueueS2ToSpm(
-                            src_addr + 2*i,
-                            dest_addr + 2*i,
-                            false, s2);
-                    else
-                        lsq->enqueueSpmToS2(
-                            src_addr + 2*i,
-                            dest_addr + 2*i, false);
-                }
-            } else {
-                for (i = 0; i < 8; i++) {
-                    if (src_is_s2 && dest_is_spm)
-                        lsq->enqueueS2ToSpm(
-                            src_addr + i,
-                            dest_addr + i,
-                            true, s2);
-                    else
-                        lsq->enqueueSpmToS2(
-                            src_addr + i,
-                            dest_addr + i, true);
-                }
+            for (i = 0; i < 4; i++) {
+                if (src_is_s2 && dest_is_spm)
+                    lsq->enqueueS2ToSpm(
+                        src_addr + 2*i,
+                        dest_addr + 2*i, false);
+                else
+                    lsq->enqueueSpmToS2(
+                        src_addr + 2*i,
+                        dest_addr + 2*i, false);
+            }
+        } else {
+            // Misaligned: use single-word transfers
+            int spmAddrs[8], s2Addrs[8];
+            for (i = 0; i < 8; i++) {
+                spmAddrs[i] = (dest_is_spm
+                    ? dest_addr : src_addr) + i;
+                s2Addrs[i] = (dest_is_s2
+                    ? dest_addr : src_addr) + i;
+            }
+            bool canFit;
+            if (src_is_s2 && dest_is_spm)
+                canFit = lsq->canEnqueueS2ToSpm(
+                    spmAddrs, s2Addrs, 8);
+            else
+                canFit = lsq->canEnqueueSpmToS2(
+                    spmAddrs, s2Addrs, 8);
+            if (!canFit) {
+                lsqFullStalls++;
+                return 0;
+            }
+            for (i = 0; i < 8; i++) {
+                if (src_is_s2 && dest_is_spm)
+                    lsq->enqueueS2ToSpm(
+                        src_addr + i,
+                        dest_addr + i, true);
+                else
+                    lsq->enqueueSpmToS2(
+                        src_addr + i,
+                        dest_addr + i, true);
             }
         }
 
@@ -833,7 +834,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 // #endif
 //         (*PC)++;
     } else if (opcode == CTRL_BARRIER) {
-        if (lsq->empty()) {
+        if (!lsq->hasPendingOps(SPM_unit, s2)) {
 #ifdef PROFILE
             printf("Barrier: LSQ empty, advance\n");
 #endif
@@ -1154,7 +1155,7 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
         store(dest, reg_immBar_flag_0, sext_imm_0, reg_0, immediate_data, simd);
         if (reg_auto_increasement_flag_0)
             main_addressing_register[reg_0]++;
-    } else if (opcode == 5) {       // mv dest src imm/reg(reg(++)) imm/reg(reg(++))
+    } else if (opcode == 5) {
 #ifdef PROFILE
         printf("Move ");
 #endif
@@ -1170,8 +1171,9 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
                 : sext_imm_0
                   + main_addressing_register[reg_0];
             lsq->enqueueS2ToSpm(
-                s2Addr, spmAddr, true, s2);
-        } else if (src == CTRL_SPM && dest == CTRL_S2) {
+                s2Addr, spmAddr, true);
+        } else if (src == CTRL_SPM
+                   && dest == CTRL_S2) {
             int spmAddr = reg_immBar_flag_1
                 ? main_addressing_register[sext_imm_1]
                   + main_addressing_register[reg_1]
@@ -1195,7 +1197,6 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
         if (reg_auto_increasement_flag_1)
             main_addressing_register[reg_1]++;
     }
-    // } else fprintf(stderr, "decode_output opcode error %d.\n", opcode);
     return 0;
 }
 
@@ -1290,8 +1291,16 @@ void pe_array::poa_show_output_buffer(int len_y, int len_x, FILE* fp) {
     }
 }
 
-void pe_array::handle_spm_data_ready(SpmDataReadyData* evData) {
-    pe_unit[evData->requestorId]->recieve_spm_data(evData->data);
+void pe_array::handle_spm_data_ready(
+    SpmDataReadyData* evData) {
+    if (evData->requestorId == CTRL_PEID) {
+        lsq->dataReadyFromSpm(
+            CtrlLSQ::spmBank(evData->phys_addr),
+            evData->data);
+    } else {
+        pe_unit[evData->requestorId]
+            ->recieve_spm_data(evData->data);
+    }
 }
 
 void pe_array::process_events() {
@@ -1332,6 +1341,15 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         cycle++;
         old_PC = main_PC;
         process_events();
+
+        // S2 tick: advance pipelines, route completions
+        {
+            auto completions = s2->tick();
+            for (auto& c : completions)
+                lsq->dataReadyFromS2(
+                    c.dstAddr, c.s2Addr, c.data);
+        }
+
         flag = decode(main_instruction_buffer[main_PC][1], &main_PC, simd, setting, main_instruction_setting);
         pe_unit[0]->load_data = store_data;
         pe_unit[0]->load_instruction[0] = PE_instruction[0];
@@ -1396,9 +1414,9 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                 bankConflictStalls++;
             } else {
                 // Grant access
-                SPM_unit->access(req->addr, req->peid, req->access_t,
-                                 req->single_data, req->data,
-                                 req->isVirtualAddr, req->write_slot);
+                SPM_unit->access(req->addr, req->peid,
+                    req->access_t, req->single_data,
+                    req->data, req->isVirtualAddr);
                 delete pe_unit[pe_idx]->spmReqPort;
                 pe_unit[pe_idx]->spmReqPort = nullptr;
             }
@@ -1410,7 +1428,6 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             for (int b = 0; b < SPM_NUM_BANKS; b++)
                 spmBankBusy[b] =
                     (SPM_unit->requests[b] != nullptr);
-            // Also mark banks busy for pending PE reqs
             for (int pi = 0; pi < 4; pi++) {
                 OutstandingRequest* pr =
                     pe_unit[pi]->spmReqPort;
@@ -1421,12 +1438,7 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                     spmBankBusy[pb] = true;
                 }
             }
-            lsq->tickS2Outstanding(s2);
-            lsq->tickS2OutstandingWrites(s2);
-            lsq->drainS2Reads(s2);
-            lsq->drainSpmReads(SPM_unit, spmBankBusy);
-            lsq->drainSpmWrites(SPM_unit, spmBankBusy);
-            lsq->drainS2Writes(s2);
+            lsq->tick(SPM_unit, s2, spmBankBusy);
         }
 
         from_fifo = 0;

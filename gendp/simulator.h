@@ -8,6 +8,7 @@
 extern int cycle;
 
 inline int lineAddr(int addr) { return (addr >> 1) << 1; }
+inline int lineOffset(int addr) { return addr & 1; }
 
 typedef int PerfCounter;
 extern PerfCounter totalSpmRequests;

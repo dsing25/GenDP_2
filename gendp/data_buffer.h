@@ -3,11 +3,14 @@
 #include "sys_def.h"
 #include "simulator.h"
 #include <deque>
+#include <vector>
 
 enum class SpmAccessT {
     READ,
     WRITE
 };
+
+enum class AccessType { READ, WRITE };
 
 struct OutstandingRequest {
     int addr;
@@ -16,7 +19,17 @@ struct OutstandingRequest {
     bool single_data;
     LoadResult data;
     bool isVirtualAddr = true;
-    int write_slot = 0;  // for single_data writes: which slot
+};
+
+// S2 outstanding request (shared by reads and writes)
+struct S2PipelineEntry {
+    bool valid = false;
+    AccessType accessType;
+    int addr;       // S2 address
+    int dstAddr;    // opaque metadata (SPM phys addr)
+    int data[2];    // for writes: data to commit
+    int cyclesLeft;
+    bool singleData;
 };
 
 class S2 {
@@ -31,6 +44,30 @@ class S2 {
         int *buffer;
         int buffer_size;
 
+        // Per-bank pipeline slots
+        S2PipelineEntry
+            outstanding[S2_NUM_BANKS][S2_READ_LATENCY];
+
+        void issueRead(int addr, int dstAddr,
+                       bool singleData);
+        void issueWrite(int addr, int* data,
+                        bool singleData);
+
+        struct ReadCompletion {
+            int dstAddr;   // opaque (SPM phys addr)
+            int s2Addr;    // original S2 address
+            int data[2];   // full line data
+        };
+
+        // Tick: advance pipelines. Returns completed
+        // reads. Writes auto-commit to buffer.
+        std::vector<ReadCompletion> tick();
+
+        bool hasPendingOps() const;
+        bool bankFull(int addr) const;
+        static int s2Bank(int addr) {
+            return (addr >> 1) % S2_NUM_BANKS;
+        }
 };
 
 // template <class T>
@@ -86,7 +123,10 @@ class SPM : EventProducer{
 
         void show_data(int addr);
         void show_data(int start_addr, int end_addr, int line_width=64);
-        void access(int addr, int peid, SpmAccessT accessT, bool single_data, LoadResult data=LoadResult(), bool isVirtualAddr=true, int write_slot=0);
+        void access(int addr, int peid, SpmAccessT accessT,
+                    bool single_data,
+                    LoadResult data=LoadResult(),
+                    bool isVirtualAddr=true);
         int& access_magic(int peid, int addr) { return buffer[peid * SPM_BANK_GROUP_SIZE + addr]; }
         std::pair<bool, std::list<Event>*> tick() override;
 
@@ -105,9 +145,11 @@ class SPM : EventProducer{
 
 class SpmDataReadyData {
     public:
-        SpmDataReadyData(int reqId, int* data);
+        SpmDataReadyData(int reqId, int* data,
+                         int physAddr);
         int requestorId;
         int data[SPM_BANDWIDTH];
+        int phys_addr;
 };
 
 
@@ -142,24 +184,11 @@ class comp_instr_buffer {
 // --- Controller Load/Store Queue ---
 
 struct LsqEntry {
-    int addr;           // address in THIS memory
-    int data[2];        // line data (2 ints)
-    bool ready[2];      // which data elements are filled
-    bool isRead;        // true = read from this memory
-    int srcDstAddr;     // address in OTHER memory
-    bool singleData;    // true = single word, false = double
-};
-
-struct S2OutstandingReq {
-    int addr;
-    int cyclesLeft;
-    bool singleData;
-};
-
-struct S2OutstandingWriteReq {
-    int addr;
-    int data[2];
-    int cyclesLeft;
+    int addr;              // addr in THIS memory
+    int data[2];           // line data
+    bool ready[2];         // per-slot readiness
+    AccessType accessType; // READ or WRITE
+    int srcDstAddr;        // addr in OTHER memory
     bool singleData;
 };
 
@@ -167,27 +196,28 @@ class CtrlLSQ {
 public:
     CtrlLSQ();
 
+    // Enqueue transfers
     void enqueueS2ToSpm(int s2Addr, int spmPhysAddr,
-                        bool singleData, S2* s2);
+                        bool singleData);
     void enqueueSpmToS2(int spmPhysAddr, int s2Addr,
                         bool singleData);
 
-    // S2 read/write pipelines
-    void tickS2Outstanding(S2* s2);
-    void tickS2OutstandingWrites(S2* s2);
-    void drainS2Reads(S2* s2);
-    void drainSpmReads(SPM* spm,
-                       bool spmBankBusy[SPM_NUM_BANKS]);
-    void drainSpmWrites(SPM* spm,
-                        bool spmBankBusy[SPM_NUM_BANKS]);
-    void drainS2Writes(S2* s2);
+    // Single tick drains both SPM and S2 queues
+    void tick(SPM* spm, S2* s2,
+              bool spmBankBusy[SPM_NUM_BANKS]);
 
+    // Callbacks when memory completes
+    void dataReadyFromS2(int spmPhysAddr,
+                         int s2Addr, int* lineData);
+    void dataReadyFromSpm(int bank, int* lineData);
+
+    // Status
     bool empty() const;
+    bool hasPendingOps(SPM* spm, S2* s2) const;
     bool spmBankFull(int physAddr) const;
     bool s2BankFull(int addr) const;
-    // Check if n entries can be enqueued without overflow
     bool canEnqueueS2ToSpm(
-        int* spmAddrs, int n) const;
+        int* spmAddrs, int* s2Addrs, int n) const;
     bool canEnqueueSpmToS2(
         int* spmAddrs, int* s2Addrs, int n) const;
 
@@ -202,11 +232,22 @@ public:
 
     std::deque<LsqEntry> spmBanks[SPM_NUM_BANKS];
     std::deque<LsqEntry> s2Banks[S2_NUM_BANKS];
-    std::deque<S2OutstandingReq> s2Outstanding[S2_NUM_BANKS];
-    std::deque<S2OutstandingWriteReq>
-        s2OutstandingWrites[S2_NUM_BANKS];
 
 private:
+    // Pending controller SPM reads awaiting completion
+    struct PendingCtrlRead {
+        bool valid = false;
+        int spmPhysAddr;
+        int s2Addr;
+        bool singleData;
+    };
+    PendingCtrlRead
+        pendingCtrlReads[SPM_NUM_BANKS];
+
+    void drainSpm(SPM* spm,
+                  bool spmBankBusy[SPM_NUM_BANKS]);
+    void drainS2(S2* s2);
+
     int drainPrioritySpm = 0;
     int drainPriorityS2 = 0;
 };

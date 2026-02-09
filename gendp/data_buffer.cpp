@@ -13,9 +13,99 @@ S2::~S2() {
 }
 
 void S2::reset() {
-    int i;
-    for (i = 0; i < buffer_size; i++)
+    for (int i = 0; i < buffer_size; i++)
         buffer[i] = -42;
+    for (int b = 0; b < S2_NUM_BANKS; b++)
+        for (int s = 0; s < S2_READ_LATENCY; s++)
+            outstanding[b][s].valid = false;
+}
+
+void S2::issueRead(int addr, int dstAddr,
+                   bool singleData) {
+    int b = s2Bank(addr);
+    for (int s = 0; s < S2_READ_LATENCY; s++) {
+        if (!outstanding[b][s].valid) {
+            S2PipelineEntry& e = outstanding[b][s];
+            e.valid = true;
+            e.accessType = AccessType::READ;
+            e.addr = addr;
+            e.dstAddr = dstAddr;
+            e.singleData = singleData;
+            e.cyclesLeft = S2_READ_LATENCY;
+            return;
+        }
+    }
+    assert(false && "S2::issueRead: bank full");
+}
+
+void S2::issueWrite(int addr, int* data,
+                    bool singleData) {
+    int b = s2Bank(addr);
+    for (int s = 0; s < S2_READ_LATENCY; s++) {
+        if (!outstanding[b][s].valid) {
+            S2PipelineEntry& e = outstanding[b][s];
+            e.valid = true;
+            e.accessType = AccessType::WRITE;
+            e.addr = addr;
+            e.dstAddr = 0;
+            e.data[0] = data[0];
+            e.data[1] = data[1];
+            e.singleData = singleData;
+            e.cyclesLeft = S2_WRITE_LATENCY;
+            return;
+        }
+    }
+    assert(false && "S2::issueWrite: bank full");
+}
+
+std::vector<S2::ReadCompletion> S2::tick() {
+    std::vector<ReadCompletion> completions;
+    for (int b = 0; b < S2_NUM_BANKS; b++) {
+        for (int s = 0; s < S2_READ_LATENCY; s++) {
+            S2PipelineEntry& e = outstanding[b][s];
+            if (!e.valid) continue;
+            e.cyclesLeft--;
+            if (e.cyclesLeft > 0) continue;
+
+            if (e.accessType == AccessType::READ) {
+                ReadCompletion c;
+                c.dstAddr = e.dstAddr;
+                c.s2Addr = e.addr;
+                int base = lineAddr(e.addr);
+                c.data[0] = buffer[base];
+                c.data[1] = buffer[base + 1];
+                completions.push_back(c);
+            } else {
+                // WRITE: commit to buffer
+                if (e.singleData) {
+                    int s2 = lineOffset(e.addr);
+                    buffer[lineAddr(e.addr) + s2] =
+                        e.data[s2];
+                } else {
+                    int base = lineAddr(e.addr);
+                    buffer[base] = e.data[0];
+                    buffer[base + 1] = e.data[1];
+                }
+            }
+            e.valid = false;
+        }
+    }
+    return completions;
+}
+
+bool S2::hasPendingOps() const {
+    for (int b = 0; b < S2_NUM_BANKS; b++)
+        for (int s = 0; s < S2_READ_LATENCY; s++)
+            if (outstanding[b][s].valid)
+                return true;
+    return false;
+}
+
+bool S2::bankFull(int addr) const {
+    int b = s2Bank(addr);
+    for (int s = 0; s < S2_READ_LATENCY; s++)
+        if (!outstanding[b][s].valid) return false;
+    return true;
 }
 
 // template <typename T>
@@ -143,7 +233,9 @@ void SPM::show_data(int start_addr, int end_addr, int line_width) {
     } else fprintf(stderr, "SPM show data addr error.\n");
 }
 
-void SPM::access(int addr, int peid, SpmAccessT access_t, bool single_data, LoadResult data, bool isVirtualAddr, int write_slot){
+void SPM::access(int addr, int peid, SpmAccessT access_t,
+                 bool single_data, LoadResult data,
+                 bool isVirtualAddr){
     // Validate physical address (compute from virtual if needed)
     int phys_addr = isVirtualAddr ? (peid * SPM_BANK_GROUP_SIZE + addr) : addr;
     if (phys_addr < 0 || phys_addr >= SPM_ADDR_NUM) {
@@ -164,7 +256,6 @@ void SPM::access(int addr, int peid, SpmAccessT access_t, bool single_data, Load
     newReq->data        = data;
     newReq->single_data = single_data;
     newReq->isVirtualAddr = isVirtualAddr;
-    newReq->write_slot  = write_slot;
     requests[bank]      = newReq;
     cycles_left[bank]   = SPM_ACCESS_LATENCY;
     mark_active_producer();
@@ -195,44 +286,62 @@ std::pair<bool, std::list<Event>*> SPM::tick(){
     for(int bank = 0; bank < SPM_NUM_BANKS; bank++){
         OutstandingRequest* req = requests[bank];
         if (req == nullptr) continue;
-        // Use req->peid for physical address calculation (not the bank index)
-        int phys_addr = req->isVirtualAddr ? (req->peid * SPM_BANK_GROUP_SIZE + req->addr) : req->addr;
-        if (phys_addr < 0 || phys_addr >= buffer_size) {
-            fprintf(stderr, "SPM tick error: phys_addr=%d out of bounds (buf_size=%d) for PE[%d] "
-                    "vaddr=%d isVirtual=%d\n",
-                    phys_addr, buffer_size, req->peid, req->addr, req->isVirtualAddr);
+        int phys_addr = req->isVirtualAddr
+            ? (req->peid * SPM_BANK_GROUP_SIZE
+               + req->addr)
+            : req->addr;
+        if (phys_addr < 0
+            || phys_addr >= buffer_size) {
+            fprintf(stderr,
+                "SPM tick error: phys_addr=%d "
+                "out of bounds (buf_size=%d) "
+                "for PE[%d] vaddr=%d "
+                "isVirtual=%d\n",
+                phys_addr, buffer_size,
+                req->peid, req->addr,
+                req->isVirtualAddr);
             exit(-1);
         }
+        int base = lineAddr(phys_addr);
         cycles_left[bank]--;
         if(cycles_left[bank] == 0){
             if(req->access_t == SpmAccessT::WRITE){
                 if (req->single_data) {
-                    int s = req->write_slot;
-                    buffer[phys_addr + s] =
+                    int s = lineOffset(phys_addr);
+                    buffer[base + s] =
                         req->data.data[s];
 #ifdef PROFILE
-                    printf("PE[%d]@%d write SPM[%d]=%d\n",
-                           req->peid, cycle,
-                           req->addr + s,
-                           req->data.data[s]);
+                    printf(
+                        "PE[%d]@%d write "
+                        "SPM[%d]=%d\n",
+                        req->peid, cycle,
+                        base + s,
+                        req->data.data[s]);
 #endif
                 } else {
-                    for (int j = 0; j < SPM_BANDWIDTH; j++){
-                        buffer[phys_addr + j] =
+                    for (int j = 0;
+                         j < SPM_BANDWIDTH; j++) {
+                        buffer[base + j] =
                             req->data.data[j];
 #ifdef PROFILE
                         printf(
-                            "PE[%d]@%d write SPM[%d]=%d\n",
+                            "PE[%d]@%d write "
+                            "SPM[%d]=%d\n",
                             req->peid, cycle,
-                            req->addr + j,
+                            base + j,
                             req->data.data[j]);
 #endif
                     }
                 }
-            } else if (req->access_t == SpmAccessT::READ){
-                // generate SpmDataReadyEv - use req->peid as requestor ID
-                void* data = static_cast<void*>(new SpmDataReadyData(req->peid, &buffer[phys_addr]));
-                events->push_back(Event(EventType::SPM_DATA_READY, data));
+            } else if (
+                req->access_t == SpmAccessT::READ) {
+                void* data = static_cast<void*>(
+                    new SpmDataReadyData(
+                        req->peid, &buffer[base],
+                        base));
+                events->push_back(
+                    Event(EventType::SPM_DATA_READY,
+                          data));
             } else {
                 fprintf(stderr, "SPM tick error: unknown access type.\n");
                 exit(-1);
@@ -246,10 +355,11 @@ std::pair<bool, std::list<Event>*> SPM::tick(){
     return std::make_pair(!requestsOutstanding, events);
 }
 
-SpmDataReadyData::SpmDataReadyData(int reqId, int* data) : requestorId(reqId) {
-    for (int i = 0; i < SPM_BANDWIDTH; i++) {
+SpmDataReadyData::SpmDataReadyData(
+    int reqId, int* data, int physAddr)
+    : requestorId(reqId), phys_addr(physAddr) {
+    for (int i = 0; i < SPM_BANDWIDTH; i++)
         this->data[i] = data[i];
-    }
 }
 
 ctrl_instr_buffer::ctrl_instr_buffer(int size) {
@@ -306,232 +416,240 @@ void comp_instr_buffer::show_data(int addr) {
 
 // --- CtrlLSQ ---
 
-CtrlLSQ::CtrlLSQ() {}
+CtrlLSQ::CtrlLSQ() {
+    for (int b = 0; b < SPM_NUM_BANKS; b++)
+        pendingCtrlReads[b].valid = false;
+}
 
-void CtrlLSQ::enqueueS2ToSpm(int s2Addr, int spmPhysAddr,
-                              bool singleData, S2* s2) {
-    // Controller reads S2 directly and pre-fills SPM
-    // write entry. No S2 read pipeline needed since the
-    // controller has direct access to S2 data.
+// S2->SPM: read S2, write SPM
+void CtrlLSQ::enqueueS2ToSpm(
+    int s2Addr, int spmPhysAddr, bool singleData) {
+    // S2 read entry
+    LsqEntry s2E{};
+    s2E.addr = s2Addr;
+    s2E.accessType = AccessType::READ;
+    s2E.srcDstAddr = spmPhysAddr;
+    s2E.singleData = singleData;
+    s2E.ready[0] = false;
+    s2E.ready[1] = false;
+    s2Banks[s2Bank(s2Addr)].push_back(s2E);
+
+    // SPM write entry (unfilled, waiting for S2 data)
     LsqEntry spmE{};
     spmE.addr = spmPhysAddr;
-    spmE.isRead = false;
+    spmE.accessType = AccessType::WRITE;
     spmE.srcDstAddr = s2Addr;
     spmE.singleData = singleData;
     if (singleData) {
-        spmE.data[0] = s2->buffer[s2Addr];
-        spmE.ready[0] = true;
-        spmE.ready[1] = false;
+        int slot = lineOffset(spmPhysAddr);
+        spmE.ready[slot] = false;     // waiting
+        spmE.ready[1 - slot] = true;  // unused
     } else {
-        int base = (s2Addr >> 1) << 1;
-        spmE.data[0] = s2->buffer[base];
-        spmE.data[1] = s2->buffer[base + 1];
-        spmE.ready[0] = true;
-        spmE.ready[1] = true;
+        spmE.ready[0] = false;
+        spmE.ready[1] = false;
     }
     spmBanks[spmBank(spmPhysAddr)].push_back(spmE);
 }
 
-void CtrlLSQ::enqueueSpmToS2(int spmPhysAddr, int s2Addr,
-                              bool singleData) {
+// SPM->S2: read SPM, write S2
+void CtrlLSQ::enqueueSpmToS2(
+    int spmPhysAddr, int s2Addr, bool singleData) {
     // SPM read entry
     LsqEntry spmE{};
     spmE.addr = spmPhysAddr;
-    spmE.isRead = true;
+    spmE.accessType = AccessType::READ;
     spmE.srcDstAddr = s2Addr;
     spmE.singleData = singleData;
     spmE.ready[0] = false;
     spmE.ready[1] = false;
     spmBanks[spmBank(spmPhysAddr)].push_back(spmE);
 
-    // S2 write entry
-    LsqEntry s2e{};
-    s2e.addr = s2Addr;
-    s2e.isRead = false;
-    s2e.srcDstAddr = spmPhysAddr;
-    s2e.singleData = singleData;
-    s2e.ready[0] = false;
-    s2e.ready[1] = false;
-    s2Banks[s2Bank(s2Addr)].push_back(s2e);
-}
-
-void CtrlLSQ::tickS2Outstanding(S2* s2) {
-    // S2→SPM reads are now pre-filled at enqueue time,
-    // so this pipeline is unused for that direction.
-    // Kept for potential future use.
-    for (int b = 0; b < S2_NUM_BANKS; b++) {
-        if (s2Outstanding[b].empty()) continue;
-        S2OutstandingReq& req = s2Outstanding[b].front();
-        req.cyclesLeft--;
-        if (req.cyclesLeft <= 0) {
-            // Match against SPM write entries
-            bool found = false;
-            for (int sb = 0; sb < SPM_NUM_BANKS
-                 && !found; sb++) {
-                for (auto& spmE : spmBanks[sb]) {
-                    if (!spmE.isRead &&
-                        spmE.srcDstAddr == req.addr &&
-                        !spmE.ready[0]) {
-                        if (req.singleData) {
-                            spmE.data[0] =
-                                s2->buffer[req.addr];
-                            spmE.ready[0] = true;
-                        } else {
-                            int base =
-                                (req.addr >> 1) << 1;
-                            spmE.data[0] =
-                                s2->buffer[base];
-                            spmE.data[1] =
-                                s2->buffer[base + 1];
-                            spmE.ready[0] = true;
-                            spmE.ready[1] = true;
-                        }
-                        found = true;
-                        break;
-                    }
-                }
-            }
-            if (!found) {
-                fprintf(stderr,
-                    "LSQ: S2 read completed at addr=%d "
-                    "single=%d but no matching SPM write "
-                    "entry found!\n",
-                    req.addr, req.singleData);
-            }
-            s2Outstanding[b].pop_front();
-        }
+    // S2 write entry (unfilled)
+    LsqEntry s2E{};
+    s2E.addr = s2Addr;
+    s2E.accessType = AccessType::WRITE;
+    s2E.srcDstAddr = spmPhysAddr;
+    s2E.singleData = singleData;
+    if (singleData) {
+        int slot = lineOffset(s2Addr);
+        s2E.ready[slot] = false;
+        s2E.ready[1 - slot] = true;
+    } else {
+        s2E.ready[0] = false;
+        s2E.ready[1] = false;
     }
+    s2Banks[s2Bank(s2Addr)].push_back(s2E);
 }
 
-void CtrlLSQ::drainS2Reads(S2* s2) {
-    for (int bi = 0; bi < S2_NUM_BANKS; bi++) {
-        int b = (drainPriorityS2 + bi) % S2_NUM_BANKS;
-        if (s2Banks[b].empty()) continue;
-        LsqEntry& entry = s2Banks[b].front();
-        if (!entry.isRead) continue;
-
-        // Issue to S2 outstanding pipeline
-        S2OutstandingReq req{};
-        req.addr = entry.addr;
-        req.cyclesLeft = S2_READ_LATENCY - 1;
-        req.singleData = entry.singleData;
-        s2Outstanding[b].push_back(req);
-        s2Banks[b].pop_front();
-    }
-    drainPriorityS2 =
-        (drainPriorityS2 + 1) % S2_NUM_BANKS;
-}
-
-void CtrlLSQ::drainSpmWrites(SPM* spm,
-                              bool spmBankBusy[SPM_NUM_BANKS]) {
+// Drain SPM bank queues: issue reads/writes to SPM
+void CtrlLSQ::drainSpm(
+    SPM* spm, bool spmBankBusy[SPM_NUM_BANKS]) {
     for (int bi = 0; bi < SPM_NUM_BANKS; bi++) {
-        int b = (drainPrioritySpm + bi) % SPM_NUM_BANKS;
+        int b = (drainPrioritySpm + bi)
+                % SPM_NUM_BANKS;
         if (spmBanks[b].empty()) continue;
-        LsqEntry& entry = spmBanks[b].front();
-        if (entry.isRead) continue;
         if (spmBankBusy[b]) continue;
+        LsqEntry& entry = spmBanks[b].front();
 
-        bool dataReady = entry.singleData
-            ? entry.ready[0]
-            : (entry.ready[0] && entry.ready[1]);
-        if (!dataReady) continue;
-
-        // Magic write to SPM buffer
-        if (entry.singleData) {
-            spm->buffer[entry.addr] = entry.data[0];
-        } else {
-            int base = (entry.addr >> 1) << 1;
-            spm->buffer[base]     = entry.data[0];
-            spm->buffer[base + 1] = entry.data[1];
+        if (entry.accessType == AccessType::READ) {
+            // Issue read to SPM
+            spm->access(entry.addr, CTRL_PEID,
+                SpmAccessT::READ, false,
+                LoadResult(), false);
+            pendingCtrlReads[b].valid = true;
+            pendingCtrlReads[b].spmPhysAddr =
+                entry.addr;
+            pendingCtrlReads[b].s2Addr =
+                entry.srcDstAddr;
+            pendingCtrlReads[b].singleData =
+                entry.singleData;
+            spmBankBusy[b] = true;
+            spmBanks[b].pop_front();
+        } else {  // WRITE
+            int slot = lineOffset(entry.addr);
+            bool dataReady = entry.singleData
+                ? entry.ready[slot]
+                : (entry.ready[0] && entry.ready[1]);
+            if (!dataReady) continue;
+            LoadResult lr;
+            lr.data[0] = entry.data[0];
+            lr.data[1] = entry.data[1];
+            spm->access(entry.addr, CTRL_PEID,
+                SpmAccessT::WRITE, entry.singleData,
+                lr, false);
+            spmBankBusy[b] = true;
+            spmBanks[b].pop_front();
         }
-        spmBanks[b].pop_front();
     }
     drainPrioritySpm =
         (drainPrioritySpm + 1) % SPM_NUM_BANKS;
 }
 
-void CtrlLSQ::drainSpmReads(SPM* spm,
-                             bool spmBankBusy[SPM_NUM_BANKS]) {
-    for (int bi = 0; bi < SPM_NUM_BANKS; bi++) {
-        int b = (drainPrioritySpm + bi) % SPM_NUM_BANKS;
-        if (spmBanks[b].empty()) continue;
-        LsqEntry& entry = spmBanks[b].front();
-        if (!entry.isRead) continue;
-        if (spmBankBusy[b]) continue;
-
-        // Match against S2 write entries
-        bool found = false;
-        for (int sb = 0; sb < S2_NUM_BANKS
-             && !found; sb++) {
-            for (auto& s2e : s2Banks[sb]) {
-                if (!s2e.isRead &&
-                    s2e.srcDstAddr == entry.addr &&
-                    !s2e.ready[0]) {
-                    if (entry.singleData) {
-                        s2e.data[0] =
-                            spm->buffer[entry.addr];
-                        s2e.ready[0] = true;
-                    } else {
-                        int base =
-                            (entry.addr >> 1) << 1;
-                        s2e.data[0] =
-                            spm->buffer[base];
-                        s2e.data[1] =
-                            spm->buffer[base + 1];
-                        s2e.ready[0] = true;
-                        s2e.ready[1] = true;
-                    }
-                    found = true;
-                    break;
-                }
-            }
-        }
-        spmBankBusy[b] = true;
-        spmBanks[b].pop_front();
-    }
-}
-
-void CtrlLSQ::drainS2Writes(S2* s2) {
+// Drain S2 bank queues: issue reads/writes to S2
+void CtrlLSQ::drainS2(S2* s2) {
     for (int bi = 0; bi < S2_NUM_BANKS; bi++) {
-        int b = (drainPriorityS2 + bi) % S2_NUM_BANKS;
+        int b = (drainPriorityS2 + bi)
+                % S2_NUM_BANKS;
         if (s2Banks[b].empty()) continue;
         LsqEntry& entry = s2Banks[b].front();
-        if (entry.isRead) continue;
 
-        bool dataReady = entry.singleData
-            ? entry.ready[0]
-            : (entry.ready[0] && entry.ready[1]);
-        if (!dataReady) continue;
-
-        // Issue to S2 write pipeline
-        S2OutstandingWriteReq wreq{};
-        wreq.addr = entry.addr;
-        wreq.data[0] = entry.data[0];
-        wreq.data[1] = entry.data[1];
-        wreq.cyclesLeft = S2_WRITE_LATENCY - 1;
-        wreq.singleData = entry.singleData;
-        s2OutstandingWrites[b].push_back(wreq);
-        s2Banks[b].pop_front();
-    }
-}
-
-void CtrlLSQ::tickS2OutstandingWrites(S2* s2) {
-    for (int b = 0; b < S2_NUM_BANKS; b++) {
-        if (s2OutstandingWrites[b].empty()) continue;
-        S2OutstandingWriteReq& req =
-            s2OutstandingWrites[b].front();
-        req.cyclesLeft--;
-        if (req.cyclesLeft <= 0) {
-            if (req.singleData) {
-                s2->buffer[req.addr] = req.data[0];
-            } else {
-                int base = (req.addr >> 1) << 1;
-                s2->buffer[base]     = req.data[0];
-                s2->buffer[base + 1] = req.data[1];
-            }
-            s2OutstandingWrites[b].pop_front();
+        if (entry.accessType == AccessType::READ) {
+            if (s2->bankFull(entry.addr)) continue;
+            s2->issueRead(entry.addr,
+                entry.srcDstAddr, entry.singleData);
+            s2Banks[b].pop_front();
+        } else {  // WRITE
+            int slot = lineOffset(entry.addr);
+            bool dataReady = entry.singleData
+                ? entry.ready[slot]
+                : (entry.ready[0] && entry.ready[1]);
+            if (!dataReady) continue;
+            if (s2->bankFull(entry.addr)) continue;
+            s2->issueWrite(entry.addr, entry.data,
+                entry.singleData);
+            s2Banks[b].pop_front();
         }
     }
+    drainPriorityS2 =
+        (drainPriorityS2 + 1) % S2_NUM_BANKS;
+}
+
+void CtrlLSQ::tick(
+    SPM* spm, S2* s2,
+    bool spmBankBusy[SPM_NUM_BANKS]) {
+    drainSpm(spm, spmBankBusy);
+    drainS2(s2);
+}
+
+// Called when S2 read completes -> fill SPM write entry
+void CtrlLSQ::dataReadyFromS2(
+    int spmPhysAddr, int s2Addr, int* lineData) {
+    int targetBank = spmBank(spmPhysAddr);
+    int readLine = lineAddr(s2Addr);
+
+    for (auto& spmE : spmBanks[targetBank]) {
+        if (spmE.accessType != AccessType::WRITE)
+            continue;
+        int S = spmE.srcDstAddr;  // S2 source addr
+        bool matched = false;
+
+        if (spmE.singleData) {
+            int slot = lineOffset(spmE.addr);
+            if (!spmE.ready[slot]
+                && lineAddr(S) == readLine) {
+                spmE.data[slot] =
+                    lineData[lineOffset(S)];
+                spmE.ready[slot] = true;
+                return;
+            }
+        } else {
+            if (!spmE.ready[0]
+                && lineAddr(S) == readLine) {
+                spmE.data[0] =
+                    lineData[lineOffset(S)];
+                spmE.ready[0] = true;
+                matched = true;
+            }
+            if (!spmE.ready[1]
+                && lineAddr(S + 1) == readLine) {
+                spmE.data[1] =
+                    lineData[lineOffset(S + 1)];
+                spmE.ready[1] = true;
+                matched = true;
+            }
+            if (matched) return;
+        }
+    }
+    assert(false &&
+        "dataReadyFromS2: no matching SPM write");
+}
+
+// Called when SPM read completes -> fill S2 write entry
+void CtrlLSQ::dataReadyFromSpm(
+    int bank, int* lineData) {
+    assert(pendingCtrlReads[bank].valid);
+    auto& pr = pendingCtrlReads[bank];
+    int readLine = lineAddr(pr.spmPhysAddr);
+    int targetS2Bank = s2Bank(pr.s2Addr);
+
+    for (auto& s2E : s2Banks[targetS2Bank]) {
+        if (s2E.accessType != AccessType::WRITE)
+            continue;
+        int S = s2E.srcDstAddr;  // SPM source addr
+        bool matched = false;
+
+        if (s2E.singleData) {
+            int slot = lineOffset(s2E.addr);
+            if (!s2E.ready[slot]
+                && lineAddr(S) == readLine) {
+                s2E.data[slot] =
+                    lineData[lineOffset(S)];
+                s2E.ready[slot] = true;
+                matched = true;
+            }
+        } else {
+            if (!s2E.ready[0]
+                && lineAddr(S) == readLine) {
+                s2E.data[0] =
+                    lineData[lineOffset(S)];
+                s2E.ready[0] = true;
+                matched = true;
+            }
+            if (!s2E.ready[1]
+                && lineAddr(S + 1) == readLine) {
+                s2E.data[1] =
+                    lineData[lineOffset(S + 1)];
+                s2E.ready[1] = true;
+                matched = true;
+            }
+        }
+        if (matched) {
+            pr.valid = false;
+            return;
+        }
+    }
+    assert(false &&
+        "dataReadyFromSpm: no matching S2 write");
 }
 
 bool CtrlLSQ::spmBankFull(int physAddr) const {
@@ -547,21 +665,26 @@ bool CtrlLSQ::s2BankFull(int addr) const {
 }
 
 bool CtrlLSQ::canEnqueueS2ToSpm(
-        int* spmAddrs, int n) const {
-    // S2→SPM only adds to spmBanks (pre-filled)
-    int extra[SPM_NUM_BANKS] = {};
-    for (int i = 0; i < n; i++)
-        extra[spmBank(spmAddrs[i])]++;
+    int* spmAddrs, int* s2Addrs, int n) const {
+    int spmExtra[SPM_NUM_BANKS] = {};
+    int s2Extra[S2_NUM_BANKS] = {};
+    for (int i = 0; i < n; i++) {
+        spmExtra[spmBank(spmAddrs[i])]++;
+        s2Extra[s2Bank(s2Addrs[i])]++;
+    }
     for (int b = 0; b < SPM_NUM_BANKS; b++)
-        if ((int)spmBanks[b].size() + extra[b]
+        if ((int)spmBanks[b].size() + spmExtra[b]
+            > LSQ_MAX_ENTRIES_PER_BANK)
+            return false;
+    for (int b = 0; b < S2_NUM_BANKS; b++)
+        if ((int)s2Banks[b].size() + s2Extra[b]
             > LSQ_MAX_ENTRIES_PER_BANK)
             return false;
     return true;
 }
 
 bool CtrlLSQ::canEnqueueSpmToS2(
-        int* spmAddrs, int* s2Addrs, int n) const {
-    // SPM→S2 adds to both spmBanks and s2Banks
+    int* spmAddrs, int* s2Addrs, int n) const {
     int spmExtra[SPM_NUM_BANKS] = {};
     int s2Extra[S2_NUM_BANKS] = {};
     for (int i = 0; i < n; i++) {
@@ -584,9 +707,17 @@ bool CtrlLSQ::empty() const {
         if (!spmBanks[b].empty()) return false;
     for (int b = 0; b < S2_NUM_BANKS; b++)
         if (!s2Banks[b].empty()) return false;
-    for (int b = 0; b < S2_NUM_BANKS; b++)
-        if (!s2Outstanding[b].empty()) return false;
-    for (int b = 0; b < S2_NUM_BANKS; b++)
-        if (!s2OutstandingWrites[b].empty()) return false;
     return true;
+}
+
+bool CtrlLSQ::hasPendingOps(
+    SPM* spm, S2* s2) const {
+    if (!empty()) return true;
+    for (int b = 0; b < SPM_NUM_BANKS; b++) {
+        if (pendingCtrlReads[b].valid) return true;
+        if (spm->requests[b]
+            && spm->requests[b]->peid == CTRL_PEID)
+            return true;
+    }
+    return s2->hasPendingOps();
 }

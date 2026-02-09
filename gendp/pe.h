@@ -10,19 +10,19 @@ class pe {
     public:
         struct OutstandingReq{
             int dst;
-            int addr;
+            int addr;       // destination addr (reg/gr)
+            int spm_addr;   // original SPM access addr
             bool single_load;
             bool valid;
-            int addr_odd = 0;
             OutstandingReq()
-                : dst(-42), addr(-42), single_load(false),
-                  valid(false), addr_odd(0) {}
+                : dst(-42), addr(-42), spm_addr(0),
+                  single_load(false), valid(false) {}
             void clear() {
                 dst = -42;
                 addr = -42;
+                spm_addr = 0;
                 single_load = false;
                 valid = false;
-                addr_odd = 0;
             }
         };
 
@@ -87,7 +87,7 @@ class pe {
         OutstandingReq outstanding_req;
 
         // Set by load() when reading SPM, consumed by store()
-        int last_spm_load_addr_odd = 0;
+        int last_spm_load_addr = 0;
 
 
 
