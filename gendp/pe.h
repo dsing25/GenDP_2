@@ -13,12 +13,16 @@ class pe {
             int addr;
             bool single_load;
             bool valid;
-            OutstandingReq() : dst(-42), addr(-42), single_load(false),valid(false) {}
+            int addr_odd = 0;
+            OutstandingReq()
+                : dst(-42), addr(-42), single_load(false),
+                  valid(false), addr_odd(0) {}
             void clear() {
                 dst = -42;
                 addr = -42;
                 single_load = false;
                 valid = false;
+                addr_odd = 0;
             }
         };
 
@@ -81,6 +85,9 @@ class pe {
 
         //-1 means there is no outstanding request
         OutstandingReq outstanding_req;
+
+        // Set by load() when reading SPM, consumed by store()
+        int last_spm_load_addr_odd = 0;
 
 
 

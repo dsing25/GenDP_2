@@ -253,7 +253,7 @@ def wfa_main_instruction():
     #prime PE compute for current block before entering block loop
     # NOTE: do not reset PE PC here; allow INIT_WF to complete (gr14 setup) before block compute.
     #skip block loop if no remaining blocks
-    f.write(data_movement_instruction(0, 0, 0, 0, 365, 0, 1, 0, 7, 0, beq))                          # beq gr[7] gr[0] 365
+    f.write(data_movement_instruction(0, 0, 0, 0, 369, 0, 1, 0, 7, 0, beq))                          # beq gr[7] gr[0] 369
 
 #BLOCK LOOP
     #load inputs o,m,i,d to NEXT_BLOCK magic(2)
@@ -278,7 +278,9 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 3*MEM_BLOCK_SIZE, 10, addi))            # gr[1]=gr[10]+3*MEM_BLOCK_SIZE
     loadSpmRegMapped(0, 2, 0, 0, False)                                                                 # D
     f.write(data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 1, 9, subi))                           # gr[9]-=1
-    #TODO wait lsq
+    #barrier (no-op until LSQ exists)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     #wait pe
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # bne 1 gr[13] 0
     #SWAP THIS_BLOCK (current), NEXT_BLOCK (next)
@@ -339,10 +341,12 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, BLOCK_0_START, 0, si))                # gr[10]=BLOCK_0_START
     # Display combined inputs/outputs for debugging
     f.write(write_magic(6));
-    #TODO wait lsq
+    #barrier (no-op until LSQ exists)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     #increment count
     f.write(data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 1, 9, addi))                         # gr[9]+=1
-    f.write(data_movement_instruction(gr, gr, 0, 0, -363, 0, 1, 0, 9, 7, blt))                       # blt gr[9] gr[7] -363
+    f.write(data_movement_instruction(gr, gr, 0, 0, -367, 0, 1, 0, 9, 7, blt))                       # blt gr[9] gr[7] -367
 
 #END BLOCK LOOP. NEW WF
     #flush final computed block (drain NEXT)
@@ -434,7 +438,7 @@ def wfa_main_instruction():
     f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, N_WFS, 3, bne))                       # if gr[3] != N_WFS, skip reset
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))                            # gr[3] = 0
     #JMP LOOP PROCESS_WF
-    f.write(data_movement_instruction(0, 0, 0, 0, -755, 0, 0, 0, 0, 0, jump))                        # jump -755 (LOOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, -759, 0, 0, 0, 0, 0, jump))                        # jump -759 (LOOP)
 
 #EXIT:
     f.write(write_magic(5))                                                                           # magic(5) - print final state

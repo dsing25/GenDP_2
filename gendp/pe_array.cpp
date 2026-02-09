@@ -13,6 +13,7 @@
 
 PerfCounter bankConflictStalls = 0;
 PerfCounter totalSpmRequests = 0;
+PerfCounter lsqFullStalls = 0;
 
 pe_array::pe_array(int input_size, int output_size) {
 
@@ -23,6 +24,7 @@ pe_array::pe_array(int input_size, int output_size) {
     input_buffer = (int*)calloc(input_buffer_size, sizeof(int));
     output_buffer = (int*)calloc(output_buffer_size, sizeof(int));
     s2 = new S2(S2_BUFFER_INTS);
+    lsq = new CtrlLSQ();
 
     main_addressing_register[0] = 0;
     main_PC = 0;
@@ -40,6 +42,7 @@ pe_array::~pe_array() {
     free(input_buffer);
     free(output_buffer);
     delete s2;
+    delete lsq;
     for (i = 0; i < PE_NUM; i++)
         delete pe_unit[i];
     delete SPM_unit;
@@ -614,8 +617,55 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #ifdef PROFILE
         printf("Move ");
 #endif
-        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd);
-        store(dest, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd);
+        if (src == CTRL_S2 && dest == CTRL_SPM) {
+            int s2Addr = reg_immBar_flag_1
+                ? main_addressing_register[sext_imm_1]
+                  + main_addressing_register[reg_1]
+                : sext_imm_1
+                  + main_addressing_register[reg_1];
+            int spmAddr = reg_immBar_flag_0
+                ? main_addressing_register[sext_imm_0]
+                  + main_addressing_register[reg_0]
+                : sext_imm_0
+                  + main_addressing_register[reg_0];
+            if (lsq->spmBankFull(spmAddr)) {
+                lsqFullStalls++;
+                return 0;
+            }
+#ifdef PROFILE
+            printf("S2[%d] -> SPM[%d] via LSQ\n",
+                   s2Addr, spmAddr);
+#endif
+            lsq->enqueueS2ToSpm(
+                s2Addr, spmAddr, true, s2);
+        } else if (src == CTRL_SPM && dest == CTRL_S2) {
+            int spmAddr = reg_immBar_flag_1
+                ? main_addressing_register[sext_imm_1]
+                  + main_addressing_register[reg_1]
+                : sext_imm_1
+                  + main_addressing_register[reg_1];
+            int s2Addr = reg_immBar_flag_0
+                ? main_addressing_register[sext_imm_0]
+                  + main_addressing_register[reg_0]
+                : sext_imm_0
+                  + main_addressing_register[reg_0];
+            if (lsq->spmBankFull(spmAddr) ||
+                lsq->s2BankFull(s2Addr)) {
+                lsqFullStalls++;
+                return 0;
+            }
+#ifdef PROFILE
+            printf("SPM[%d] -> S2[%d] via LSQ\n",
+                   spmAddr, s2Addr);
+#endif
+            lsq->enqueueSpmToS2(
+                spmAddr, s2Addr, true);
+        } else {
+            data = load(src, reg_immBar_flag_1,
+                        sext_imm_1, reg_1, simd);
+            store(dest, reg_immBar_flag_0,
+                  sext_imm_0, reg_0, data, simd);
+        }
         if (reg_auto_increasement_flag_0)
             main_addressing_register[reg_0]++;
         if (reg_auto_increasement_flag_1)
@@ -657,12 +707,67 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             exit(-1);
         }
 
-        if (src_is_spm && dest_is_s2) {
-            for (i = 0; i < 8; i++)
-                s2->buffer[dest_addr + i] = SPM_unit->buffer[src_addr + i];
-        } else {
-            for (i = 0; i < 8; i++)
-                SPM_unit->buffer[dest_addr + i] = s2->buffer[src_addr + i];
+        {
+            // Compute entry addresses and check capacity
+            int nEntries;
+            int spmAddrs[8], s2Addrs[8];
+            if (src_addr % 2 == 0
+                && dest_addr % 2 == 0) {
+                nEntries = 4;
+                for (i = 0; i < 4; i++) {
+                    spmAddrs[i] = (dest_is_spm
+                        ? dest_addr : src_addr) + 2*i;
+                    s2Addrs[i] = (dest_is_s2
+                        ? dest_addr : src_addr) + 2*i;
+                }
+            } else {
+                nEntries = 8;
+                for (i = 0; i < 8; i++) {
+                    spmAddrs[i] = (dest_is_spm
+                        ? dest_addr : src_addr) + i;
+                    s2Addrs[i] = (dest_is_s2
+                        ? dest_addr : src_addr) + i;
+                }
+            }
+            // Check all entries fit before issuing any
+            bool canFit;
+            if (src_is_s2 && dest_is_spm)
+                canFit = lsq->canEnqueueS2ToSpm(
+                    spmAddrs, nEntries);
+            else
+                canFit = lsq->canEnqueueSpmToS2(
+                    spmAddrs, s2Addrs, nEntries);
+            if (!canFit) {
+                lsqFullStalls++;
+                return 0;
+            }
+            // Enqueue all entries
+            if (src_addr % 2 == 0
+                && dest_addr % 2 == 0) {
+                for (i = 0; i < 4; i++) {
+                    if (src_is_s2 && dest_is_spm)
+                        lsq->enqueueS2ToSpm(
+                            src_addr + 2*i,
+                            dest_addr + 2*i,
+                            false, s2);
+                    else
+                        lsq->enqueueSpmToS2(
+                            src_addr + 2*i,
+                            dest_addr + 2*i, false);
+                }
+            } else {
+                for (i = 0; i < 8; i++) {
+                    if (src_is_s2 && dest_is_spm)
+                        lsq->enqueueS2ToSpm(
+                            src_addr + i,
+                            dest_addr + i,
+                            true, s2);
+                    else
+                        lsq->enqueueSpmToS2(
+                            src_addr + i,
+                            dest_addr + i, true);
+                }
+            }
         }
 
         if (reg_auto_increasement_flag_0)
@@ -727,6 +832,18 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 //         printf("addi_8 gr[%d] %d gr[%d] (%lx %d %lx)\n", rd, sext_imm_1, rs2, main_addressing_register[rd], sext_imm_1, main_addressing_register[rs2]);
 // #endif
 //         (*PC)++;
+    } else if (opcode == CTRL_BARRIER) {
+        if (lsq->empty()) {
+#ifdef PROFILE
+            printf("Barrier: LSQ empty, advance\n");
+#endif
+            (*PC)++;
+        }
+#ifdef PROFILE
+        else {
+            printf("Barrier: LSQ stall\n");
+        }
+#endif
     } else if (opcode == 8) {       // bne rs1 rs2 offset
         rs1 = sext_imm_1;
         rs2 = reg_1;
@@ -1041,8 +1158,38 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
 #ifdef PROFILE
         printf("Move ");
 #endif
-        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd);
-        store(dest, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd);
+        if (src == CTRL_S2 && dest == CTRL_SPM) {
+            int s2Addr = reg_immBar_flag_1
+                ? main_addressing_register[sext_imm_1]
+                  + main_addressing_register[reg_1]
+                : sext_imm_1
+                  + main_addressing_register[reg_1];
+            int spmAddr = reg_immBar_flag_0
+                ? main_addressing_register[sext_imm_0]
+                  + main_addressing_register[reg_0]
+                : sext_imm_0
+                  + main_addressing_register[reg_0];
+            lsq->enqueueS2ToSpm(
+                s2Addr, spmAddr, true, s2);
+        } else if (src == CTRL_SPM && dest == CTRL_S2) {
+            int spmAddr = reg_immBar_flag_1
+                ? main_addressing_register[sext_imm_1]
+                  + main_addressing_register[reg_1]
+                : sext_imm_1
+                  + main_addressing_register[reg_1];
+            int s2Addr = reg_immBar_flag_0
+                ? main_addressing_register[sext_imm_0]
+                  + main_addressing_register[reg_0]
+                : sext_imm_0
+                  + main_addressing_register[reg_0];
+            lsq->enqueueSpmToS2(
+                spmAddr, s2Addr, true);
+        } else {
+            data = load(src, reg_immBar_flag_1,
+                        sext_imm_1, reg_1, simd);
+            store(dest, reg_immBar_flag_0,
+                  sext_imm_0, reg_0, data, simd);
+        }
         if (reg_auto_increasement_flag_0)
             main_addressing_register[reg_0]++;
         if (reg_auto_increasement_flag_1)
@@ -1250,14 +1397,40 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             } else {
                 // Grant access
                 SPM_unit->access(req->addr, req->peid, req->access_t,
-                                 req->single_data, req->data, req->isVirtualAddr);
+                                 req->single_data, req->data,
+                                 req->isVirtualAddr, req->write_slot);
                 delete pe_unit[pe_idx]->spmReqPort;
                 pe_unit[pe_idx]->spmReqPort = nullptr;
             }
         }
 
+        // LSQ drain
+        {
+            bool spmBankBusy[SPM_NUM_BANKS] = {};
+            for (int b = 0; b < SPM_NUM_BANKS; b++)
+                spmBankBusy[b] =
+                    (SPM_unit->requests[b] != nullptr);
+            // Also mark banks busy for pending PE reqs
+            for (int pi = 0; pi < 4; pi++) {
+                OutstandingRequest* pr =
+                    pe_unit[pi]->spmReqPort;
+                if (pr) {
+                    int pb = SPM_unit->getBank(
+                        pr->addr, pr->peid,
+                        pr->isVirtualAddr);
+                    spmBankBusy[pb] = true;
+                }
+            }
+            lsq->tickS2Outstanding(s2);
+            lsq->tickS2OutstandingWrites(s2);
+            lsq->drainS2Reads(s2);
+            lsq->drainSpmReads(SPM_unit, spmBankBusy);
+            lsq->drainSpmWrites(SPM_unit, spmBankBusy);
+            lsq->drainS2Writes(s2);
+        }
+
         from_fifo = 0;
-        
+
         if (main_instruction_setting == MAIN_INSTRUCTION_1)
             decode_output(main_instruction_buffer[old_PC][1], &old_PC, simd, setting, main_instruction_setting);
         else if (main_instruction_setting == MAIN_INSTRUCTION_2)
@@ -1276,6 +1449,7 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     printf("=== Performance Counters ===\n");
     printf("TotalSpmRequests: %d\n", totalSpmRequests);
     printf("BankConflictStalls: %d\n", bankConflictStalls);
+    printf("LsqFullStalls: %d\n", lsqFullStalls);
 
     // fprintf(stderr, "Finish simulation.\n");
 }

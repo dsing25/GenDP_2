@@ -68,7 +68,7 @@ class pe_array {
 
         SPM * SPM_unit;
         S2 * s2;
-
+        CtrlLSQ * lsq;
 
 };
 

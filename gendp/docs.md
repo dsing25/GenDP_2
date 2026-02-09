@@ -7,8 +7,9 @@
 4. [Source and Destination Codes](#source-and-destination-codes)
 5. [Opcode Reference](#opcode-reference)
 6. [Scratchpad Memory (SPM)](#scratchpad-memory-spm)
-7. [Synchronization](#synchronization)
-8. [Programming Patterns](#programming-patterns)
+7. [S2 Memory and Controller LSQ](#s2-memory-and-controller-lsq)
+8. [Synchronization](#synchronization)
+9. [Programming Patterns](#programming-patterns)
 
 ---
 
@@ -1184,6 +1185,112 @@ Index 5 → PE[1], physical 8193
 f.write(data_movement_instruction(gr, SPM, 0, 0, 3, 0, 0, 0, SWIZZLED_START, 2, mvi))
 ```
 
+### Line-Width Semantics
+
+The SPM's minimum addressable unit is a **line** of 64 bits
+(2 consecutive 32-bit words). All PE SPM accesses operate on
+full lines internally:
+
+| Concept | Value | Description |
+|:--------|:------|:------------|
+| Line width | 64 bits | 2 × 32-bit words |
+| Line address | `(addr >> 1) << 1` | Even-aligned start |
+| Word select | `addr & 1` | 0 = low word, 1 = high word |
+
+**Read behavior**: A single-word `mv` from SPM always reads the
+full 2-word line, then selects the requested word by `addr & 1`.
+
+**Write behavior**: A single-word `mv` to SPM writes only the
+target word within the line (determined by `addr & 1`). A
+double-word `mvd` writes both words.
+
+**Alignment requirement**: `mvd` (double-word move) requires the
+SPM address to be even (line-aligned, `addr % 2 == 0`).
+Misaligned `mvd` addresses will trigger an assertion failure.
+
+---
+
+## S2 Memory and Controller LSQ
+
+### S2 Memory
+
+S2 is a large on-chip buffer (1 MB, int-addressable) used by the
+controller for staging data between iterations. It sits between
+DDR and SPM in the memory hierarchy.
+
+| Parameter | Value |
+|:----------|:------|
+| Size | 1 MB (262144 ints) |
+| Banks | 4 |
+| Bank formula | `(addr >> 1) % 4` |
+| Read latency | 6 cycles (pipelined, not used currently) |
+| Write latency | 3 cycles (pipelined) |
+
+### Controller Load/Store Queue (LSQ)
+
+All controller `mv`/`mvdq` between SPM and S2 are routed through
+the LSQ, which models bank conflicts and memory latency.
+
+**S2 → SPM direction**: The controller reads S2 data directly at
+enqueue time (pre-filled) and creates SPM write entries. SPM
+writes are drained one per bank per cycle, respecting PE bank
+priority.
+
+**SPM → S2 direction**: Creates SPM read entries and S2 write
+entries. SPM reads check `spmBankBusy` (PE accesses have
+priority). When data is ready, it flows to S2 write entries
+which go through the S2 write pipeline (3-cycle latency).
+
+**Buffer size limit**: Each bank queue holds at most
+`LSQ_MAX_ENTRIES_PER_BANK` (8) entries. When full, the
+controller stalls until entries drain.
+
+**Execution order in pe_array::run() each cycle**:
+```
+1. process_events()     (SPM tick → PE data delivery)
+2. decode(slot 1)       (controller: may enqueue to LSQ)
+3. PE[0..3] run         (PE execution + systolic)
+4. SPM bank arbitration (PE requests have priority)
+5. Compute spmBankBusy[]
+6. tickS2Outstanding()  (S2 read pipeline countdown)
+7. tickS2OutstandingWrites() (S2 write pipeline)
+8. drainS2Reads()       (issue new S2 reads)
+9. drainSpmReads()      (read SPM if bank free)
+10. drainSpmWrites()    (write SPM if bank free)
+11. drainS2Writes()     (issue S2 writes)
+12. decode_output(slot 0)
+13. gr[13] sync
+```
+
+### Barrier Instruction
+
+Opcode 24 (`barrier`). Stalls the controller until the LSQ is
+completely empty (all queues and pipelines drained). Used to
+ensure memory transfers complete before proceeding.
+
+```python
+# Insert barrier + nop pair (1 VLIW instruction):
+f.write(data_movement_instruction(
+    0,0,0,0,0,0,0,0,0,0, barrier))
+f.write(data_movement_instruction(
+    0,0,0,0,0,0,0,0,0,0, none))
+```
+
+### mvdq Handling
+
+- **Aligned** (both src and dst even): 4 double-word (64-bit)
+  transfers through LSQ
+- **Misaligned** (either src or dst odd): 8 single-word
+  transfers through LSQ
+
+### Performance Counters
+
+| Counter | Description |
+|:--------|:------------|
+| TotalSpmRequests | Total PE SPM access requests |
+| BankConflictStalls | PE stalls from SPM bank conflicts |
+| LsqFullStalls | Controller stalls from full LSQ banks |
+
 ---
 
 ## Synchronization
@@ -1414,7 +1521,8 @@ To change PADDING_SIZE from 30 to 64 words (to add more reserved space):
 ```python
 add=0, sub=1, addi=2, si=4, mv=5, bne=8, beq=9, bge=10, blt=11,
 jump=12, set_PC=13, none=14, halt=15, shifti_r=16, shifti_l=17,
-ANDI=18, mvd=19, subi=20, mvi=21, mvdq=22, mvdqi=23
+ANDI=18, mvd=19, subi=20, mvi=21, mvdq=22, mvdqi=23,
+barrier=24
 ```
 
 ### Source/Destination Numbers
@@ -1429,11 +1537,16 @@ SPM_BANK_SIZE = 8192
 SPM_ADDR_NUM = 32768
 SPM_ACCESS_LATENCY = 2
 SPM_BANDWIDTH = 2
+SPM_NUM_BANKS = 8
+S2_NUM_BANKS = 4
+S2_READ_LATENCY = 6
+S2_WRITE_LATENCY = 3
+LSQ_MAX_ENTRIES_PER_BANK = 8
 ADDR_REGISTER_NUM = 16    // gr[0..15]
 REGFILE_ADDR_NUM = 32     // reg[0..31]
-PATTERN_START = 512       // Derived: BLOCK_1_START + 7*32 + 2 + PADDING_SIZE = 256 + 224 + 2 + 30
-TEXT_START = 4352         // Derived: PATTERN_START + SEQ_LEN_ALLOC = 512 + 3840
-ADDR_LEN = 15             // For address swizzling (log2(32768))
+PATTERN_START = 512
+TEXT_START = 4352
+ADDR_LEN = 15             // For address swizzling
 ```
 
 **Memory Block Constants (from wfa_instruction_generator.py):**

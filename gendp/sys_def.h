@@ -34,6 +34,10 @@
 #define SPM_NUM_BANKS 8           // 4 bank-groups × 2 banks each
 #define S2_BUFFER_BYTES (1024 * 1024) // 1 MB, int-addressable (4 bytes per int)
 #define S2_BUFFER_INTS (S2_BUFFER_BYTES / 4)
+#define S2_NUM_BANKS 4
+#define S2_READ_LATENCY 6
+#define S2_WRITE_LATENCY 3
+#define LSQ_MAX_ENTRIES_PER_BANK 8
 #define MAIN_ADDR_REGISTER_NUM 16
 #define CTRL_INSTR_BUFFER_NUM 8192
 #define COMP_INSTR_BUFFER_GROUP_NUM 33
@@ -134,6 +138,7 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_MVI 21
 #define CTRL_MVDQ 22
 #define CTRL_MVDQI 23
+#define CTRL_BARRIER 24
 
 // DEST/SRCS
 #define CTRL_REG 0
