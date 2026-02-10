@@ -43,7 +43,7 @@ class pe {
         int get_gr_10();
         void reset();
 
-        void recieve_spm_data(int data[SPM_BANDWIDTH]);
+        void recieve_spm_data(int data[LINE_SIZE]);
 
         void show_comp_reg();
 

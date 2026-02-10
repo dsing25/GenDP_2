@@ -27,7 +27,7 @@ void S2::issueRead(int addr, int dstAddr,
         if (!outstanding[b][s].valid) {
             S2PipelineEntry& e = outstanding[b][s];
             e.valid = true;
-            e.accessType = AccessType::READ;
+            e.accessType = AccessT::READ;
             e.addr = addr;
             e.dstAddr = dstAddr;
             e.singleData = singleData;
@@ -45,7 +45,7 @@ void S2::issueWrite(int addr, int* data,
         if (!outstanding[b][s].valid) {
             S2PipelineEntry& e = outstanding[b][s];
             e.valid = true;
-            e.accessType = AccessType::WRITE;
+            e.accessType = AccessT::WRITE;
             e.addr = addr;
             e.dstAddr = 0;
             e.data[0] = data[0];
@@ -67,7 +67,7 @@ std::vector<S2::ReadCompletion> S2::tick() {
             e.cyclesLeft--;
             if (e.cyclesLeft > 0) continue;
 
-            if (e.accessType == AccessType::READ) {
+            if (e.accessType == AccessT::READ) {
                 ReadCompletion c;
                 c.dstAddr = e.dstAddr;
                 c.s2Addr = e.addr;
@@ -99,13 +99,6 @@ bool S2::hasPendingOps() const {
             if (outstanding[b][s].valid)
                 return true;
     return false;
-}
-
-bool S2::bankFull(int addr) const {
-    int b = s2Bank(addr);
-    for (int s = 0; s < S2_READ_LATENCY; s++)
-        if (!outstanding[b][s].valid) return false;
-    return true;
 }
 
 // template <typename T>
@@ -320,7 +313,7 @@ std::pair<bool, std::list<Event>*> SPM::tick(){
 #endif
                 } else {
                     for (int j = 0;
-                         j < SPM_BANDWIDTH; j++) {
+                         j < LINE_SIZE; j++) {
                         buffer[base + j] =
                             req->data.data[j];
 #ifdef PROFILE
@@ -358,7 +351,7 @@ std::pair<bool, std::list<Event>*> SPM::tick(){
 SpmDataReadyData::SpmDataReadyData(
     int reqId, int* data, int physAddr)
     : requestorId(reqId), phys_addr(physAddr) {
-    for (int i = 0; i < SPM_BANDWIDTH; i++)
+    for (int i = 0; i < LINE_SIZE; i++)
         this->data[i] = data[i];
 }
 
@@ -441,7 +434,7 @@ void CtrlLSQ::enqueueSpmToS2(
 void CtrlLSQ::enqueueS2ReadOnly(int s2Addr) {
     LsqEntry s2E{};
     s2E.addr = s2Addr;
-    s2E.accessType = AccessType::READ;
+    s2E.accessType = AccessT::READ;
     s2E.srcDstAddr = 0;  // unused for standalone
     s2E.singleData = false;
     s2E.ready[0] = false;
@@ -455,7 +448,7 @@ void CtrlLSQ::enqueueSpmWriteOnly(
     bool singleData) {
     LsqEntry spmE{};
     spmE.addr = spmPhysAddr;
-    spmE.accessType = AccessType::WRITE;
+    spmE.accessType = AccessT::WRITE;
     spmE.srcDstAddr = s2SrcAddr;
     spmE.singleData = singleData;
     if (singleData) {
@@ -473,7 +466,7 @@ void CtrlLSQ::enqueueSpmWriteOnly(
 void CtrlLSQ::enqueueSpmReadOnly(int spmPhysAddr) {
     LsqEntry spmE{};
     spmE.addr = spmPhysAddr;
-    spmE.accessType = AccessType::READ;
+    spmE.accessType = AccessT::READ;
     spmE.srcDstAddr = 0;  // unused for standalone
     spmE.singleData = false;
     spmE.ready[0] = false;
@@ -487,7 +480,7 @@ void CtrlLSQ::enqueueS2WriteOnly(
     bool singleData) {
     LsqEntry s2E{};
     s2E.addr = s2Addr;
-    s2E.accessType = AccessType::WRITE;
+    s2E.accessType = AccessT::WRITE;
     s2E.srcDstAddr = spmSrcAddr;
     s2E.singleData = singleData;
     if (singleData) {
@@ -511,7 +504,7 @@ void CtrlLSQ::drainSpm(
         if (spmBankBusy[b]) continue;
         LsqEntry& entry = spmBanks[b].front();
 
-        if (entry.accessType == AccessType::READ) {
+        if (entry.accessType == AccessT::READ) {
             // Issue read to SPM
             spm->access(entry.addr, CTRL_PEID,
                 SpmAccessT::READ, false,
@@ -553,8 +546,7 @@ void CtrlLSQ::drainS2(S2* s2) {
         if (s2Banks[b].empty()) continue;
         LsqEntry& entry = s2Banks[b].front();
 
-        if (entry.accessType == AccessType::READ) {
-            if (s2->bankFull(entry.addr)) continue;
+        if (entry.accessType == AccessT::READ) {
             s2->issueRead(entry.addr,
                 entry.srcDstAddr, entry.singleData);
             s2Banks[b].pop_front();
@@ -564,7 +556,6 @@ void CtrlLSQ::drainS2(S2* s2) {
                 ? entry.ready[slot]
                 : (entry.ready[0] && entry.ready[1]);
             if (!dataReady) continue;
-            if (s2->bankFull(entry.addr)) continue;
             s2->issueWrite(entry.addr, entry.data,
                 entry.singleData);
             s2Banks[b].pop_front();
@@ -590,7 +581,7 @@ void CtrlLSQ::dataReadyFromS2(
 
     for (int b = 0; b < SPM_NUM_BANKS; b++) {
         for (auto& spmE : spmBanks[b]) {
-            if (spmE.accessType != AccessType::WRITE)
+            if (spmE.accessType != AccessT::WRITE)
                 continue;
             int S = spmE.srcDstAddr;
 
@@ -631,7 +622,7 @@ void CtrlLSQ::dataReadyFromSpm(
 
     for (int sb = 0; sb < S2_NUM_BANKS; sb++) {
         for (auto& s2E : s2Banks[sb]) {
-            if (s2E.accessType != AccessType::WRITE)
+            if (s2E.accessType != AccessT::WRITE)
                 continue;
             int S = s2E.srcDstAddr;
 

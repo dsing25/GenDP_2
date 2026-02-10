@@ -66,7 +66,7 @@ void pe::reset() {
     PC[1] = 0;
 }
 
-void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
+void pe::recieve_spm_data(int data[LINE_SIZE]){
     if (!outstanding_req.valid){
         fprintf(stderr, "Error: No outstanding request present, but recieve_spm_data called for PE[%d]\n", id);
         exit(-1);
@@ -74,19 +74,20 @@ void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
 #ifdef PROFILE
     printf("PE[%d] @%d recv SPM: ", id, cycle);
 #endif
-    int odd = lineOffset(outstanding_req.spm_addr);
     switch (outstanding_req.dst){
         case CTRL_REG:
             if (outstanding_req.single_load) {
                 regfile_unit->register_file[
-                    outstanding_req.addr] = data[odd];
+                    outstanding_req.addr] =
+                        data[outstanding_req.spm_addr & 1];
 #ifdef PROFILE
                 printf("reg[%d] = %d\n",
-                    outstanding_req.addr, data[odd]);
+                    outstanding_req.addr,
+                    data[outstanding_req.spm_addr & 1]);
 #endif
             } else {
                 for (int i = 0;
-                     i < SPM_BANDWIDTH; i++)
+                     i < LINE_SIZE; i++)
                     regfile_unit->register_file[
                         outstanding_req.addr + i] =
                         data[i];
@@ -100,16 +101,20 @@ void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
             break;
         case CTRL_GR:
             addr_regfile_unit->buffer[
-                outstanding_req.addr] = data[odd];
+                outstanding_req.addr] =
+                    data[outstanding_req.spm_addr & 1];
 #ifdef PROFILE
             printf("gr[%d] = %d\n",
-                outstanding_req.addr, data[odd]);
+                outstanding_req.addr,
+                data[outstanding_req.spm_addr & 1]);
 #endif
             break;
         case CTRL_OUT_PORT:
-            store_data = data[odd];
+            store_data =
+                data[outstanding_req.spm_addr & 1];
 #ifdef PROFILE
-            printf("out = %d\n", data[odd]);
+            printf("out = %d\n",
+                data[outstanding_req.spm_addr & 1]);
 #endif
             break;
         default:
@@ -269,7 +274,7 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
 #endif
 
     if (source_pos == CTRL_REG) {
-        int n_loads = single_data ? 1 : SPM_BANDWIDTH;
+        int n_loads = single_data ? 1 : LINE_SIZE;
         for (int i = 0; i < n_loads; i++) {
             int addr = source_addr + i;
             if (addr >= 0 && addr < REGFILE_ADDR_NUM) {
@@ -289,7 +294,7 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
         printf(" to ");
 #endif
     } else if (source_pos == CTRL_GR) {
-        int n_loads = single_data ? 1 : SPM_BANDWIDTH;
+        int n_loads = single_data ? 1 : LINE_SIZE;
         for (int i = 0; i < n_loads; i++) {
             int addr = source_addr + i;
             if (addr >= 0 && addr < ADDR_REGISTER_NUM) {

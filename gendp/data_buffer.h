@@ -10,7 +10,7 @@ enum class SpmAccessT {
     WRITE
 };
 
-enum class AccessType { READ, WRITE };
+enum class AccessT { READ, WRITE };
 
 struct OutstandingRequest {
     int addr;
@@ -24,7 +24,7 @@ struct OutstandingRequest {
 // S2 outstanding request (shared by reads and writes)
 struct S2PipelineEntry {
     bool valid = false;
-    AccessType accessType;
+    AccessT accessType;
     int addr;       // S2 address
     int dstAddr;    // opaque metadata (SPM phys addr)
     int data[2];    // for writes: data to commit
@@ -64,7 +64,6 @@ class S2 {
         std::vector<ReadCompletion> tick();
 
         bool hasPendingOps() const;
-        bool bankFull(int addr) const;
         static int s2Bank(int addr) {
             return (addr >> 1) % S2_NUM_BANKS;
         }
@@ -148,7 +147,7 @@ class SpmDataReadyData {
         SpmDataReadyData(int reqId, int* data,
                          int physAddr);
         int requestorId;
-        int data[SPM_BANDWIDTH];
+        int data[LINE_SIZE];
         int phys_addr;
 };
 
@@ -187,7 +186,7 @@ struct LsqEntry {
     int addr;              // addr in THIS memory
     int data[2];           // line data
     bool ready[2];         // per-slot readiness
-    AccessType accessType; // READ or WRITE
+    AccessT accessType; // READ or WRITE
     int srcDstAddr;        // addr in OTHER memory
     bool singleData;
 };

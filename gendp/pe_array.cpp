@@ -1482,19 +1482,12 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         // LSQ drain
         {
             bool spmBankBusy[SPM_NUM_BANKS] = {};
+            // Only mark banks with in-flight SPM requests. Any pending
+            // PE spmReqPort entries necessarily target banks that are
+            // already busy (otherwise they would have issued above).
             for (int b = 0; b < SPM_NUM_BANKS; b++)
                 spmBankBusy[b] =
                     (SPM_unit->requests[b] != nullptr);
-            for (int pi = 0; pi < 4; pi++) {
-                OutstandingRequest* pr =
-                    pe_unit[pi]->spmReqPort;
-                if (pr) {
-                    int pb = SPM_unit->getBank(
-                        pr->addr, pr->peid,
-                        pr->isVirtualAddr);
-                    spmBankBusy[pb] = true;
-                }
-            }
             lsq->tick(SPM_unit, s2, spmBankBusy);
         }
 

@@ -27,7 +27,7 @@
 #define FIFO_ADDR_NUM 3072
 
 #define SPM_ACCESS_LATENCY 2
-#define SPM_BANDWIDTH 2
+#define LINE_SIZE 2
 #define SPM_ADDR_NUM 32768
 #define SPM_BANK_GROUP_SIZE 8192  // Size of each bank-group (1 per PE)
 #define SPM_BANK_SIZE 4096        // Actual bank size (2 banks per bank-group)

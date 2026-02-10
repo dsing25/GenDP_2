@@ -1106,7 +1106,7 @@ each split into 2 interleaved banks (8 banks total).
 | Double Word        | 64 bits     | Two consecutive words              |
 | Access Latency     | 2 cycles    | Cycles from request to data        |
 | Ports per PE       | 1           | Read OR write, not both            |
-| Bandwidth          | 2 words     | Words per double-word access       |
+| Line Size          | 2 words     | Words per line (double-word access) |
 
 ### Access Constraints
 
@@ -1555,7 +1555,7 @@ SPM_BANK_GROUP_SIZE = 8192
 SPM_BANK_SIZE = 4096
 SPM_ADDR_NUM = 32768
 SPM_ACCESS_LATENCY = 2
-SPM_BANDWIDTH = 2
+LINE_SIZE = 2
 SPM_NUM_BANKS = 8
 S2_NUM_BANKS = 4
 S2_READ_LATENCY = 6
