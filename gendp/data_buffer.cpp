@@ -421,24 +421,42 @@ CtrlLSQ::CtrlLSQ() {
         pendingCtrlReads[b].valid = false;
 }
 
-// S2->SPM: read S2, write SPM
+// S2->SPM: read S2, write SPM (paired)
 void CtrlLSQ::enqueueS2ToSpm(
     int s2Addr, int spmPhysAddr, bool singleData) {
-    // S2 read entry
+    enqueueS2ReadOnly(s2Addr);
+    enqueueSpmWriteOnly(spmPhysAddr, s2Addr,
+                        singleData);
+}
+
+// SPM->S2: read SPM, write S2 (paired)
+void CtrlLSQ::enqueueSpmToS2(
+    int spmPhysAddr, int s2Addr, bool singleData) {
+    enqueueSpmReadOnly(spmPhysAddr);
+    enqueueS2WriteOnly(s2Addr, spmPhysAddr,
+                       singleData);
+}
+
+// Standalone S2 read (no paired SPM write)
+void CtrlLSQ::enqueueS2ReadOnly(int s2Addr) {
     LsqEntry s2E{};
     s2E.addr = s2Addr;
     s2E.accessType = AccessType::READ;
-    s2E.srcDstAddr = spmPhysAddr;
-    s2E.singleData = singleData;
+    s2E.srcDstAddr = 0;  // unused for standalone
+    s2E.singleData = false;
     s2E.ready[0] = false;
     s2E.ready[1] = false;
     s2Banks[s2Bank(s2Addr)].push_back(s2E);
+}
 
-    // SPM write entry (unfilled, waiting for S2 data)
+// Standalone SPM write (no paired S2 read)
+void CtrlLSQ::enqueueSpmWriteOnly(
+    int spmPhysAddr, int s2SrcAddr,
+    bool singleData) {
     LsqEntry spmE{};
     spmE.addr = spmPhysAddr;
     spmE.accessType = AccessType::WRITE;
-    spmE.srcDstAddr = s2Addr;
+    spmE.srcDstAddr = s2SrcAddr;
     spmE.singleData = singleData;
     if (singleData) {
         int slot = lineOffset(spmPhysAddr);
@@ -451,24 +469,26 @@ void CtrlLSQ::enqueueS2ToSpm(
     spmBanks[spmBank(spmPhysAddr)].push_back(spmE);
 }
 
-// SPM->S2: read SPM, write S2
-void CtrlLSQ::enqueueSpmToS2(
-    int spmPhysAddr, int s2Addr, bool singleData) {
-    // SPM read entry
+// Standalone SPM read (no paired S2 write)
+void CtrlLSQ::enqueueSpmReadOnly(int spmPhysAddr) {
     LsqEntry spmE{};
     spmE.addr = spmPhysAddr;
     spmE.accessType = AccessType::READ;
-    spmE.srcDstAddr = s2Addr;
-    spmE.singleData = singleData;
+    spmE.srcDstAddr = 0;  // unused for standalone
+    spmE.singleData = false;
     spmE.ready[0] = false;
     spmE.ready[1] = false;
     spmBanks[spmBank(spmPhysAddr)].push_back(spmE);
+}
 
-    // S2 write entry (unfilled)
+// Standalone S2 write (no paired SPM read)
+void CtrlLSQ::enqueueS2WriteOnly(
+    int s2Addr, int spmSrcAddr,
+    bool singleData) {
     LsqEntry s2E{};
     s2E.addr = s2Addr;
     s2E.accessType = AccessType::WRITE;
-    s2E.srcDstAddr = spmPhysAddr;
+    s2E.srcDstAddr = spmSrcAddr;
     s2E.singleData = singleData;
     if (singleData) {
         int slot = lineOffset(s2Addr);
@@ -561,95 +581,85 @@ void CtrlLSQ::tick(
     drainS2(s2);
 }
 
-// Called when S2 read completes -> fill SPM write entry
+// Called when S2 read completes -> fill SPM write entries.
+// Scans ALL SPM banks so one completion can serve
+// multiple writes (needed for misaligned MVDQ).
 void CtrlLSQ::dataReadyFromS2(
-    int spmPhysAddr, int s2Addr, int* lineData) {
-    int targetBank = spmBank(spmPhysAddr);
+    int s2Addr, int* lineData) {
     int readLine = lineAddr(s2Addr);
 
-    for (auto& spmE : spmBanks[targetBank]) {
-        if (spmE.accessType != AccessType::WRITE)
-            continue;
-        int S = spmE.srcDstAddr;  // S2 source addr
-        bool matched = false;
+    for (int b = 0; b < SPM_NUM_BANKS; b++) {
+        for (auto& spmE : spmBanks[b]) {
+            if (spmE.accessType != AccessType::WRITE)
+                continue;
+            int S = spmE.srcDstAddr;
 
-        if (spmE.singleData) {
-            int slot = lineOffset(spmE.addr);
-            if (!spmE.ready[slot]
-                && lineAddr(S) == readLine) {
-                spmE.data[slot] =
-                    lineData[lineOffset(S)];
-                spmE.ready[slot] = true;
-                return;
+            if (spmE.singleData) {
+                int slot = lineOffset(spmE.addr);
+                if (!spmE.ready[slot]
+                    && lineAddr(S) == readLine) {
+                    spmE.data[slot] =
+                        lineData[lineOffset(S)];
+                    spmE.ready[slot] = true;
+                }
+            } else {
+                if (!spmE.ready[0]
+                    && lineAddr(S) == readLine) {
+                    spmE.data[0] =
+                        lineData[lineOffset(S)];
+                    spmE.ready[0] = true;
+                }
+                if (!spmE.ready[1]
+                    && lineAddr(S + 1) == readLine) {
+                    spmE.data[1] =
+                        lineData[lineOffset(S+1)];
+                    spmE.ready[1] = true;
+                }
             }
-        } else {
-            if (!spmE.ready[0]
-                && lineAddr(S) == readLine) {
-                spmE.data[0] =
-                    lineData[lineOffset(S)];
-                spmE.ready[0] = true;
-                matched = true;
-            }
-            if (!spmE.ready[1]
-                && lineAddr(S + 1) == readLine) {
-                spmE.data[1] =
-                    lineData[lineOffset(S + 1)];
-                spmE.ready[1] = true;
-                matched = true;
-            }
-            if (matched) return;
         }
     }
-    assert(false &&
-        "dataReadyFromS2: no matching SPM write");
+    // No assert: duplicate S2 reads may not match
 }
 
-// Called when SPM read completes -> fill S2 write entry
+// Called when SPM read completes -> fill S2 write entries.
+// Scans ALL S2 banks for matching writes.
 void CtrlLSQ::dataReadyFromSpm(
     int bank, int* lineData) {
     assert(pendingCtrlReads[bank].valid);
     auto& pr = pendingCtrlReads[bank];
     int readLine = lineAddr(pr.spmPhysAddr);
-    int targetS2Bank = s2Bank(pr.s2Addr);
 
-    for (auto& s2E : s2Banks[targetS2Bank]) {
-        if (s2E.accessType != AccessType::WRITE)
-            continue;
-        int S = s2E.srcDstAddr;  // SPM source addr
-        bool matched = false;
+    for (int sb = 0; sb < S2_NUM_BANKS; sb++) {
+        for (auto& s2E : s2Banks[sb]) {
+            if (s2E.accessType != AccessType::WRITE)
+                continue;
+            int S = s2E.srcDstAddr;
 
-        if (s2E.singleData) {
-            int slot = lineOffset(s2E.addr);
-            if (!s2E.ready[slot]
-                && lineAddr(S) == readLine) {
-                s2E.data[slot] =
-                    lineData[lineOffset(S)];
-                s2E.ready[slot] = true;
-                matched = true;
+            if (s2E.singleData) {
+                int slot = lineOffset(s2E.addr);
+                if (!s2E.ready[slot]
+                    && lineAddr(S) == readLine) {
+                    s2E.data[slot] =
+                        lineData[lineOffset(S)];
+                    s2E.ready[slot] = true;
+                }
+            } else {
+                if (!s2E.ready[0]
+                    && lineAddr(S) == readLine) {
+                    s2E.data[0] =
+                        lineData[lineOffset(S)];
+                    s2E.ready[0] = true;
+                }
+                if (!s2E.ready[1]
+                    && lineAddr(S + 1) == readLine) {
+                    s2E.data[1] =
+                        lineData[lineOffset(S+1)];
+                    s2E.ready[1] = true;
+                }
             }
-        } else {
-            if (!s2E.ready[0]
-                && lineAddr(S) == readLine) {
-                s2E.data[0] =
-                    lineData[lineOffset(S)];
-                s2E.ready[0] = true;
-                matched = true;
-            }
-            if (!s2E.ready[1]
-                && lineAddr(S + 1) == readLine) {
-                s2E.data[1] =
-                    lineData[lineOffset(S + 1)];
-                s2E.ready[1] = true;
-                matched = true;
-            }
-        }
-        if (matched) {
-            pr.valid = false;
-            return;
         }
     }
-    assert(false &&
-        "dataReadyFromSpm: no matching S2 write");
+    pr.valid = false;
 }
 
 bool CtrlLSQ::spmBankFull(int physAddr) const {
@@ -664,33 +674,15 @@ bool CtrlLSQ::s2BankFull(int addr) const {
         >= LSQ_MAX_ENTRIES_PER_BANK;
 }
 
-bool CtrlLSQ::canEnqueueS2ToSpm(
-    int* spmAddrs, int* s2Addrs, int n) const {
+bool CtrlLSQ::canEnqueue(
+    int* spmAddrs, int nSpm,
+    int* s2Addrs, int nS2) const {
     int spmExtra[SPM_NUM_BANKS] = {};
     int s2Extra[S2_NUM_BANKS] = {};
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < nSpm; i++)
         spmExtra[spmBank(spmAddrs[i])]++;
+    for (int i = 0; i < nS2; i++)
         s2Extra[s2Bank(s2Addrs[i])]++;
-    }
-    for (int b = 0; b < SPM_NUM_BANKS; b++)
-        if ((int)spmBanks[b].size() + spmExtra[b]
-            > LSQ_MAX_ENTRIES_PER_BANK)
-            return false;
-    for (int b = 0; b < S2_NUM_BANKS; b++)
-        if ((int)s2Banks[b].size() + s2Extra[b]
-            > LSQ_MAX_ENTRIES_PER_BANK)
-            return false;
-    return true;
-}
-
-bool CtrlLSQ::canEnqueueSpmToS2(
-    int* spmAddrs, int* s2Addrs, int n) const {
-    int spmExtra[SPM_NUM_BANKS] = {};
-    int s2Extra[S2_NUM_BANKS] = {};
-    for (int i = 0; i < n; i++) {
-        spmExtra[spmBank(spmAddrs[i])]++;
-        s2Extra[s2Bank(s2Addrs[i])]++;
-    }
     for (int b = 0; b < SPM_NUM_BANKS; b++)
         if ((int)spmBanks[b].size() + spmExtra[b]
             > LSQ_MAX_ENTRIES_PER_BANK)

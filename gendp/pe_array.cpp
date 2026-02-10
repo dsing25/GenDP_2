@@ -708,66 +708,123 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             exit(-1);
         }
 
-        if (src_addr % 2 == 0
-            && dest_addr % 2 == 0) {
-            // Aligned: 4 double-word transfers
-            int spmAddrs[4], s2Addrs[4];
-            for (i = 0; i < 4; i++) {
-                spmAddrs[i] = (dest_is_spm
-                    ? dest_addr : src_addr) + 2*i;
-                s2Addrs[i] = (dest_is_s2
-                    ? dest_addr : src_addr) + 2*i;
-            }
-            bool canFit;
-            if (src_is_s2 && dest_is_spm)
-                canFit = lsq->canEnqueueS2ToSpm(
-                    spmAddrs, s2Addrs, 4);
-            else
-                canFit = lsq->canEnqueueSpmToS2(
-                    spmAddrs, s2Addrs, 4);
-            if (!canFit) {
-                lsqFullStalls++;
-                return 0;
-            }
-            for (i = 0; i < 4; i++) {
-                if (src_is_s2 && dest_is_spm)
-                    lsq->enqueueS2ToSpm(
-                        src_addr + 2*i,
-                        dest_addr + 2*i, false);
-                else
-                    lsq->enqueueSpmToS2(
-                        src_addr + 2*i,
-                        dest_addr + 2*i, false);
-            }
+        // Determine S2 and SPM side addresses
+        int s2A = src_is_s2 ? src_addr : dest_addr;
+        int spmA = dest_is_spm ? dest_addr:src_addr;
+        bool s2ToSpm = src_is_s2 && dest_is_spm;
+        bool srcOdd = src_addr % 2 != 0;
+        bool dstOdd = dest_addr % 2 != 0;
+
+        // Capacity check: compute all entry addrs.
+        // Even side: 4 doubles. Odd side: sgl,3dbl,sgl
+        int spmList[5], s2List[5];
+        int nSpm = 0, nS2 = 0;
+        if (spmA % 2 == 0) {
+            for (i = 0; i < 4; i++)
+                spmList[nSpm++] = spmA + 2*i;
         } else {
-            // Misaligned: use single-word transfers
-            int spmAddrs[8], s2Addrs[8];
-            for (i = 0; i < 8; i++) {
-                spmAddrs[i] = (dest_is_spm
-                    ? dest_addr : src_addr) + i;
-                s2Addrs[i] = (dest_is_s2
-                    ? dest_addr : src_addr) + i;
-            }
-            bool canFit;
-            if (src_is_s2 && dest_is_spm)
-                canFit = lsq->canEnqueueS2ToSpm(
-                    spmAddrs, s2Addrs, 8);
+            spmList[nSpm++] = spmA;
+            spmList[nSpm++] = spmA + 1;
+            spmList[nSpm++] = spmA + 3;
+            spmList[nSpm++] = spmA + 5;
+            spmList[nSpm++] = spmA + 7;
+        }
+        if (s2A % 2 == 0) {
+            for (i = 0; i < 4; i++)
+                s2List[nS2++] = s2A + 2*i;
+        } else {
+            s2List[nS2++] = s2A;
+            s2List[nS2++] = s2A + 1;
+            s2List[nS2++] = s2A + 3;
+            s2List[nS2++] = s2A + 5;
+            s2List[nS2++] = s2A + 7;
+        }
+        if (!lsq->canEnqueue(
+                spmList, nSpm, s2List, nS2)) {
+            lsqFullStalls++;
+            return 0;
+        }
+
+        // Helper lambdas for enqueue
+        auto enqPaired = [&](int s2, int spm,
+                             bool sd) {
+            if (s2ToSpm)
+                lsq->enqueueS2ToSpm(s2, spm, sd);
             else
-                canFit = lsq->canEnqueueSpmToS2(
-                    spmAddrs, s2Addrs, 8);
-            if (!canFit) {
-                lsqFullStalls++;
-                return 0;
+                lsq->enqueueSpmToS2(spm, s2, sd);
+        };
+
+        if (!srcOdd && !dstOdd) {
+            // Both even: 4 paired doubles
+            for (i = 0; i < 4; i++)
+                enqPaired(s2A + 2*i,
+                          spmA + 2*i, false);
+
+        } else if (srcOdd && dstOdd) {
+            // Both odd: 5 paired (sgl,dbl,dbl,dbl,sgl)
+            enqPaired(s2A, spmA, true);
+            enqPaired(s2A+1, spmA+1, false);
+            enqPaired(s2A+3, spmA+3, false);
+            enqPaired(s2A+5, spmA+5, false);
+            enqPaired(s2A+7, spmA+7, true);
+
+        } else if (srcOdd && !dstOdd) {
+            // src odd, dest even.
+            // Writes: 4 doubles at even dest addrs.
+            // Reads: 5 lines from odd source.
+            // Create writes and reads separately
+            // since srcDstAddr != read addr.
+            if (s2ToSpm) {
+                for (i = 0; i < 4; i++)
+                    lsq->enqueueSpmWriteOnly(
+                        spmA + 2*i,
+                        s2A + 2*i, false);
+                // 5 S2 reads covering all src lines
+                for (i = 0; i < 4; i++)
+                    lsq->enqueueS2ReadOnly(
+                        s2A + 2*i);
+                lsq->enqueueS2ReadOnly(s2A + 7);
+            } else {
+                for (i = 0; i < 4; i++)
+                    lsq->enqueueS2WriteOnly(
+                        s2A + 2*i,
+                        spmA + 2*i, false);
+                for (i = 0; i < 4; i++)
+                    lsq->enqueueSpmReadOnly(
+                        spmA + 2*i);
+                lsq->enqueueSpmReadOnly(spmA + 7);
             }
-            for (i = 0; i < 8; i++) {
-                if (src_is_s2 && dest_is_spm)
-                    lsq->enqueueS2ToSpm(
-                        src_addr + i,
-                        dest_addr + i, true);
-                else
-                    lsq->enqueueSpmToS2(
-                        src_addr + i,
-                        dest_addr + i, true);
+
+        } else {
+            // src even, dest odd.
+            // Writes: 5 (sgl, dbl, dbl, dbl, sgl)
+            //   at odd dest boundary addrs.
+            // Reads: 4 doubles from even source.
+            // Create separately.
+            if (s2ToSpm) {
+                lsq->enqueueSpmWriteOnly(
+                    spmA, s2A, true);
+                for (i = 0; i < 3; i++)
+                    lsq->enqueueSpmWriteOnly(
+                        spmA + 1 + 2*i,
+                        s2A + 1 + 2*i, false);
+                lsq->enqueueSpmWriteOnly(
+                    spmA + 7, s2A + 7, true);
+                for (i = 0; i < 4; i++)
+                    lsq->enqueueS2ReadOnly(
+                        s2A + 2*i);
+            } else {
+                lsq->enqueueS2WriteOnly(
+                    s2A, spmA, true);
+                for (i = 0; i < 3; i++)
+                    lsq->enqueueS2WriteOnly(
+                        s2A + 1 + 2*i,
+                        spmA + 1 + 2*i, false);
+                lsq->enqueueS2WriteOnly(
+                    s2A + 7, spmA + 7, true);
+                for (i = 0; i < 4; i++)
+                    lsq->enqueueSpmReadOnly(
+                        spmA + 2*i);
             }
         }
 
@@ -1347,7 +1404,7 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             auto completions = s2->tick();
             for (auto& c : completions)
                 lsq->dataReadyFromS2(
-                    c.dstAddr, c.s2Addr, c.data);
+                    c.s2Addr, c.data);
         }
 
         flag = decode(main_instruction_buffer[main_PC][1], &main_PC, simd, setting, main_instruction_setting);

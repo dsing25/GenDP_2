@@ -196,19 +196,27 @@ class CtrlLSQ {
 public:
     CtrlLSQ();
 
-    // Enqueue transfers
+    // Enqueue paired transfers (S2 read + SPM write,
+    // or SPM read + S2 write)
     void enqueueS2ToSpm(int s2Addr, int spmPhysAddr,
                         bool singleData);
     void enqueueSpmToS2(int spmPhysAddr, int s2Addr,
                         bool singleData);
+
+    // Standalone enqueue (for misaligned MVDQ)
+    void enqueueS2ReadOnly(int s2Addr);
+    void enqueueSpmWriteOnly(int spmPhysAddr,
+        int s2SrcAddr, bool singleData);
+    void enqueueSpmReadOnly(int spmPhysAddr);
+    void enqueueS2WriteOnly(int s2Addr,
+        int spmSrcAddr, bool singleData);
 
     // Single tick drains both SPM and S2 queues
     void tick(SPM* spm, S2* s2,
               bool spmBankBusy[SPM_NUM_BANKS]);
 
     // Callbacks when memory completes
-    void dataReadyFromS2(int spmPhysAddr,
-                         int s2Addr, int* lineData);
+    void dataReadyFromS2(int s2Addr, int* lineData);
     void dataReadyFromSpm(int bank, int* lineData);
 
     // Status
@@ -216,10 +224,8 @@ public:
     bool hasPendingOps(SPM* spm, S2* s2) const;
     bool spmBankFull(int physAddr) const;
     bool s2BankFull(int addr) const;
-    bool canEnqueueS2ToSpm(
-        int* spmAddrs, int* s2Addrs, int n) const;
-    bool canEnqueueSpmToS2(
-        int* spmAddrs, int* s2Addrs, int n) const;
+    bool canEnqueue(int* spmAddrs, int nSpm,
+                    int* s2Addrs, int nS2) const;
 
     static int s2Bank(int addr) {
         return (addr >> 1) % S2_NUM_BANKS;

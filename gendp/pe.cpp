@@ -318,7 +318,11 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
         spmReqPort->addr = access_addr;
         spmReqPort->peid = id;
         spmReqPort->access_t = SpmAccessT::READ;
-        spmReqPort->single_data = false;
+        spmReqPort->single_data = single_data;
+        if (!single_data)
+            assert(lineOffset(access_addr) == 0
+                && "Double-data SPM read requires "
+                   "even addr");
         spmReqPort->isVirtualAddr = isVirtualAddr;
 #ifdef PROFILE
     if (simd)
