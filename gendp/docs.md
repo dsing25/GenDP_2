@@ -7,8 +7,9 @@
 4. [Source and Destination Codes](#source-and-destination-codes)
 5. [Opcode Reference](#opcode-reference)
 6. [Scratchpad Memory (SPM)](#scratchpad-memory-spm)
-7. [Synchronization](#synchronization)
-8. [Programming Patterns](#programming-patterns)
+7. [S2 Memory and Controller LSQ](#s2-memory-and-controller-lsq)
+8. [Synchronization](#synchronization)
+9. [Programming Patterns](#programming-patterns)
 
 ---
 
@@ -221,7 +222,7 @@ else:
 
 **Note on out_instr (code 10) for Controller**: When the controller loads from `comp_ib`, the instruction is stored in an internal buffer (`PE_instruction`). Specifying `out_instr` as the destination in a `mv` operation causes the store function to do nothing, but the instruction is still transferred to PEs via the internal buffer. This is the mechanism for distributing compute instructions.
 
-**Note on SPM (code 2) for Controller**: Controller `mv`/`si` to SPM uses direct buffer reads/writes (no event latency). PE SPM access remains evented and latency-modeled.
+**Note on SPM (code 2) for Controller**: Controller `mv`/`si` to SPM uses direct buffer reads/writes (no event latency), except for SPM↔S2 transfers which route through the LSQ. PE SPM access remains evented and latency-modeled.
 
 **Note on S2 (code 15) for Controller**: The S2 buffer is accessible via controller `mv`/`si` for single entries and via `mvdq`/`mvdqi` for 8-word block operations. Other operations do not support S2.
 
@@ -605,7 +606,8 @@ f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 6, 0, 0, 24, 0, mvd))
 
 #### `mvdq` (opcode 22) - Move Double Quad
 
-**Summary**: Moves eight consecutive words (256 bits) between SPM and the controller S2 buffer. Controller-only and implemented as a direct buffer copy (no SPM event latency).
+**Summary**: Moves eight consecutive words (256 bits) between SPM and the controller S2 buffer
+through the controller LSQ, modeling bank conflicts and S2 latency. Controller-only.
 
 **Syntax**:
 ```
@@ -712,11 +714,12 @@ int swizzled = upper_bits | (lower_bits << 13);  // Recombine
 
 **Physical Addressing**: Unlike `mv` and `mvd`, `mvi` uses **physical addressing** (not virtual) after applying the swizzle. This means the swizzled address directly indexes into the global SPM space without the per-PE bank offset.
 
-**Use Case**: When data is distributed across PE banks in round-robin fashion, `mvi` allows any PE to access any element by index:
-- Address 0 → SPM bank 0 (physical address 0)
-- Address 1 → SPM bank 1 (physical address 8192)
-- Address 2 → SPM bank 2 (physical address 16384)
-- Address 3 → SPM bank 3 (physical address 24576)
+**Use Case**: When data is distributed across PE bank groups in round-robin fashion, `mvi` allows any PE to access any element by index:
+- Address 0 → physical 0 (bank group 0)
+- Address 1 → physical 8192 (bank group 1)
+- Address 2 → physical 16384 (bank group 2)
+- Address 3 → physical 24576 (bank group 3)
+Within each bank group, the low-order interleaving selects the bank by `(phys_addr >> 1) & 1`.
 
 **Examples**:
 ```python
@@ -1088,19 +1091,22 @@ f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 3, 2, ANDI))
 
 ### Overview
 
-The SPM is a shared memory accessible by all PEs. It is organized into 4 banks, one per PE.
+The SPM is a shared memory accessible by all PEs. It is organized into 4 bank groups (one per PE),
+each split into 2 interleaved banks (8 banks total).
 
 ### Parameters
 
 | Parameter           | Value       | Description                        |
 |:-------------------|:------------|:----------------------------------|
 | Total Size         | 32768 words | Total addressable words            |
-| Bank Size          | 8192 words  | Words per PE bank                  |
+| Bank Group Size    | 8192 words  | Words per PE bank group            |
+| Bank Size          | 4096 words  | Words per interleaved bank         |
+| Banks              | 8           | 2 banks per group                  |
 | Word Size          | 32 bits     | Single word                        |
 | Double Word        | 64 bits     | Two consecutive words              |
 | Access Latency     | 2 cycles    | Cycles from request to data        |
 | Ports per PE       | 1           | Read OR write, not both            |
-| Bandwidth          | 2 words     | Words per double-word access       |
+| Line Size          | 2 words     | Words per line (double-word access) |
 
 ### Access Constraints
 
@@ -1137,7 +1143,7 @@ f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 0, 0, 2, mv))  # load
 
 #### Virtual Addressing (Default)
 
-Each PE sees its own "virtual" address space. Physical address = virtual address + PE_ID * BANK_SIZE.
+Each PE sees its own "virtual" address space. Physical address = virtual address + PE_ID * BANK_GROUP_SIZE.
 
 ```
 PE[0]: virtual 0-8191  → physical 0-8191
@@ -1146,13 +1152,13 @@ PE[2]: virtual 0-8191  → physical 16384-24575
 PE[3]: virtual 0-8191  → physical 24576-32767
 ```
 
-**Accessing Own Bank**:
+**Accessing Own Bank Group**:
 ```python
-# PE accesses its own bank with addresses 0-8191
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 32, 0, mv))  # SPM[32] in own bank
+# PE accesses its own bank group with addresses 0-8191
+f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 32, 0, mv))  # SPM[32] in own bank group
 ```
 
-**Accessing Other Banks** (negative or >1023 addresses):
+**Accessing Other Bank Groups** (negative or >1023 addresses):
 ```python
 # PE[0] accessing PE[1]'s data at offset 32:
 # Virtual address = 32 + 8192 = 8224
@@ -1168,21 +1174,136 @@ f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, -8160, 0, mv))
 For data distributed round-robin across PEs, use `mvi` which swizzles addresses:
 
 ```
-Index 0 → PE[0], physical 0
-Index 1 → PE[1], physical 8192
-Index 2 → PE[2], physical 16384
-Index 3 → PE[3], physical 24576
-Index 4 → PE[0], physical 1
-Index 5 → PE[1], physical 8193
+Index 0 → PE[0] bank group, physical 0
+Index 1 → PE[1] bank group, physical 8192
+Index 2 → PE[2] bank group, physical 16384
+Index 3 → PE[3] bank group, physical 24576
+Index 4 → PE[0] bank group, physical 1
+Index 5 → PE[1] bank group, physical 8193
 ...
 ```
 
-**Use Case**: Sequence data where character `i` is stored in `PE[i % 4]`.
+Each bank group is internally interleaved into two banks using bit 1 of the physical address.
+For example, physical 0 → bank 0, physical 1 → bank 1, physical 8192 → bank 2, physical 8193 → bank 3.
+
+**Use Case**: Sequence data where character `i` is stored in `PE[i % 4]` bank group.
 
 ```python
 # Access character at logical index gr[2] (distributed across PEs)
 f.write(data_movement_instruction(gr, SPM, 0, 0, 3, 0, 0, 0, SWIZZLED_START, 2, mvi))
 ```
+
+### Line-Width Semantics
+
+The SPM's minimum addressable unit is a **line** of 64 bits
+(2 consecutive 32-bit words). All PE SPM accesses operate on
+full lines internally:
+
+| Concept | Value | Description |
+|:--------|:------|:------------|
+| Line width | 64 bits | 2 × 32-bit words |
+| Line address | `(addr >> 1) << 1` | Even-aligned start |
+| Word select | `addr & 1` | 0 = low word, 1 = high word |
+
+**Read behavior**: A single-word `mv` from SPM always reads the
+full 2-word line, then selects the requested word by `addr & 1`.
+
+**Write behavior**: A single-word `mv` to SPM writes only the
+target word within the line (determined by `addr & 1`). A
+double-word `mvd` writes both words.
+
+**Alignment requirement**: `mvd` (double-word move) requires the
+SPM address to be even (line-aligned, `addr % 2 == 0`).
+Misaligned `mvd` addresses will trigger an assertion failure.
+The controller's `mvdq` does NOT have this restriction — it
+decomposes misaligned transfers into a mix of single and double
+operations internally.
+
+---
+
+## S2 Memory and Controller LSQ
+
+### S2 Memory
+
+S2 is a large on-chip buffer (1 MB, int-addressable) used by the
+controller for staging data between iterations. It sits between
+DDR and SPM in the memory hierarchy.
+
+| Parameter | Value |
+|:----------|:------|
+| Size | 1 MB (262144 ints) |
+| Banks | 4 |
+| Bank formula | `(addr >> 1) % 4` |
+| Read latency | 6 cycles (pipelined, used by LSQ) |
+| Write latency | 3 cycles (pipelined) |
+
+### Controller Load/Store Queue (LSQ)
+
+All controller `mv`/`mvdq` between SPM and S2 are routed through
+the LSQ, which models bank conflicts and memory latency.
+
+**S2 → SPM direction**: Creates S2 read entries and SPM write
+entries. S2 reads are pipelined (6-cycle latency). When a read
+completes, `dataReadyFromS2` fills matching SPM write entries
+via line-based address matching. SPM writes drain when data is
+ready, respecting PE bank priority.
+
+**SPM → S2 direction**: Creates SPM read entries and S2 write
+entries. SPM reads check `spmBankBusy` (PE accesses have
+priority). When data is ready, `dataReadyFromSpm` fills matching
+S2 write entries. S2 writes drain through the S2 write pipeline
+(3-cycle latency).
+
+**Buffer size limit**: Each bank queue holds at most
+`LSQ_MAX_ENTRIES_PER_BANK` (8) entries. When full, the
+controller stalls until entries drain.
+
+**Execution order in pe_array::run() each cycle**:
+```
+1. process_events()     (SPM tick → PE data delivery)
+2. S2 tick              (advance S2 pipelines, send completions to LSQ)
+3. decode(slot 1)       (controller: may enqueue to LSQ)
+4. PE[0..3] run         (PE execution + systolic)
+5. SPM bank arbitration (PE requests have priority)
+6. LSQ drain            (issue SPM/S2 ops if banks are free)
+7. decode_output(slot 0)
+8. gr[13] sync
+```
+
+### Barrier Instruction
+
+Opcode 24 (`barrier`). Stalls the controller until the LSQ is
+completely empty (all queues and pipelines drained). Used to
+ensure memory transfers complete before proceeding. Emit it in
+slot 1 (controller slot).
+
+```python
+# Insert barrier + nop pair (1 VLIW instruction):
+f.write(data_movement_instruction(
+    0,0,0,0,0,0,0,0,0,0, barrier))
+f.write(data_movement_instruction(
+    0,0,0,0,0,0,0,0,0,0, none))
+```
+
+### mvdq Handling
+
+Unlike PE `mvd`, the controller `mvdq` supports misaligned
+addresses by decomposing transfers internally:
+
+- **Both even**: 4 paired double-word transfers
+- **Both odd**: 5 paired transfers (sgl, dbl, dbl, dbl, sgl)
+- **Different parity**: standalone reads and writes are
+  created separately because the read/write counts differ
+  (4 vs 5). One read completion can fill multiple write
+  entries via line-based matching in the data-ready callbacks.
+
+### Performance Counters
+
+| Counter | Description |
+|:--------|:------------|
+| TotalSpmRequests | Total PE SPM access requests |
+| BankConflictStalls | PE stalls from SPM bank conflicts |
+| LsqFullStalls | Controller stalls from full LSQ banks |
 
 ---
 
@@ -1336,19 +1457,23 @@ f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
 
 ## Scratchpad Memory Configuration
 
-### Changing the Scratchpad Bank Size
+### Changing the Scratchpad Bank Group Size
 
-The scratchpad memory size is parameterized but requires coordinated changes across multiple files. To change the bank size (currently 8192 words per bank), you must update the following parameters:
+The scratchpad memory is organized into bank groups (per PE). To
+change the bank group size (currently 8192 words per group) and
+the per-bank size (currently 4096 words per interleaved bank),
+you must update the following parameters:
 
 **1. Update System Constants (sys_def.h)**
-- `SPM_BANK_SIZE` - Words per bank (e.g., 8192)
-- `SPM_ADDR_NUM` - Total words = `SPM_BANK_SIZE * 4` (e.g., 32768 for 4 PEs)
+- `SPM_BANK_GROUP_SIZE` - Words per bank group (e.g., 8192)
+- `SPM_BANK_SIZE` - Words per bank (e.g., 4096)
+- `SPM_ADDR_NUM` - Total words = `SPM_BANK_GROUP_SIZE * 4` (e.g., 32768 for 4 PEs)
 - `ADDR_LEN` - Address bits = `log2(SPM_ADDR_NUM)` (e.g., 15 bits for 32768 addresses)
 - `PATTERN_START` - Start address for pattern DNA sequence storage
 - `TEXT_START` - Start address for text DNA sequence storage
 
 **2. Update Memory Layout (wfa_instruction_generator.py)**
-- `BANK_SIZE` - Must match `SPM_BANK_SIZE` from sys_def.h
+- `BANK_SIZE` - Must match `SPM_BANK_GROUP_SIZE` from sys_def.h
 - `BLOCK_1_START` - Offset to second memory block = `MEM_BLOCK_SIZE*7 + PADDING_SIZE + 2`
 - `PATTERN_START` - Must match sys_def.h value = `BLOCK_1_START + MEM_BLOCK_SIZE*7 + PADDING_SIZE + 2`
 
@@ -1384,13 +1509,13 @@ Each memory block in the WFA algorithm contains 7 core sections of `MEM_BLOCK_SI
 - Total blocks: 512 words
 - Pattern region: 3840 words (addresses 512-4351)
 - Text region: 3840 words (addresses 4352-8191)
-- Total per bank: 512 + 3840 + 3840 = 8192 words ✓
+- Total per bank group: 512 + 3840 + 3840 = 8192 words ✓
 
 ### Critical Constraints
 
 When changing scratchpad size, ensure:
 1. `PATTERN_START + 2*SEQ_LEN_ALLOC ≤ BANK_SIZE` - Pattern and text sequences must fit
-2. `SPM_ADDR_NUM = SPM_BANK_SIZE * 4` - Total addressable space (4 PE banks)
+2. `SPM_ADDR_NUM = SPM_BANK_GROUP_SIZE * 4` - Total addressable space (4 PE bank groups)
 3. `ADDR_LEN = log2(SPM_ADDR_NUM)` - Affects address swizzling in mvi instruction
 4. All constants must be synchronized across sys_def.h, wfa_instruction_generator.py, and pe_array.cpp
 
@@ -1414,7 +1539,8 @@ To change PADDING_SIZE from 30 to 64 words (to add more reserved space):
 ```python
 add=0, sub=1, addi=2, si=4, mv=5, bne=8, beq=9, bge=10, blt=11,
 jump=12, set_PC=13, none=14, halt=15, shifti_r=16, shifti_l=17,
-ANDI=18, mvd=19, subi=20, mvi=21, mvdq=22, mvdqi=23
+ANDI=18, mvd=19, subi=20, mvi=21, mvdq=22, mvdqi=23,
+barrier=24
 ```
 
 ### Source/Destination Numbers
@@ -1425,15 +1551,21 @@ in_port=7, in_instr=8, out_port=9, out_instr=10, fifo=[11,12,13,14], S2=15
 
 ### Key Constants (from sys_def.h)
 ```c
-SPM_BANK_SIZE = 8192
+SPM_BANK_GROUP_SIZE = 8192
+SPM_BANK_SIZE = 4096
 SPM_ADDR_NUM = 32768
 SPM_ACCESS_LATENCY = 2
-SPM_BANDWIDTH = 2
+LINE_SIZE = 2
+SPM_NUM_BANKS = 8
+S2_NUM_BANKS = 4
+S2_READ_LATENCY = 6
+S2_WRITE_LATENCY = 3
+LSQ_MAX_ENTRIES_PER_BANK = 8
 ADDR_REGISTER_NUM = 16    // gr[0..15]
 REGFILE_ADDR_NUM = 32     // reg[0..31]
-PATTERN_START = 512       // Derived: BLOCK_1_START + 7*32 + 2 + PADDING_SIZE = 256 + 224 + 2 + 30
-TEXT_START = 4352         // Derived: PATTERN_START + SEQ_LEN_ALLOC = 512 + 3840
-ADDR_LEN = 15             // For address swizzling (log2(32768))
+PATTERN_START = 512
+TEXT_START = 4352
+ADDR_LEN = 15             // For address swizzling
 ```
 
 **Memory Block Constants (from wfa_instruction_generator.py):**

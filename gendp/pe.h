@@ -10,13 +10,17 @@ class pe {
     public:
         struct OutstandingReq{
             int dst;
-            int addr;
+            int addr;       // destination addr (reg/gr)
+            int spm_addr;   // original SPM access addr
             bool single_load;
             bool valid;
-            OutstandingReq() : dst(-42), addr(-42), single_load(false),valid(false) {}
+            OutstandingReq()
+                : dst(-42), addr(-42), spm_addr(0),
+                  single_load(false), valid(false) {}
             void clear() {
                 dst = -42;
                 addr = -42;
+                spm_addr = 0;
                 single_load = false;
                 valid = false;
             }
@@ -39,7 +43,7 @@ class pe {
         int get_gr_10();
         void reset();
 
-        void recieve_spm_data(int data[SPM_BANDWIDTH]);
+        void recieve_spm_data(int data[LINE_SIZE]);
 
         void show_comp_reg();
 
@@ -81,6 +85,9 @@ class pe {
 
         //-1 means there is no outstanding request
         OutstandingReq outstanding_req;
+
+        // Set by load() when reading SPM, consumed by store()
+        int last_spm_load_addr = 0;
 
 
 

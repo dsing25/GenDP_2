@@ -66,7 +66,7 @@ void pe::reset() {
     PC[1] = 0;
 }
 
-void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
+void pe::recieve_spm_data(int data[LINE_SIZE]){
     if (!outstanding_req.valid){
         fprintf(stderr, "Error: No outstanding request present, but recieve_spm_data called for PE[%d]\n", id);
         exit(-1);
@@ -77,29 +77,44 @@ void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
     switch (outstanding_req.dst){
         case CTRL_REG:
             if (outstanding_req.single_load) {
-                regfile_unit->register_file[outstanding_req.addr] = data[0];
+                regfile_unit->register_file[
+                    outstanding_req.addr] =
+                        data[outstanding_req.spm_addr & 1];
 #ifdef PROFILE
-            printf("reg[%d] = %d\n", id, outstanding_req.addr, data[0]);
+                printf("reg[%d] = %d\n",
+                    outstanding_req.addr,
+                    data[outstanding_req.spm_addr & 1]);
 #endif
             } else {
-                for (int i = 0; i < SPM_BANDWIDTH; i++)
-                    regfile_unit->register_file[outstanding_req.addr + i] = data[i];
-                    //regfile_unit->write_addr[outstanding_req.addr + i] = data[i];
+                for (int i = 0;
+                     i < LINE_SIZE; i++)
+                    regfile_unit->register_file[
+                        outstanding_req.addr + i] =
+                        data[i];
 #ifdef PROFILE
-                printf("reg[%d,%d] = [%d,%d]\n", id, outstanding_req.addr, outstanding_req.addr+1, data[0], data[1]);
+                printf("reg[%d,%d] = [%d,%d]\n",
+                    outstanding_req.addr,
+                    outstanding_req.addr+1,
+                    data[0], data[1]);
 #endif
             }
             break;
         case CTRL_GR:
-            addr_regfile_unit->buffer[outstanding_req.addr] = data[0];
+            addr_regfile_unit->buffer[
+                outstanding_req.addr] =
+                    data[outstanding_req.spm_addr & 1];
 #ifdef PROFILE
-            printf("gr[%d] = %d\n", id, outstanding_req.addr, data[0]);
+            printf("gr[%d] = %d\n",
+                outstanding_req.addr,
+                data[outstanding_req.spm_addr & 1]);
 #endif
             break;
         case CTRL_OUT_PORT:
-            store_data = data[0];
+            store_data =
+                data[outstanding_req.spm_addr & 1];
 #ifdef PROFILE
-            printf("out = %d\n", id, data[0]);
+            printf("out = %d\n",
+                data[outstanding_req.spm_addr & 1]);
 #endif
             break;
         default:
@@ -259,7 +274,7 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
 #endif
 
     if (source_pos == CTRL_REG) {
-        int n_loads = single_data ? 1 : SPM_BANDWIDTH;
+        int n_loads = single_data ? 1 : LINE_SIZE;
         for (int i = 0; i < n_loads; i++) {
             int addr = source_addr + i;
             if (addr >= 0 && addr < REGFILE_ADDR_NUM) {
@@ -279,7 +294,7 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
         printf(" to ");
 #endif
     } else if (source_pos == CTRL_GR) {
-        int n_loads = single_data ? 1 : SPM_BANDWIDTH;
+        int n_loads = single_data ? 1 : LINE_SIZE;
         for (int i = 0; i < n_loads; i++) {
             int addr = source_addr + i;
             if (addr >= 0 && addr < ADDR_REGISTER_NUM) {
@@ -299,18 +314,20 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
         printf(" to ");
 #endif
     } else if (source_pos == CTRL_SPM) {
-        int access_addr = swizzle ? apply_address_swizzle(source_addr) : source_addr;
-        //if (swizzle) {
-        //    //Print out the access addr as an int and the value at that SPM location as a char
-        //    printf("%d=id; %d '%c'\n", id, access_addr, (char)SPM_unit->buffer[access_addr]);
-        //}
+        int access_addr = swizzle
+            ? apply_address_swizzle(source_addr)
+            : source_addr;
         bool isVirtualAddr = !swizzle;
-        // Populate SPM request port instead of direct access
+        last_spm_load_addr = access_addr;
         spmReqPort = new OutstandingRequest();
         spmReqPort->addr = access_addr;
         spmReqPort->peid = id;
         spmReqPort->access_t = SpmAccessT::READ;
         spmReqPort->single_data = single_data;
+        if (!single_data)
+            assert(lineOffset(access_addr) == 0
+                && "Double-data SPM read requires "
+                   "even addr");
         spmReqPort->isVirtualAddr = isVirtualAddr;
 #ifdef PROFILE
     if (simd)
@@ -365,15 +382,19 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
 #endif
     if (src_pos == CTRL_SPM) {
         //in this case we need to wait a cycle, so we put it into outstanding
-        if (dest_pos != CTRL_REG && dest_pos != CTRL_GR && dest_pos != CTRL_OUT_PORT) {
-            fprintf(stderr, "Error: unsupported dest %d for SPM source store in PE[%d]\n", dest_pos, id);
+        if (dest_pos != CTRL_REG && dest_pos != CTRL_GR
+            && dest_pos != CTRL_OUT_PORT) {
+            fprintf(stderr,
+                "Error: unsupported dest %d for SPM source"
+                " store in PE[%d]\n", dest_pos, id);
             exit(-1);
         }
-        assert(!outstanding_req.valid); //should not have outstanding already
+        assert(!outstanding_req.valid);
         outstanding_req.valid = true;
         outstanding_req.single_load = single_data;
         outstanding_req.dst = dest_pos;
         outstanding_req.addr = dest_addr;
+        outstanding_req.spm_addr = last_spm_load_addr;
         //still log the dest we're sending to
 #ifdef PROFILE
         switch (dest_pos) {
@@ -411,16 +432,25 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
                 exit(-1);
             }
         } else if (dest_pos == 2) {
-            int access_addr = swizzle ? apply_address_swizzle(dest_addr) : dest_addr;
+            int access_addr = swizzle
+                ? apply_address_swizzle(dest_addr) : dest_addr;
             bool isVirtualAddr = !swizzle;
-            // Populate SPM request port instead of direct access
             spmReqPort = new OutstandingRequest();
-            spmReqPort->addr = access_addr;
             spmReqPort->peid = id;
             spmReqPort->access_t = SpmAccessT::WRITE;
-            spmReqPort->single_data = single_data;
-            spmReqPort->data = data;
             spmReqPort->isVirtualAddr = isVirtualAddr;
+            spmReqPort->addr = access_addr;
+            if (single_data) {
+                spmReqPort->single_data = true;
+                int s = lineOffset(access_addr);
+                spmReqPort->data.data[s] = data.data[0];
+            } else {
+                assert(lineOffset(access_addr) == 0
+                    && "Double-data SPM write "
+                       "requires even addr");
+                spmReqPort->single_data = false;
+                spmReqPort->data = data;
+            }
 #ifdef PROFILE
             printf("SPM[%d]%s.\t", dest_addr, swizzle ? " (swizzled)" : "");
 #endif
