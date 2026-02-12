@@ -40,6 +40,7 @@ mvi = 21
 mvdq = 22
 mvdqi = 23
 barrier = 24
+mvi2 = 25
 # these instruction tags here are for data movement
 # use sys_def.h for compute tags
 

@@ -141,6 +141,7 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_MVDQ 22
 #define CTRL_MVDQI 23
 #define CTRL_BARRIER 24
+#define CTRL_MVI2 25
 
 // DEST/SRCS
 #define CTRL_REG 0
@@ -163,6 +164,6 @@ inline int get_base_opcode(int opcode) {
 
 // DNA sequence start addresses for magic instruction initialization. No swizzle start
 #define PATTERN_START 512
-#define TEXT_START 4352
+#define TEXT_START 1160
 
 #endif

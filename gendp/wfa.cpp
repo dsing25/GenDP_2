@@ -7,6 +7,16 @@ constexpr int N_WFS = 5;
 constexpr int MEM_BLOCK_SIZE = 32;
 constexpr int PAST_WFS_SIZE = N_WFS * 3 * MAX_WF_LEN;
 constexpr int S2_META_BASE = PAST_WFS_SIZE;
+
+inline int encode_bp(char c) {
+    switch (c) {
+        case 'A': return 0;
+        case 'C': return 1;
+        case 'G': return 2;
+        case 'T': return 3;
+        default:  return c & 0x3;
+    }
+}
 } // namespace
 
 int wfa_simulate(pe_array *pe_array_unit, align_input_t& align_input, int n, FILE* fp, 
@@ -108,18 +118,46 @@ int wfa_simulate(pe_array *pe_array_unit, align_input_t& align_input, int n, FIL
     }
     pe_array_unit->write_s2(past_wf_index(wf_i, 2, 1), first_extend_len);
 
-    for (int i = 0; i < static_cast<int>(text_seq.size()); i++) {
-        int pe_id = (i / 2) % 4;
-        int local_addr = TEXT_START + (i / 8) * 2 + (i % 2);
-        int raw_addr = pe_id * SPM_BANK_GROUP_SIZE + local_addr;
-        pe_array_unit->write_spm_magic(raw_addr, static_cast<int>(text_seq[i]));
+    // Pack text: 16 base pairs per 32-bit word
+    int n_text_words =
+        (static_cast<int>(text_seq.size()) + 15) / 16;
+    for (int w = 0; w < n_text_words; w++) {
+        int packed = 0;
+        for (int b = 0; b < 16
+             && w * 16 + b
+                < static_cast<int>(text_seq.size());
+             b++)
+            packed |=
+                encode_bp(text_seq[w*16+b])
+                << (b * 2);
+        int pe_id = (w / 2) % 4;
+        int local_addr =
+            TEXT_START + (w / 8) * 2 + (w % 2);
+        int raw_addr =
+            pe_id * SPM_BANK_GROUP_SIZE + local_addr;
+        pe_array_unit->write_spm_magic(
+            raw_addr, packed);
     }
 
-    for (int i = 0; i < static_cast<int>(pattern_seq.size()); i++) {
-        int pe_id = (i / 2) % 4;
-        int local_addr = PATTERN_START + (i / 8) * 2 + (i % 2);
-        int raw_addr = pe_id * SPM_BANK_GROUP_SIZE + local_addr;
-        pe_array_unit->write_spm_magic(raw_addr, static_cast<int>(pattern_seq[i]));
+    // Pack pattern: 16 base pairs per 32-bit word
+    int n_pat_words =
+        (static_cast<int>(pattern_seq.size()) + 15) / 16;
+    for (int w = 0; w < n_pat_words; w++) {
+        int packed = 0;
+        for (int b = 0; b < 16
+             && w * 16 + b
+                < static_cast<int>(pattern_seq.size());
+             b++)
+            packed |=
+                encode_bp(pattern_seq[w*16+b])
+                << (b * 2);
+        int pe_id = (w / 2) % 4;
+        int local_addr =
+            PATTERN_START + (w / 8) * 2 + (w % 2);
+        int raw_addr =
+            pe_id * SPM_BANK_GROUP_SIZE + local_addr;
+        pe_array_unit->write_spm_magic(
+            raw_addr, packed);
     }
 
     pe_array_unit->write_s2(S2_META_BASE + 0, pattern_len_raw);

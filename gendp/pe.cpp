@@ -81,9 +81,15 @@ void pe::recieve_spm_data(int data[LINE_SIZE]){
     switch (outstanding_req.dst){
         case CTRL_REG:
             if (outstanding_req.single_load) {
+                {
+                int val =
+                    data[outstanding_req.spm_addr & 1];
+                if (outstanding_req.two_bit_extract)
+                    val = (val >> outstanding_req.bp_shift)
+                        & 0x3;
                 regfile_unit->register_file[
-                    outstanding_req.addr] =
-                        data[outstanding_req.spm_addr & 1];
+                    outstanding_req.addr] = val;
+                }
 #ifdef PROFILE
                 printf("reg[%d] = %d\n",
                     outstanding_req.addr,
@@ -104,9 +110,16 @@ void pe::recieve_spm_data(int data[LINE_SIZE]){
             }
             break;
         case CTRL_GR:
+            {
+            int val =
+                data[outstanding_req.spm_addr & 1];
+            if (outstanding_req.two_bit_extract) {
+                val = (val >> outstanding_req.bp_shift)
+                    & 0x3;
+            }
             addr_regfile_unit->buffer[
-                outstanding_req.addr] =
-                    data[outstanding_req.spm_addr & 1];
+                outstanding_req.addr] = val;
+            }
 #ifdef PROFILE
             printf("gr[%d] = %d\n",
                 outstanding_req.addr,
@@ -114,8 +127,14 @@ void pe::recieve_spm_data(int data[LINE_SIZE]){
 #endif
             break;
         case CTRL_OUT_PORT:
-            store_data =
+            {
+            int val =
                 data[outstanding_req.spm_addr & 1];
+            if (outstanding_req.two_bit_extract)
+                val = (val >> outstanding_req.bp_shift)
+                    & 0x3;
+            store_data = val;
+            }
 #ifdef PROFILE
             printf("out = %d\n",
                 data[outstanding_req.spm_addr & 1]);
@@ -844,6 +863,57 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             fprintf(stderr, "PE[%d] PC=%d illegal mvi from %d to %d\n", id, *PC, src, dest);
             exit(-1);
         }
+
+        if (reg_auto_increasement_flag_0)
+            addr_regfile_unit->buffer[reg_0]++;
+        if (reg_auto_increasement_flag_1)
+            addr_regfile_unit->buffer[reg_1]++;
+        (*PC)++;
+    } else if (opcode == CTRL_MVI2) {
+#ifdef PROFILE
+        printf("Move with 2-bit Extract ");
+#endif
+        assert(src == CTRL_SPM);
+        // Compute bp-level address from operands
+        int bp_addr;
+        if (reg_immBar_flag_1)
+            bp_addr =
+                addr_regfile_unit->buffer[sext_imm_1]
+                + addr_regfile_unit->buffer[reg_1];
+        else
+            bp_addr = sext_imm_1
+                + addr_regfile_unit->buffer[reg_1];
+        int bp_offset = bp_addr & 0xF;
+        int word_addr = bp_addr >> 4;
+
+        // Swizzle and issue SPM read
+        int access_addr =
+            apply_address_swizzle(word_addr);
+        last_spm_load_addr = access_addr;
+        spmReqPort = new OutstandingRequest();
+        spmReqPort->addr = access_addr;
+        spmReqPort->peid = id;
+        spmReqPort->access_t = SpmAccessT::READ;
+        spmReqPort->single_data = true;
+        spmReqPort->isVirtualAddr = false;
+
+        // Set up outstanding req for destination
+        int dest_addr;
+        if (reg_immBar_flag_0)
+            dest_addr =
+                addr_regfile_unit->buffer[sext_imm_0]
+                + addr_regfile_unit->buffer[reg_0];
+        else
+            dest_addr = sext_imm_0
+                + addr_regfile_unit->buffer[reg_0];
+        assert(!outstanding_req.valid);
+        outstanding_req.valid = true;
+        outstanding_req.single_load = true;
+        outstanding_req.dst = dest;
+        outstanding_req.addr = dest_addr;
+        outstanding_req.spm_addr = access_addr;
+        outstanding_req.bp_shift = bp_offset << 1;
+        outstanding_req.two_bit_extract = true;
 
         if (reg_auto_increasement_flag_0)
             addr_regfile_unit->buffer[reg_0]++;
