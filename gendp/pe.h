@@ -14,15 +14,20 @@ class pe {
             int spm_addr;   // original SPM access addr
             bool single_load;
             bool valid;
+            int bp_shift;        // shift for 2-bit extract
+            bool two_bit_extract; // apply shift+mask
             OutstandingReq()
                 : dst(-42), addr(-42), spm_addr(0),
-                  single_load(false), valid(false) {}
+                  single_load(false), valid(false),
+                  bp_shift(0), two_bit_extract(false) {}
             void clear() {
                 dst = -42;
                 addr = -42;
                 spm_addr = 0;
                 single_load = false;
                 valid = false;
+                bp_shift = 0;
+                two_bit_extract = false;
             }
         };
 

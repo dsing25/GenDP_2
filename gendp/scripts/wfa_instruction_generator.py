@@ -33,12 +33,12 @@ PADDING_SIZE = 30 # in words, added at end of each mem_block
 BLOCK_0_START = 0
 BLOCK_1_START = MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE
 PATTERN_START = BLOCK_1_START + MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE
-SEQ_LEN_ALLOC = (BANK_SIZE-PATTERN_START) // 2
+SEQ_LEN_ALLOC = 648  # 10K bases / 16 per word, rounded up
 TEXT_START = PATTERN_START + SEQ_LEN_ALLOC
 SWIZZLED_PATTERN_START = PATTERN_START << 2 # need to reverse swizzle to hit 226 at the start
 SWIZZLED_TEXT_START = TEXT_START << 2 
 ALIGN_B0_PC = 7 + 6 + PE_BOOT_PAIRS
-ALIGN_B1_PC = 58 + PE_BOOT_PAIRS
+ALIGN_B1_PC = 60 + PE_BOOT_PAIRS
 EXTRA_O_LOAD_ADDR = 7 * MEM_BLOCK_SIZE
 
 
@@ -645,6 +645,12 @@ def pe_instruction(pe_id):
     #EXTEND INIT
         f.write(data_movement_instruction(gr, 0, 0, 0, 9, 0, 0, 0, 0, 0, si))                        # gr[9] = 0
         f.write(data_movement_instruction(gr, gr, 0, 0, 15, 0, 0, 0, 1, 12, shifti_r))               # gr[15] = gr[12] // 2
+        # Init bp-level bases for mvi2 (gr[4],gr[6] free after compute)
+        f.write(data_movement_instruction(gr, 0, 0, 0, 4, 0, 0, 0, SWIZZLED_PATTERN_START, 0, si))   # gr[4] = SWIZZLED_PATTERN_START
+        f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, SWIZZLED_TEXT_START, 0, si))      # gr[6] = SWIZZLED_TEXT_START
+        #We need the shifti_l because we can't fit the size of the value in the immediates
+        f.write(data_movement_instruction(gr, 0, 0, 0, 4, 0, 0, 0, 4, 4, shifti_l))                  # gr[4] <<= 4 (bp-level)
+        f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, 4, 6, shifti_l))                  # gr[6] <<= 4 (bp-level)
     #EXTEND DIAG LOOP
         f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, 4*MEM_BLOCK_SIZE+block_start, 9, mv))       # gr[1]=SPM[gr[9] + 4*MEM_BLOCK_SIZE+block_start]
         f.write(data_movement_instruction(gr, gr, 1, 0, 2, 0, 1, 0, 9, 14, add))                     # gr[2] = gr[9] + gr[14]
@@ -653,32 +659,34 @@ def pe_instruction(pe_id):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
         f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 1, 2, sub))                      # gr[2] = gr[1] - gr[2]
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
-        #early exits: offset < 0 || v >= pattern len || h >= text end
+        #early exits: offset < 0
         f.write(data_movement_instruction(0, 0, 0, 0, 9, 0, 1, 0, 1, 0, blt))                        # blt gr[1] gr[0]  9
         f.write(data_movement_instruction(0, 0, 0, 0, 9, 0, 1, 0, 1, 0, blt))                        # blt gr[1] gr[0]  9
-        f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 1, 0, 2, 8, bge))                        # bge gr[2] gr[8]  8
-        f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 1, 0, 2, 8, bge))                        # bge gr[2] gr[8]  8
-        f.write(data_movement_instruction(0, 0, 0, 0, 7, 0, 1, 0, 1, 13, bge))                       # bge gr[1] gr[13] 7
-        f.write(data_movement_instruction(0, 0, 0, 0, 7, 0, 1, 0, 1, 13, bge))                       # bge gr[1] gr[13] 7
     #EXTEND MATCH LOOP
+        # Bounds checks: exit if v >= plen or h >= tlen (skip subi)
+        f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 1, 0, 2, 8, bge))                        # bge gr[2] gr[8]  8
+        f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 1, 0, 2, 8, bge))                        # bge gr[2] gr[8]  8
+        f.write(data_movement_instruction(0, 0, 0, 0, 7, 0, 1, 0, 1, 13, bge))                       # bge gr[1] gr[13] 7
+        f.write(data_movement_instruction(0, 0, 0, 0, 7, 0, 1, 0, 1, 13, bge))                       # bge gr[1] gr[13] 7
         f.write(data_movement_instruction(gr, gr, 1, 0, 2, 0, 0, 0, 1, 2, addi))                     # gr[2] = gr[2] + 1
-        f.write(data_movement_instruction(gr, SPM, 0, 0, 3, 0, 0, 0, SWIZZLED_PATTERN_START, 2, mvi))# gr[3] = SPM[gr[2]+PATTERN_START]
+        f.write(data_movement_instruction(gr, SPM, 0, 0, 3, 0, 1, 0, 4, 2, mvi2))                    # gr[3] = mvi2(gr[4]+gr[2])
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
         #OPTIMIZATION Should be able to hoist this into the branches. Will give a good deal of perf
-        f.write(data_movement_instruction(gr, SPM, 0, 0, 5, 0, 0, 0, SWIZZLED_TEXT_START, 1, mvi))   # gr[5] = SPM[gr[1]+TEXT_START]
+        f.write(data_movement_instruction(gr, SPM, 0, 0, 5, 0, 1, 0, 6, 1, mvi2))                    # gr[5] = mvi2(gr[6]+gr[1])
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
         f.write(data_movement_instruction(gr, gr, 1, 0, 1, 0, 0, 0, 1, 1, addi))                     # gr[1] = gr[1] + 1
-        f.write(data_movement_instruction(0, 0, 0, 0, -4, 0, 1, 0, 3, 5, beq))                       # beq gr[3] gr[5] -4
-        f.write(data_movement_instruction(0, 0, 0, 0, -4, 0, 1, 0, 3, 5, beq))                       # beq gr[3] gr[5] -4
-    #FINISH EXTEND MATCH LOOP
+        f.write(data_movement_instruction(0, 0, 0, 0, -6, 0, 1, 0, 3, 5, beq))                       # beq gr[3] gr[5] -6
+        f.write(data_movement_instruction(0, 0, 0, 0, -6, 0, 1, 0, 3, 5, beq))                       # beq gr[3] gr[5] -6
+    #FINISH EXTEND MATCH LOOP (mismatch path: undo last h increment)
         f.write(data_movement_instruction(gr, gr, 1, 0, 1, 0, 0, 0, 1, 1, subi))                     # gr[1] = gr[1] - 1
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
+    #EXTEND STORE (bounds-exit path skips subi, lands here)
         f.write(data_movement_instruction(gr, gr, 1, 0, 9, 0, 0, 0, 1, 9, addi))                     # gr[9] = gr[9] + 1
         f.write(data_movement_instruction(SPM, gr, 0, 0, 4*MEM_BLOCK_SIZE+block_start, 9, 0, 0, 1, 0, mv))       # SPM[gr[9] + 4*MEM_BLOCK_SIZE+block_start]=gr[1]
-        f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 9, 7, blt))                      # blt gr[9] gr[7] -13 
-        f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 9, 7, blt))                      # blt gr[9] gr[7] -13 
+        f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 9, 7, blt))                      # blt gr[9] gr[7] -13
+        f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 9, 7, blt))                      # blt gr[9] gr[7] -13
         
         f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                       # gr[10] = 1
         f.write(data_movement_instruction(gr, gr, 0, 0, 14, 0, 0, 0, MEM_BLOCK_SIZE, 14, addi))       # gr[14]+= MEM_BLOCK_SIZE

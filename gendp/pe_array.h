@@ -44,6 +44,7 @@ class pe_array {
 
         void buffer_reset(int* buffer, int num);
         void write_spm_magic(int addr, int value);
+
         void write_s2(int addr, int value);
 
         int decode(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting);

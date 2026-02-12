@@ -64,6 +64,8 @@ void pe_array::write_spm_magic(int addr, int value) {
     SPM_unit->buffer[addr] = value;
 }
 
+
+
 void pe_array::write_s2(int addr, int value) {
     if (addr < 0 || addr >= s2->buffer_size) {
         fprintf(stderr, "write_s2 addr %d out of range.\n", addr);
