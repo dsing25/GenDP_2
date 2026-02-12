@@ -5,16 +5,20 @@
 #include <iostream>
 
 // Apply address swizzling for mvi instruction
-// Moves lower N_SWIZZLE_BITS to high positions of address
+// Keeps bit[0] as line offset, moves bits[2:1] to top
 inline int apply_address_swizzle(int addr) {
     if (addr < 0 || addr > SPM_ADDR_NUM) {
         fprintf(stderr, "Error: address %d out of bound for swizzling\n", addr);
         exit(-1);
     }
     int addr_masked = addr & ((1u << ADDR_LEN) - 1);
-    int lower_bits = addr_masked & ((1u << N_SWIZZLE_BITS) - 1);
-    int upper_bits = addr_masked >> N_SWIZZLE_BITS;
-    int new_addr = upper_bits | (lower_bits << (ADDR_LEN - N_SWIZZLE_BITS));
+    int line_off  = addr_masked & 1;
+    int bank_bits = (addr_masked >> 1)
+        & ((1u << N_SWIZZLE_BITS) - 1);
+    int rest      = addr_masked >> (N_SWIZZLE_BITS + 1);
+    int new_addr  = line_off
+        | (rest << 1)
+        | (bank_bits << (ADDR_LEN - N_SWIZZLE_BITS));
     return new_addr;
 }
 

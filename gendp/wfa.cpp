@@ -109,15 +109,15 @@ int wfa_simulate(pe_array *pe_array_unit, align_input_t& align_input, int n, FIL
     pe_array_unit->write_s2(past_wf_index(wf_i, 2, 1), first_extend_len);
 
     for (int i = 0; i < static_cast<int>(text_seq.size()); i++) {
-        int pe_id = i % 4;
-        int local_addr = TEXT_START + (i / 4);
+        int pe_id = (i / 2) % 4;
+        int local_addr = TEXT_START + (i / 8) * 2 + (i % 2);
         int raw_addr = pe_id * SPM_BANK_GROUP_SIZE + local_addr;
         pe_array_unit->write_spm_magic(raw_addr, static_cast<int>(text_seq[i]));
     }
 
     for (int i = 0; i < static_cast<int>(pattern_seq.size()); i++) {
-        int pe_id = i % 4;
-        int local_addr = PATTERN_START + (i / 4);
+        int pe_id = (i / 2) % 4;
+        int local_addr = PATTERN_START + (i / 8) * 2 + (i % 2);
         int raw_addr = pe_id * SPM_BANK_GROUP_SIZE + local_addr;
         pe_array_unit->write_spm_magic(raw_addr, static_cast<int>(pattern_seq[i]));
     }
