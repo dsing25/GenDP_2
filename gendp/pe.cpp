@@ -219,6 +219,9 @@ void pe::run(int simd) {
     decode(ctrl_instr_buffer_unit->buffer[PC[1]][1], &PC[1], src_dest[1], &ctrl_op[1], simd, &ctrl_write_addrs[0], &ctrl_write_data[0]);
     decode(ctrl_instr_buffer_unit->buffer[PC[0]][0], &PC[0], src_dest[0], &ctrl_op[0], simd, &ctrl_write_addrs[1], &ctrl_write_data[1]);
 
+    // Track if PE is halted (both slots executing halt instruction, opcode 15)
+    halted = (ctrl_op[0] == 15 && ctrl_op[1] == 15);
+
     addr_regfile_unit->write(ctrl_write_addrs, ctrl_write_data, CTRL_REGFILE_WRITE_PORTS);
 
 #ifdef PROFILE

@@ -47,6 +47,17 @@ BIN_PATH = ./
 
 TARGET = sim
 
+# O3 optimized build
+CXXFLAGS_O3 = -O3 -std=c++11
+TARGET_O3 = sim_o3
+OBJECT_O3 = $(OBJECT:.o=_o3.o)
+LIB_O3 = libsimulator_o3.a
+LIB_OBJECTS_O3 = $(LIB_SIMULATOR_OBJECTS:.o=_o3.o)
+
+.PHONY: all clean install
+
+all: $(TARGET) $(TARGET_O3)
+
 $(TARGET) : $(OBJECT) $(LIBS)
 	$(LINK) $(FLAGS) $(LINKFLAGS) -o $@ $^
 
@@ -58,6 +69,18 @@ libsimulator.a:  $(LIB_SIMULATOR_OBJECTS)
 	$(AR) $@ $(LIB_SIMULATOR_OBJECTS)
 	ranlib $@
 
+# O3 optimized build targets
+%_o3.o: %.cpp
+	@echo compiling $@ && g++ -c $(HEADER) $(CXXFLAGS_O3) -fpermissive -o $@ $<
+
+$(TARGET_O3): $(OBJECT_O3) $(LIB_O3)
+	@echo linking $@ && g++ -o $@ $^
+
+$(LIB_O3): $(LIB_OBJECTS_O3)
+	rm -f $@
+	@echo generating static library $@ && ar rc $@ $(LIB_OBJECTS_O3)
+	ranlib $@
+
 # libkernel.a: bsw.o poa.o chain.o
 # 	rm -f $@
 # 	$(AR) $@ bsw.o poa.o chain.o
@@ -67,4 +90,4 @@ install: $(TARGET)
 	cp $(TARGET) $(BIN_PATH)
 
 clean:
-	rm -rf $(TARGET) *.o *.so *.a
+	rm -rf $(TARGET) $(TARGET_O3) *.o *_o3.o *.so *.a

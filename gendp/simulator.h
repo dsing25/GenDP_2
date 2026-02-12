@@ -13,6 +13,9 @@ inline int lineOffset(int addr) { return addr & 1; }
 typedef int PerfCounter;
 extern PerfCounter totalSpmRequests;
 extern PerfCounter bankConflictStalls;
+extern PerfCounter lsqFullStalls;
+extern PerfCounter peHalted;
+extern PerfCounter forwardableBankConflict;
 
 enum EventType {
     SPM_DATA_READY

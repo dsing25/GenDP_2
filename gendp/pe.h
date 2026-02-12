@@ -52,6 +52,9 @@ class pe {
 
         bool stalled() const { return spmReqPort != nullptr; }
 
+        // Track if PE is halted (executing halt instruction)
+        bool halted = false;
+
         // ld/st data
         int load_data, store_data;
         unsigned long store_instruction[COMP_INSTR_BUFFER_GROUP_SIZE], load_instruction[COMP_INSTR_BUFFER_GROUP_SIZE];

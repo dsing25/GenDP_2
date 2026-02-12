@@ -14,6 +14,8 @@
 PerfCounter bankConflictStalls = 0;
 PerfCounter totalSpmRequests = 0;
 PerfCounter lsqFullStalls = 0;
+PerfCounter peHalted = 0;
+PerfCounter forwardableBankConflict = 0;
 
 pe_array::pe_array(int input_size, int output_size) {
 
@@ -1457,6 +1459,16 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             }
         }
 
+        // Count halted PEs and update performance counter
+        int num_halted = 0;
+        int total_pes = (setting == PE_4_SETTING) ? 4 : 64;
+        for (i = 0; i < total_pes; i++) {
+            if (pe_unit[i]->halted) {
+                num_halted++;
+            }
+        }
+        peHalted += num_halted;
+
         // SPM bank arbitration with conflict detection (round-robin)
         int start_pe = cycle % 4;
         for (int offset = 0; offset < 4; offset++) {
@@ -1466,9 +1478,21 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
 
             totalSpmRequests++;
             // Check if SPM bank is available
-            if (SPM_unit->portIsBusy(req->addr, req->peid, req->isVirtualAddr)) {
-                // Bank conflict - PE stays stalled, increment counter
+            int bank = SPM_unit->getBank(
+                req->addr, req->peid, req->isVirtualAddr);
+            if (SPM_unit->portIsBusy(
+                    req->addr, req->peid, req->isVirtualAddr)) {
                 bankConflictStalls++;
+                // Perf counter: check if conflict is same-line (forwardable)
+                OutstandingRequest* pend = SPM_unit->requests[bank];
+                int newPhys = req->isVirtualAddr
+                    ? (req->peid * SPM_BANK_GROUP_SIZE + req->addr)
+                    : req->addr;
+                int pendPhys = pend->isVirtualAddr
+                    ? (pend->peid * SPM_BANK_GROUP_SIZE + pend->addr)
+                    : pend->addr;
+                if (lineAddr(newPhys) == lineAddr(pendPhys))
+                    forwardableBankConflict++;
             } else {
                 // Grant access
                 SPM_unit->access(req->addr, req->peid,
@@ -1511,7 +1535,9 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     printf("=== Performance Counters ===\n");
     printf("TotalSpmRequests: %d\n", totalSpmRequests);
     printf("BankConflictStalls: %d\n", bankConflictStalls);
+    printf("ForwardableBankConflict: %d\n", forwardableBankConflict);
     printf("LsqFullStalls: %d\n", lsqFullStalls);
+    printf("PeHalted: %d\n", peHalted);
 
     // fprintf(stderr, "Finish simulation.\n");
 }
