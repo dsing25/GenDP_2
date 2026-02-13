@@ -90,7 +90,7 @@ int alu_32::execute(int input_0, int input_1, int op) {
 	else in_0_tmp = input_0;
 	if (input_1 < 0) in_1_tmp = pow(2, 32) + input_1;
 	else in_1_tmp = input_1;
-	
+
 	switch(op){
 		case ADDITION: {
 			out = input_0 + input_1;
@@ -98,6 +98,10 @@ int alu_32::execute(int input_0, int input_1, int op) {
 		}
 		case SUBTRACTION: {
 			out = input_0 - input_1;
+			break;
+		}
+		case MULTIPLICATION: {
+			out = input_0 * input_1;
 			break;
 		}
 		case CARRY: {
@@ -295,7 +299,7 @@ int alu_32::execute_4input_8bit(int input_0, int input_1, int input_2, int input
 
 int alu_32::execute_4input(int input_0, int input_1, int input_2, int input_3, int op) {
 	int out, tmp_minus, tmp_shift, log_sum_in;
-	long tmp, in_0_tmp, in_1_tmp, sum; 
+	long tmp, in_0_tmp, in_1_tmp, sum;
 	if (input_0 < 0) in_0_tmp = pow(2, 32) + input_0;
 	else in_0_tmp = input_0;
 	if (input_1 < 0) in_1_tmp = pow(2, 32) + input_1;
@@ -308,6 +312,10 @@ int alu_32::execute_4input(int input_0, int input_1, int input_2, int input_3, i
 		}
 		case SUBTRACTION: {
 			out = input_0 - input_1;
+			break;
+		}
+		case MULTIPLICATION: {
+			out = input_0 * input_1;
 			break;
 		}
 		case CARRY: {

@@ -1140,7 +1140,19 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
     printf("PC = %d\t", *PC);
 #endif
     if (main_instruction_setting == MAIN_INSTRUCTION_2) {
-        if (((opcode == 4 || opcode == 5) && (dest != 5 && dest != 6 && dest != 11 && dest != 12 && dest != 13 && dest != 14)) || opcode == 14) {
+        // Arithmetic (opcodes 0-3) now runs pre-PE via
+        // decode(). Skip here to avoid double-execution.
+        if (opcode <= 3) {
+#ifdef PROFILE
+            printf("\n");
+#endif
+            return 0;
+        }
+        if (((opcode == 4 || opcode == 5)
+             && (dest != 5 && dest != 6 && dest != 11
+                 && dest != 12 && dest != 13
+                 && dest != 14))
+            || opcode == 14) {
 #ifdef PROFILE
             printf("\n");
 #endif
@@ -1411,7 +1423,20 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                     c.s2Addr, c.data);
         }
 
-        flag = decode(main_instruction_buffer[main_PC][1], &main_PC, simd, setting, main_instruction_setting);
+        flag = decode(main_instruction_buffer[main_PC][1],
+            &main_PC, simd, setting,
+            main_instruction_setting);
+
+        // Pre-PE decode of slot[0]: arithmetic + non-I/O ops.
+        // Uses MI_1 filter to skip I/O-dest instructions
+        // (those are handled post-PE by decode_output).
+        if (main_instruction_setting == MAIN_INSTRUCTION_2) {
+            int slot0_PC = old_PC;
+            decode(main_instruction_buffer[old_PC][0],
+                &slot0_PC, simd, setting,
+                MAIN_INSTRUCTION_1);
+        }
+
         pe_unit[0]->load_data = store_data;
         pe_unit[0]->load_instruction[0] = PE_instruction[0];
         pe_unit[0]->load_instruction[1] = PE_instruction[1];
