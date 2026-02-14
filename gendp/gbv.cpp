@@ -15,15 +15,23 @@ int gbv_simulate(pe_array *pe_array_unit, gbv_align_input_t& align_input, int n,
         pe_array_unit->pe_unit[i]->reset();
     }
 
-    // Example: Write query and ref_basepair to input buffer if needed
-    // pe_array_unit->input_buffer_write_from_ddr_unsigned(0, &align_input.query);
-    // pe_array_unit->input_buffer_write_from_ddr_unsigned(1, &align_input.ref_basepair);
+    // Write input data to input buffer
+    unsigned int ref_basepair_uint = (unsigned int)align_input.ref_basepair;
+    pe_array_unit->input_buffer_write_from_ddr_unsigned(0, &ref_basepair_uint);
+    
+    for (int i = 0; i < 4; i++) {
+        pe_array_unit->input_buffer_write_from_ddr_unsigned(1 + i, &align_input.eq_vector[i]);
+    }
+    
+    pe_array_unit->input_buffer_write_from_ddr(5, &align_input.hinN);
+    pe_array_unit->input_buffer_write_from_ddr(6, &align_input.hinP);
 
-    pe_array_unit->run(n, simd, PE_4_SETTING, MAIN_INSTRUCTION_2);
+    pe_array_unit->run(n, simd, PE_4_SETTING, MAIN_INSTRUCTION_1);
 
     return 0; // TODO: Return actual score/output if needed
     // if (show_output) pe_array_unit->show_output_buffer(fp);
 }
+
 
 void gbv_simulation(char *inputFileName, char *outputFileName, FILE *fp, int show_output, int simulation_cases) {
     pe_array *pe_array_unit = new pe_array(1024, 1024);

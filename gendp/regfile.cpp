@@ -60,7 +60,8 @@ void regfile::read(int* read_addr, int* read_data) {
 void regfile::show_data(int addr) {
 
     if (addr >= 0 && addr < REGFILE_ADDR_NUM)
-        printf("regfile[%d] = %d\n", addr, register_file[addr]);
+        // printf("regfile[%d] = %d\n", addr, register_file[addr]);
+        printf("regfile[%d] = 0x%x (%d)\n", addr, register_file[addr], register_file[addr]);
     else fprintf(stderr, "regfile show data addr error.\n");
 
 }

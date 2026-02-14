@@ -108,9 +108,9 @@ LoadResult pe_array::load(int source_pos, int reg_immBar_flag, int rs1, int rs2,
     else source_addr = rs1 + main_addressing_register[rs2];
 
 
-#ifdef DEBUG
-    printf("src: %d reg_immBar_flag: %d reg_imm_1: %d reg_1: %d src_addr: %d\n", source_pos, reg_immBar_flag, rs1, main_addressing_register[rs2], source_addr);
-#endif
+// #ifdef DEBUG
+//     printf("src: %d reg_immBar_flag: %d reg_imm_1: %d reg_1: %d src_addr: %d\n", source_pos, reg_immBar_flag, rs1, main_addressing_register[rs2], source_addr);
+// #endif
 
     if (source_pos == 1) {
         data.data[0] = main_addressing_register[source_addr];
@@ -172,9 +172,9 @@ void pe_array::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, LoadRe
     if (reg_immBar_flag) dest_addr = main_addressing_register[rs1] + main_addressing_register[rs2];
     else dest_addr = rs1 + main_addressing_register[rs2];
 
-#ifdef DEBUG
-    printf("dest: %d reg_immBar_flag: %d reg_imm_1: %d reg_1: %d gr[reg_1]: %d dest_addr: %d\n", dest_pos, reg_immBar_flag, rs1, rs2, main_addressing_register[rs2], dest_addr);
-#endif
+// #ifdef DEBUG
+//     printf("dest: %d reg_immBar_flag: %d reg_imm_1: %d reg_1: %d gr[reg_1]: %d dest_addr: %d\n", dest_pos, reg_immBar_flag, rs1, rs2, main_addressing_register[rs2], dest_addr);
+// #endif
 
     if (dest_pos == 1) {
         main_addressing_register[dest_addr] = data.data[0];
@@ -292,16 +292,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         }
     }
 
-#ifdef DEBUG
-    printf("dest: %d src: %d reg_immBar_flag_0: %d reg_auto_increasement_flag_0: %d reg_imm_0_sign_bit: %d sext_imm_0: %d, reg_0: %d reg_immBar_flag_1: %d reg_auto_increasement_flag_1: %d reg_imm_1_sign_bit: %d sext_imm_1: %d reg_1: %d opcode: %d\n", dest, src, reg_immBar_flag_0, reg_auto_increasement_flag_0, reg_imm_0_sign_bit, sext_imm_0, reg_0, reg_immBar_flag_1, reg_auto_increasement_flag_1, reg_imm_1_sign_bit, sext_imm_1, reg_1, opcode);
-#endif
+// #ifdef DEBUG
+//     printf("dest: %d src: %d reg_immBar_flag_0: %d reg_auto_increasement_flag_0: %d reg_imm_0_sign_bit: %d sext_imm_0: %d, reg_0: %d reg_immBar_flag_1: %d reg_auto_increasement_flag_1: %d reg_imm_1_sign_bit: %d sext_imm_1: %d reg_1: %d opcode: %d\n", dest, src, reg_immBar_flag_0, reg_auto_increasement_flag_0, reg_imm_0_sign_bit, sext_imm_0, reg_0, reg_immBar_flag_1, reg_auto_increasement_flag_1, reg_imm_1_sign_bit, sext_imm_1, reg_1, opcode);
+// #endif
 
-    if (is_magic) {
-        for (int i = 0; i < 10; ++i) {
-            int value = i * 2; // or any value you want
-            input_buffer_write_from_ddr(i, &value);
-        }
-    } 
+if (is_magic) {
+    // No-op: Magic instructions currently disabled
+    (*PC)++;
+    return 0;
+}
+
     
     else if (opcode == 0) {              // add rd rs1 rs2
         rd = reg_imm_0;
@@ -646,18 +646,34 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
         }
     }
 
-#ifdef DEBUG
-    printf("dest: %d src: %d reg_immBar_flag_0: %d reg_auto_increasement_flag_0: %d reg_imm_0_sign_bit: %d sext_imm_0: %d, reg_0: %d reg_immBar_flag_1: %d reg_auto_increasement_flag_1: %d reg_imm_1_sign_bit: %d sext_imm_1: %d reg_1: %d opcode: %d\n", dest, src, reg_immBar_flag_0, reg_auto_increasement_flag_0, reg_imm_0_sign_bit, sext_imm_0, reg_0, reg_immBar_flag_1, reg_auto_increasement_flag_1, reg_imm_1_sign_bit, sext_imm_1, reg_1, opcode);
-#endif
+// #ifdef DEBUG
+//     printf("dest: %d src: %d reg_immBar_flag_0: %d reg_auto_increasement_flag_0: %d reg_imm_0_sign_bit: %d sext_imm_0: %d, reg_0: %d reg_immBar_flag_1: %d reg_auto_increasement_flag_1: %d reg_imm_1_sign_bit: %d sext_imm_1: %d reg_1: %d opcode: %d\n", dest, src, reg_immBar_flag_0, reg_auto_increasement_flag_0, reg_imm_0_sign_bit, sext_imm_0, reg_0, reg_immBar_flag_1, reg_auto_increasement_flag_1, reg_imm_1_sign_bit, sext_imm_1, reg_1, opcode);
+// #endif
 
-    if (opcode == 0) {              // add rd rs1 rs2
-        rd = reg_imm_0;
-        rs1 = reg_imm_1;
-        rs2 = reg_1;
-        add_a = main_addressing_register[rs1];
-        add_b = main_addressing_register[rs2];
-        sum = add_a + add_b;
-        main_addressing_register[rd] = sum;
+if (opcode == 0) {              // add rd rs1 rs2
+    rd = reg_imm_0;
+    rs1 = reg_imm_1;
+    rs2 = reg_1;
+    
+    // DEBUG: Print instruction details
+    fprintf(stderr, "\n=== ADD INSTRUCTION DEBUG ===\n");
+    fprintf(stderr, "PC: %d\n", *PC);
+    fprintf(stderr, "Instruction: 0x%lx\n", instruction);
+    fprintf(stderr, "rd=%d, rs1=%d, rs2=%d\n", rd, rs1, rs2);
+    fprintf(stderr, "reg_imm_0=%d, reg_imm_1=%d, reg_1=%d\n", reg_imm_0, reg_imm_1, reg_1);
+    fprintf(stderr, "MAIN_ADDR_REGISTER_NUM=%d\n", MAIN_ADDR_REGISTER_NUM);
+    
+    if (rd >= MAIN_ADDR_REGISTER_NUM || rs1 >= MAIN_ADDR_REGISTER_NUM || rs2 >= MAIN_ADDR_REGISTER_NUM) {
+        fprintf(stderr, "ERROR: Register index out of bounds!\n");
+        fprintf(stderr, "  Valid range: 0-%d\n", MAIN_ADDR_REGISTER_NUM-1);
+        exit(1);
+    }
+    
+    add_a = main_addressing_register[rs1];
+    add_b = main_addressing_register[rs2];
+    sum = add_a + add_b;
+    main_addressing_register[rd] = sum;
+
 #ifdef PROFILE
         printf("add gr[%d] gr[%d] gr[%d] (%d %d %d)\n", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -741,6 +757,29 @@ void pe_array::show_main_instruction_buffer() {
         for (j = 0; j < 2; j++)
             printf("main instruction buffer[%d][%d] = %lx\n", i, j, main_instruction_buffer[i][j]);
 }
+
+void pe_array::show_compute_reg(const char* label) {
+    #ifdef DEBUG
+    printf("\n========== %s ==========\n", label);
+    for (int i = 0; i < PE_NUM; i++) {
+        if (pe_unit[i] == nullptr) continue;
+        
+        printf("\n--- PE[%d] ---\n", i);
+        
+        // Show compute registers using existing public function
+        printf("Compute Registers (reg):\n");
+        pe_unit[i]->show_comp_reg();
+        
+        // Show addressing registers (directly accessible since it's public)
+        printf("\nAddressing Registers (gr):\n");
+        for (int j = 0; j < ADDR_REGISTER_NUM; j++) {
+            printf("  gr[%d] = %d\n", j, pe_unit[i]->addr_regfile_unit->buffer[j]);
+        }
+    }
+    printf("=======================================\n\n");
+    #endif
+}
+
 
 int Float2Fix(float exact_value) {
     int MIN_INTEGER = -pow(2, NUM_FRACTION_BITS+NUM_INTEGER_BITS);
@@ -867,17 +906,41 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         pe_unit[0]->load_instruction[0] = PE_instruction[0];
         pe_unit[0]->load_instruction[1] = PE_instruction[1];
 
-        // GBV Debug
-        printf("Cycle %d\n", cycle);
-        show_gr(); // Print main addressing registers
-        // show_compute_instruction_buffer();
-        show_main_instruction_buffer();
-        printf("Input buffer: ");
-        for (int k = 0; k < 20; ++k) printf("%d ", input_buffer[k]);
-        printf("\nOutput buffer: ");
-        for (int k = 0; k < 20; ++k) printf("%d ", output_buffer[k]);
-        printf("\n");
-        // ---------------------------------------------------
+    #ifdef DEBUG
+            // GBV Debug
+            printf("\n========== Cycle %d ==========\n", cycle);
+
+            // Main controller addressing registers
+            printf("Main Controller (gr):\n  ");
+            show_gr();
+
+            // Input/Output buffers
+            printf("Input buffer: ");
+            for (int k = 0; k < 7; ++k) printf("%d ", input_buffer[k]);
+            printf("\nOutput buffer: ");
+            for (int k = 0; k < 10; ++k) printf("%d ", output_buffer[k]);
+            printf("\n");
+
+            // PE registers (show first few for brevity)
+            for (int pe_id = 0; pe_id < setting && pe_id < 4; pe_id++) {
+                printf("\n--- PE[%d] ---\n", pe_id);
+                
+                // Compute registers using existing show function
+                printf("  Compute (reg[0-31]):\n");
+                pe_unit[pe_id]->show_comp_reg();
+                
+                // Addressing registers (publicly accessible)
+                printf("  Addressing (gr[0-15]): ");
+                for (int j = 0; j < ADDR_REGISTER_NUM; j++) {
+                    printf("%d ", pe_unit[pe_id]->addr_regfile_unit->buffer[j]);
+                }
+                printf("\n");
+            }
+
+            printf("=====================================\n");
+    #endif
+
+
 
         if (setting == PE_4_SETTING) {
             for (i = 0; i < 4; i++) {

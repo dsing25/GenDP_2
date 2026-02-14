@@ -557,8 +557,21 @@ def gbv_main_instruction():
 
     f.write(write_magic(1))                                                                           # magic(5) - print final state
 
-    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 10, 0, si)) # gr[1] = 0 counter for input data buffer
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(gr, gr, 1, 0, 1, 0, 0, 0, 10, 0, addi)) # gr[1] = gr[0] + 10
+
+
+    #f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 10, 0, si)) # gr[1] = 0 counter for input data buffer
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+
     f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 5, 0, si)) # gr[1] = 0 counter for input data buffer
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(out_buf, in_buf, 0, 0, 0, 0, 0, 1, 0, 1, mv)) # out = input[gr[1]++]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -581,9 +594,9 @@ def gbv_main_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    for i in range(100):
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    # for i in range(100):
+    #     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    #     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -605,6 +618,9 @@ def pe_0_instruction():
      # flag_2, flag_3, imm/reg_1, reg_1(++), opcode
 
     f = InstructionWriter("instructions/gbv/pe_0_instruction.txt");
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(reg, in_port, 0, 0, 12, 0, 0, 0, 0, 0, mv)) # reg[12] = in
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          
