@@ -761,7 +761,7 @@ void pe_array::show_main_instruction_buffer() {
 void pe_array::show_compute_reg(const char* label) {
     #ifdef DEBUG
     printf("\n========== %s ==========\n", label);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 1; i++) {
         if (pe_unit[i] == nullptr) continue;
         
         printf("\n--- PE[%d] ---\n", i);
@@ -921,7 +921,7 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             for (int k = 0; k < 10; ++k) printf("%d ", output_buffer[k]);
             printf("\n");
 
-            //show_compute_reg("PE Debug");
+            show_compute_reg("PE Debug");
 
             printf("=====================================\n");
     #endif
