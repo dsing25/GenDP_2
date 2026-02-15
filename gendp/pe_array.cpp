@@ -761,7 +761,7 @@ void pe_array::show_main_instruction_buffer() {
 void pe_array::show_compute_reg(const char* label) {
     #ifdef DEBUG
     printf("\n========== %s ==========\n", label);
-    for (int i = 0; i < PE_NUM; i++) {
+    for (int i = 0; i < 4; i++) {
         if (pe_unit[i] == nullptr) continue;
         
         printf("\n--- PE[%d] ---\n", i);
@@ -921,21 +921,7 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             for (int k = 0; k < 10; ++k) printf("%d ", output_buffer[k]);
             printf("\n");
 
-            // PE registers (show first few for brevity)
-            for (int pe_id = 0; pe_id < setting && pe_id < 4; pe_id++) {
-                printf("\n--- PE[%d] ---\n", pe_id);
-                
-                // Compute registers using existing show function
-                printf("  Compute (reg[0-31]):\n");
-                pe_unit[pe_id]->show_comp_reg();
-                
-                // Addressing registers (publicly accessible)
-                printf("  Addressing (gr[0-15]): ");
-                for (int j = 0; j < ADDR_REGISTER_NUM; j++) {
-                    printf("%d ", pe_unit[pe_id]->addr_regfile_unit->buffer[j]);
-                }
-                printf("\n");
-            }
+            //show_compute_reg("PE Debug");
 
             printf("=====================================\n");
     #endif
