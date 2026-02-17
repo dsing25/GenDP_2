@@ -57,11 +57,18 @@ void regfile::read(int* read_addr, int* read_data) {
 
 }
 
-void regfile::show_data(int addr) {
+void regfile::show_data(int addr, const char** reg_names) {
 
-    if (addr >= 0 && addr < REGFILE_ADDR_NUM)
-        // printf("regfile[%d] = %d\n", addr, register_file[addr]);
-        printf("regfile[%d] = 0x%x (%d)\n", addr, register_file[addr], register_file[addr]);
-    else fprintf(stderr, "regfile show data addr error.\n");
+    if (addr >= 0 && addr < REGFILE_ADDR_NUM) {
+        if (reg_names != nullptr && reg_names[addr] != nullptr && reg_names[addr][0] != '\0') {
+            // Print with register name
+            printf("regfile[%d] %-15s = 0x%x (%d)\n", addr, reg_names[addr], register_file[addr], register_file[addr]);
+        } else {
+            // Print without name (original format)
+            printf("regfile[%d] = 0x%x (%d)\n", addr, register_file[addr], register_file[addr]);
+        }
+    } else {
+        fprintf(stderr, "regfile show data addr error.\n");
+    }
 
 }

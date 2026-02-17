@@ -31,7 +31,7 @@ class pe_array {
         void show_gr();
         void show_compute_instruction_buffer();
         void show_main_instruction_buffer();
-        void show_compute_reg(const char* label);
+        void show_compute_reg(const char* label, const char** reg_names = nullptr);
         void poa_show_output_buffer(int len_y, int len_x, FILE* fp);
         void bsw_show_output_buffer(FILE* fp);
         void chain_show_output_buffer(int n, FILE* fp);
@@ -57,6 +57,9 @@ class pe_array {
         int *input_buffer, *output_buffer;
         FIFO fifo_unit[FIFO_GROUP_NUM][FIFO_GROUP_SIZE];
         pe *pe_unit[PE_NUM];
+
+        // Register names for debug output (kernel-specific)
+        const char** compute_reg_names;
 
     private:
         //helper

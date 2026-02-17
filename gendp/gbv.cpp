@@ -16,15 +16,15 @@ int gbv_simulate(pe_array *pe_array_unit, gbv_align_input_t& align_input, int n,
     }
 
     // Write input data to input buffer
-    unsigned int ref_basepair_uint = (unsigned int)align_input.ref_basepair;
-    pe_array_unit->input_buffer_write_from_ddr_unsigned(0, &ref_basepair_uint);
-    
-    for (int i = 0; i < 4; i++) {
-        pe_array_unit->input_buffer_write_from_ddr_unsigned(1 + i, &align_input.eq_vector[i]);
-    }
-    
-    pe_array_unit->input_buffer_write_from_ddr(5, &align_input.hinN);
-    pe_array_unit->input_buffer_write_from_ddr(6, &align_input.hinP);
+    // Left slice: VN, VP, scoreEnd
+    pe_array_unit->input_buffer_write_from_ddr_unsigned(0, &align_input.left_VN);
+    pe_array_unit->input_buffer_write_from_ddr_unsigned(1, &align_input.left_VP);
+    pe_array_unit->input_buffer_write_from_ddr(2, &align_input.left_scoreEnd);
+
+    // Right slice: VN, VP, scoreEnd
+    pe_array_unit->input_buffer_write_from_ddr_unsigned(3, &align_input.right_VN);
+    pe_array_unit->input_buffer_write_from_ddr_unsigned(4, &align_input.right_VP);
+    pe_array_unit->input_buffer_write_from_ddr(5, &align_input.right_scoreEnd);
 
     pe_array_unit->run(n, simd, PE_4_SETTING, MAIN_INSTRUCTION_1);
 
@@ -35,6 +35,9 @@ int gbv_simulate(pe_array *pe_array_unit, gbv_align_input_t& align_input, int n,
 
 void gbv_simulation(char *inputFileName, char *outputFileName, FILE *fp, int show_output, int simulation_cases) {
     pe_array *pe_array_unit = new pe_array(1024, 1024);
+
+    // Set GBV-specific register names for debug output
+    pe_array_unit->compute_reg_names = GBV_REG_NAMES;
 
     int n_comp_instructions = GBV_COMPUTE_INSTRUCTION_NUM;
     int pe_group_size = GBV_PE_GROUP_SIZE;
@@ -136,22 +139,27 @@ void gbv_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
         gbv_align_input_t align_input;
     char charline[256];
     while (true) {
-        // Read 7 lines for each input struct
-        if (!fgets(charline, sizeof(charline), input_file)) break;
-        align_input.ref_basepair = (uint8_t)strtoul(charline, nullptr, 10);
+        // Read 6 lines for each input struct: left VN, VP, scoreEnd, right VN, VP, scoreEnd
 
-        for (int i = 0; i < 4; ++i) {
-            if (!fgets(charline, sizeof(charline), input_file)) break;
-            align_input.eq_vector[i] = strtoul(charline, nullptr, 10);
-        }
+        // Left slice
+        if (!fgets(charline, sizeof(charline), input_file)) break;
+        align_input.left_VN = strtoul(charline, nullptr, 10);
 
         if (!fgets(charline, sizeof(charline), input_file)) break;
-        align_input.hinN = atoi(charline);
+        align_input.left_VP = strtoul(charline, nullptr, 10);
 
         if (!fgets(charline, sizeof(charline), input_file)) break;
-        align_input.hinP = atoi(charline);
+        align_input.left_scoreEnd = atoi(charline);
 
-        // Optionally, check for incomplete input here
+        // Right slice
+        if (!fgets(charline, sizeof(charline), input_file)) break;
+        align_input.right_VN = strtoul(charline, nullptr, 10);
+
+        if (!fgets(charline, sizeof(charline), input_file)) break;
+        align_input.right_VP = strtoul(charline, nullptr, 10);
+
+        if (!fgets(charline, sizeof(charline), input_file)) break;
+        align_input.right_scoreEnd = atoi(charline);
 
         int score_out = gbv_simulate(pe_array_unit, align_input, GBV_MAX_CYCLES, fp, show_output);
         gbv_output.push_back(score_out);

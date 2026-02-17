@@ -808,9 +808,9 @@ int pe::get_gr_10() {
     return addr_regfile_unit->buffer[10];
 }
 
-void pe::show_comp_reg() {
+void pe::show_comp_reg(const char** reg_names) {
     int i;
     for (i = 0; i < REGFILE_ADDR_NUM; i++)
-        regfile_unit->show_data(i);
+        regfile_unit->show_data(i, reg_names);
 }
 

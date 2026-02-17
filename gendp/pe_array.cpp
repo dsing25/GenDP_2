@@ -27,6 +27,7 @@ pe_array::pe_array(int input_size, int output_size) {
     load_data = 0;
     store_data = 0;
     from_fifo = 0;
+    compute_reg_names = nullptr;
 }
 
 pe_array::~pe_array() {
@@ -758,18 +759,21 @@ void pe_array::show_main_instruction_buffer() {
             printf("main instruction buffer[%d][%d] = %lx\n", i, j, main_instruction_buffer[i][j]);
 }
 
-void pe_array::show_compute_reg(const char* label) {
+void pe_array::show_compute_reg(const char* label, const char** reg_names) {
     #ifdef DEBUG
+    // Use member variable if no parameter provided
+    const char** names_to_use = (reg_names != nullptr) ? reg_names : compute_reg_names;
+
     printf("\n========== %s ==========\n", label);
     for (int i = 0; i < 1; i++) {
         if (pe_unit[i] == nullptr) continue;
-        
+
         printf("\n--- PE[%d] ---\n", i);
-        
+
         // Show compute registers using existing public function
         printf("Compute Registers (reg):\n");
-        pe_unit[i]->show_comp_reg();
-        
+        pe_unit[i]->show_comp_reg(names_to_use);
+
         // Show addressing registers (directly accessible since it's public)
         printf("\nAddressing Registers (gr):\n");
         for (int j = 0; j < ADDR_REGISTER_NUM; j++) {
@@ -920,7 +924,8 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             printf("\nOutput buffer: ");
             for (int k = 0; k < 10; ++k) printf("%d ", output_buffer[k]);
             printf("\n");
-
+            //show_compute_instruction_buffer();
+            //show_main_instruction_buffer();
             show_compute_reg("PE Debug");
 
             printf("=====================================\n");

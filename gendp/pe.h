@@ -41,7 +41,7 @@ class pe {
 
         void recieve_spm_data(int data[SPM_BANDWIDTH]);
 
-        void show_comp_reg();
+        void show_comp_reg(const char** reg_names = nullptr);
 
         // ld/st data
         int load_data, store_data;
