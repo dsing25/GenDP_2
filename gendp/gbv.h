@@ -6,9 +6,9 @@
 #include "pe_array.h"
 
 // GBV kernel configuration
-#define GBV_COMPUTE_INSTRUCTION_NUM 110
+#define GBV_COMPUTE_INSTRUCTION_NUM 150
 #define GBV_PE_GROUP_SIZE 4
-#define GBV_MAX_CYCLES 100
+#define GBV_MAX_CYCLES 150
 
 // GBV register names for debugging
 static const char* GBV_REG_NAMES[] = {

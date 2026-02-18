@@ -745,6 +745,47 @@ void pe_array::show_gr() {
         printf("main gr[%d] = %d\n", i, main_addressing_register[i]);
 }
 
+void pe_array::show_spm_nonzero(int start, int end) {
+    if (start < 0 || end > SPM_unit->buffer_size || start > end) {
+        fprintf(stderr, "show_spm_nonzero: invalid range [%d, %d]\n", start, end);
+        return;
+    }
+
+    printf("\n=== Non-zero SPM values [%d-%d] ===\n", start, end);
+    int count = 0;
+
+    // Organize by banks for clarity
+    for (int bank = 0; bank < 4; bank++) {
+        int bank_start = bank * SPM_BANK_SIZE;
+        int bank_end = (bank + 1) * SPM_BANK_SIZE;
+
+        // Skip banks outside our range
+        if (bank_end <= start || bank_start >= end) continue;
+
+        int search_start = (start > bank_start) ? start : bank_start;
+        int search_end = (end < bank_end) ? end : bank_end;
+
+        bool bank_has_data = false;
+        for (int i = search_start; i < search_end; i++) {
+            if (SPM_unit->buffer[i] != 0) {
+                if (!bank_has_data) {
+                    printf("\n--- Bank %d (addresses %d-%d) ---\n", bank, bank_start, bank_end - 1);
+                    bank_has_data = true;
+                }
+                printf("  SPM[%5d] = %10d (0x%08x)\n", i, SPM_unit->buffer[i], SPM_unit->buffer[i]);
+                count++;
+            }
+        }
+    }
+
+    if (count == 0) {
+        printf("  (All values are zero)\n");
+    } else {
+        printf("\nTotal non-zero values: %d\n", count);
+    }
+    printf("===================================\n");
+}
+
 void pe_array::show_compute_instruction_buffer() {
     int i, j;
     for (i = 0; i < COMP_INSTR_BUFFER_GROUP_NUM; i++)
@@ -915,15 +956,19 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             printf("\n========== Cycle %d ==========\n", cycle);
 
             // Main controller addressing registers
-            printf("Main Controller (gr):\n  ");
-            show_gr();
+            //printf("Main Controller (gr):\n  ");
+            //show_gr();
 
             // Input/Output buffers
-            printf("Input buffer: ");
-            for (int k = 0; k < 7; ++k) printf("%d ", input_buffer[k]);
-            printf("\nOutput buffer: ");
-            for (int k = 0; k < 10; ++k) printf("%d ", output_buffer[k]);
-            printf("\n");
+            // printf("Input buffer: ");
+            // for (int k = 0; k < 7; ++k) printf("%d ", input_buffer[k]);
+            // printf("\nOutput buffer: ");
+            // for (int k = 0; k < 10; ++k) printf("%d ", output_buffer[k]);
+            // printf("\n");
+
+            // SPM non-zero values - Bank 0 only
+            show_spm_nonzero(0, SPM_BANK_SIZE);
+
             //show_compute_instruction_buffer();
             //show_main_instruction_buffer();
             show_compute_reg("PE Debug");
