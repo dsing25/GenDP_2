@@ -191,7 +191,7 @@ def gbv_compute_v3():
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
     # End of Jump B
 
-    # Jump G Compute
+    # Jump G Compute (if reg30 < reg29) 
     f.write(compute_instruction(SUBTRACTION, COPY, BWISE_OR, 29, 30, 0, 0, 20, 0, 20)) # leftSmaller |= leastSignificantBigger - leastSignificantSmaller
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
@@ -603,8 +603,8 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(gr, reg, 0, 0, 9, 0, 0, 0, 30, 0, mv)) # gr[9] = reg[30]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPG, 0, 1, 0, 9, 8, blt)) # blt gr[9] gr[8] jump G (PC 61 → 98, +37)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPG, 0, 1, 0, 9, 8, blt)) # if false, move on to the b3 compute trace
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPG, 0, 1, 0, 9, 8, bltu)) # blt gr[9] gr[8] jump G (PC 61 → 98, +37)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPG, 0, 1, 0, 9, 8, bltu)) # if false, move on to the b3 compute trace
 
 
     # jump B3 in here

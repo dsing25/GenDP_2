@@ -491,6 +491,29 @@ if (is_magic) {
             printf(" not jump.\n");
 #endif
         }
+    } else if (opcode == 22) {       // bltu rs1 rs2 offset (unsigned)
+        rs1 = sext_imm_1;
+        rs2 = reg_1;
+#ifdef PROFILE
+        printf("bltu %d %d %d", rs1, rs2, sext_imm_0);
+#endif
+        if (reg_immBar_flag_1) comp_0 = main_addressing_register[rs1];
+        else comp_0 = sext_imm_1;
+        comp_1 = main_addressing_register[rs2];
+#ifdef PROFILE
+        printf(" (%u %u)", (unsigned int)comp_0, (unsigned int)comp_1);
+#endif
+        if ((unsigned int)comp_0 < (unsigned int)comp_1) {
+            *PC = *PC + sext_imm_0;
+#ifdef PROFILE
+            printf(" jump.\n");
+#endif
+        } else {
+            (*PC)++;
+#ifdef PROFILE
+            printf(" not jump.\n");
+#endif
+        }
     } else if (opcode == 12) {      // jump
         *PC = *PC + sext_imm_0;
 #ifdef PROFILE
@@ -629,7 +652,7 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
     int opcode = instruction & opcode_mask;
 
 #ifdef PROFILE
-    printf("PC = %d\t", *PC);
+    printf("PC = %d @%d\t", *PC, cycle);
 #endif
     if (main_instruction_setting == MAIN_INSTRUCTION_2) {
         if (((opcode == 4 || opcode == 5) && (dest != 5 && dest != 6 && dest != 11 && dest != 12 && dest != 13 && dest != 14)) || opcode == 14) {
