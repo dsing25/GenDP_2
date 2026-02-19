@@ -61,12 +61,9 @@ def gbv_compute_v3():
     # in here, you need to move all the left and right things to SPM and store it
 
     # Stall for SPM writes before we do differencemasks. This is part of the merge2Inputs
-    for i in range(12):
+    for i in range(9):
         f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
         f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-
-    f.write(compute_instruction(ADD, INVALID, COPY, 31, 31, 0, 0, 0, 0, 1)) # test instruction remove later
-    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
     # differenceMasks (34)
     f.write(compute_instruction(BWISE_AND, INVALID, BWISE_NOT, 13, 17, 0, 0, 0, 0, 23)) # VPcommon = ~(leftVP & rightVP)
@@ -352,8 +349,6 @@ def gbv_main_instruction():
 
     # f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 0, 0, si)) # gr[1] = 0 counter for input data buffer
 
-    f.write(data_movement_instruction(gr, 0, 0, 0, 4, 0, 0, 0, 5, 0, si)) # test instruction
-
     f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 1, mv)) # out = input[gr[1]++]
 
     f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 1, mv)) # out = input[gr[1]++]
@@ -368,7 +363,7 @@ def gbv_main_instruction():
 
     f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 1, mv)) # out = input[gr[1]++]
 
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_COMPUTE_START, 0, 0, 0, 0, 0, set_PC))
+    # f.write(data_movement_instruction(0, 0, 0, 0, PE_COMPUTE_START, 0, 0, 0, 0, 0, set_PC))
 
 
     for i in range(100):
@@ -418,10 +413,7 @@ def pe_instruction(pe_id):
     # f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt)) 
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) # this is instruction 2 (runs second in VLIW)                         
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) # this is instruction 1 (runs first)          
-
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) # this is instruction 1 (runs first)                                
 
     f.write(data_movement_instruction(reg, in_port, 0, 0, 12, 0, 0, 0, 0, 0, mv)) # reg[12] = in
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       
@@ -444,9 +436,12 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, set_PC))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, set_PC))                         
 
-    for i in range(10):
+    for i in range(5):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(reg, 0, 0, 0, 25, 0, 0, 0, 0, 0, si)) # set reg25 = 0 to ensure it works for other iterations
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     # the compute starts here, and then reg11 = reg15
     # f.write(data_movement_instruction(reg, reg, 0, 0, 11, 0, 0, 0, 15, 0, mv)) # reg[11] = reg[15]    
@@ -477,11 +472,9 @@ def pe_instruction(pe_id):
     # f.write(data_movement_instruction(reg, reg, 0, 0, 18, 0, 0, 0, 25, 0, mv)) # reg[18] = reg[25]    
     # f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 420, 0, si)) # debug instruction remove later
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
-
     # Data Movement for merge2Input that stores data into SPM 
     # differenceMasks is the next step after this data movement
+
     f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si)) # gr[2] = 0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
@@ -521,15 +514,7 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, 888, 0, si)) # debug instruction remove later
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
-
     # cycle 36 and the test compute instruction line up here. above instruction goes through here
-
-    # add stalls on data while the compute is happening (this is compute for differencemasks)
-    for i in range(7):
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     # differenceMasks Data Movement Trace
     
@@ -547,6 +532,10 @@ def pe_instruction(pe_id):
 
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 1, 0, si)) # gr[3] = 1 (for loop i=1 counter)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    for i in range(6):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(gr, gr, 0, 0, JMPA, 0, 0, 0, 0, 4, blt)) # blt 0 gr[4] jump A (PC 46 → 59, +13)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))

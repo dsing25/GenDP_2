@@ -1025,6 +1025,9 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         else if (main_instruction_setting == MAIN_INSTRUCTION_2)
             decode_output(main_instruction_buffer[old_PC][0], &old_PC, simd, setting, main_instruction_setting);
 
+#ifdef PROFILE
+        printf("\n");
+#endif
         //zkn TODO I don't know if these should be in the above else or not
         main_addressing_register[13] = pe_unit[0]->get_gr_10() && pe_unit[1]->get_gr_10();
         for (i = 2; i < setting; i++)

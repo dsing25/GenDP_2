@@ -139,13 +139,13 @@ void pe::run(int simd) {
     instruction[0] = comp_instr_buffer_unit->buffer[comp_PC][0];
     instruction[1] = comp_instr_buffer_unit->buffer[comp_PC][1];
 #ifdef PROFILE
-    printf("comp_PC = %d\t", comp_PC);
+    printf("PE[%d] @%d comp_PC=%d\t", id, cycle, comp_PC);
 #endif
     comp_decoder_unit.execute(instruction[0], op[0], input_addr[0], &output_addr[0], &comp_PC);
     comp_decoder_unit.execute(instruction[1], op[1], input_addr[1], &output_addr[1], &i);
-//#ifdef PROFILE
-//    printf("\n");
-//#endif
+#ifdef PROFILE
+    printf("\n");
+#endif
     for (i = 0; i < 6; i++) {
         regfile_unit->read_addr[i] =  input_addr[0][i];
         regfile_unit->read_addr[i+6] = input_addr[1][i];

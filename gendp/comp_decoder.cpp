@@ -3,6 +3,41 @@
 comp_decoder::comp_decoder() {}
 comp_decoder::~comp_decoder() {}
 
+#ifdef PROFILE
+const char* opcode_to_string(int opcode) {
+    switch(opcode) {
+        case ADDITION: return "add";
+        case SUBTRACTION: return "sub";
+        case MULTIPLICATION: return "mul";
+        case CARRY: return "carry";
+        case BORROW: return "borrow";
+        case MAXIMUM: return "max";
+        case MINIMUM: return "min";
+        case LEFT_SHIFT: return "lshift";
+        case RIGHT_SHIFT: return "rshift";
+        case COPY: return "copy";
+        case MATCH_SCORE: return "match";
+        case LOG2_LUT: return "log2";
+        case LOG_SUM_LUT: return "logsum";
+        case COMP_LARGER: return "gt";
+        case COMP_EQUAL: return "eq";
+        case INVALID: return "invalid";
+        case HALT: return "halt";
+        case BWISE_OR: return "or";
+        case BWISE_AND: return "and";
+        case BWISE_NOT: return "not";
+        case BWISE_XOR: return "xor";
+        case LSHIFT_1: return "lshift1";
+        case RSHIFT_WORD: return "rshift_w";
+        case ADD_I: return "addi";
+        case COPY_I: return "copyi";
+        case POPCOUNT: return "popcount";
+        case CMP_2INP: return "cmp2";
+        default: return "unknown";
+    }
+}
+#endif
+
 void comp_decoder::execute(unsigned long instruction, int* op, int* in_addr, int* out_addr, int* PC) {
 
     // instruction: op[0] op[1] op[2] in_addr[0] in_addr[1] in_addr[2] in_addr[3] in_addr[4] in_addr[5] out_addr
@@ -42,8 +77,10 @@ void comp_decoder::execute(unsigned long instruction, int* op, int* in_addr, int
         (*PC) = (*PC);
     }
 
-    // printf("%d %d %d %d %d %d %d %d %d %d\t", op[0], op[1], op[2], in_addr[0], in_addr[1], in_addr[2], in_addr[3], in_addr[4], in_addr[5], *out_addr);
-//#ifdef PROFILE
-//    printf("%d %d %d %d %d %d %d\t", in_addr[0], in_addr[1], in_addr[2], in_addr[3], in_addr[4], in_addr[5], *out_addr);
-//#endif
+#ifdef PROFILE
+    // Print human-readable instruction format
+    printf("[%s:%s:%s] ", opcode_to_string(op[0]), opcode_to_string(op[1]), opcode_to_string(op[2]));
+    printf("in[%d,%d,%d,%d,%d,%d] out[%d]\t",
+           in_addr[0], in_addr[1], in_addr[2], in_addr[3], in_addr[4], in_addr[5], *out_addr);
+#endif
 }
