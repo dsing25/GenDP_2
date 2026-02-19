@@ -387,7 +387,7 @@ def gbv_main_instruction():
     # f.write(data_movement_instruction(0, 0, 0, 0, PE_COMPUTE_START, 0, 0, 0, 0, 0, set_PC))
 
 
-    for i in range(100):
+    for i in range(1500):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                           # halt
@@ -403,26 +403,26 @@ def pe_instruction(pe_id):
     # Each VLIW pair (2 written instructions) = 1 PC step
     #
     # Label locations:
-    #   Jump A  = PC 55    Jump B  = PC 41    Jump B2 = PC 53
-    #   Jump C  = PC 80    Jump D  = PC 69    Jump E  = PC 74
-    #   Jump F  = PC 75    Jump G  = PC 78    Jump H  = PC 62
-    #   Jump I  = PC 66
-    JMPA    = 17   # PC 38 → PC 55 (Jump A)
-    JMPB_FWD = -13 # PC 54 → PC 41 (Jump B, from B2)
-    JMPC_LOOP = 39 # PC 41 → PC 80 (Jump C, loop exit)
-    JMPD    = 25   # PC 44 → PC 69 (Jump D)
-    JMPF    = 29   # PC 46 → PC 75 (Jump F)
-    JMPG    = 27   # PC 51 → PC 78 (Jump G)
-    JMPH    = 7    # PC 55 → PC 62 (Jump H)
-    JMPI    = 6    # PC 60 → PC 66 (Jump I)
-    JMPA_BACK = -6 # PC 61 → PC 55 (Jump A, loop back)
-    JMPB_BACK = -35 # PC 65 → PC 41 (Jump B, from H)
-    JMPC_FROM_I = 12 # PC 68 → PC 80 (Jump C, from I)
-    JMPE    = 4    # PC 70 → PC 74 (Jump E)
-    JMPC_FROM_D = 7 # PC 73 → PC 80 (Jump C, from D)
-    JMPC_FROM_E = 6 # PC 74 → PC 80 (Jump C, from E)
-    JMPC_FROM_F = 3 # PC 77 → PC 80 (Jump C, from F)
-    JMPB2   = -26  # PC 79 → PC 53 (Jump B2, from G)
+    #   Jump A  = PC 70    Jump B  = PC 47    Jump B2 = PC 64
+    #   Jump C  = PC 101   Jump D  = PC 89    Jump E  = PC 94
+    #   Jump F  = PC 95    Jump G  = PC 98    Jump H  = PC 77
+    #   Jump I  = PC 86
+    JMPA    = 26   # PC 44 → PC 70 (Jump A)
+    JMPB_FWD = -22 # PC 69 → PC 47 (Jump B, from B2)
+    JMPC_LOOP = 54 # PC 47 → PC 101 (Jump C, loop exit)
+    JMPD    = 39   # PC 50 → PC 89 (Jump D)
+    JMPF    = 43   # PC 52 → PC 95 (Jump F)
+    JMPG    = 37   # PC 61 → PC 98 (Jump G)
+    JMPH    = 7    # PC 70 → PC 77 (Jump H)
+    JMPI    = 11   # PC 75 → PC 86 (Jump I)
+    JMPA_BACK = -6 # PC 76 → PC 70 (Jump A, loop back)
+    JMPB_BACK = -40 # PC 85 → PC 47 (Jump B, from H)
+    JMPC_FROM_I = 13 # PC 88 → PC 101 (Jump C, from I)
+    JMPE    = 4    # PC 90 → PC 94 (Jump E)
+    JMPC_FROM_D = 8 # PC 93 → PC 101 (Jump C, from D)
+    JMPC_FROM_E = 7 # PC 94 → PC 101 (Jump C, from E)
+    JMPC_FROM_F = 4 # PC 97 → PC 101 (Jump C, from F)
+    JMPB2   = -36  # PC 100 → PC 64 (Jump B2, from G)
 
     f = InstructionWriter("instructions/gbv/pe_{}_instruction.txt".format(pe_id))
 
@@ -556,21 +556,21 @@ def pe_instruction(pe_id):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPA, 0, 0, 0, 0, 4, blt)) # blt 0 gr[4] jump A (PC 46 → 59, +13)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPA, 0, 0, 0, 0, 4, blt)) # blt 0 gr[4] jump A (PC 46 → 59, +13)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPA, 0, 0, 0, 0, 4, blt)) # blt 0 gr[4] jump A (PC 44 → 70, +26)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPA, 0, 0, 0, 0, 4, blt)) # blt 0 gr[4] jump A (PC 44 → 70, +26)
 
-    # Jump B
+    # Jump B - jump here from H
     f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, 32, 0, si)) # gr[6] = 32 (wordsize)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si)) # gr[3] = 0 (for loop i=0 counter)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    # Temp Jump 
-    # jump to here (PC 49) when looping back after the initial conditions are set for jump B
+    # Temp Jump - jump here every other time when you want to come to jump B
+    # jump to here (PC 47) when looping back after the initial conditions are set for jump B
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_LOOP, 0, 1, 0, 3, 6, beq)) # beq gr[3] gr[6] jump C (PC 49 → 77, +28)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_LOOP, 0, 1, 0, 3, 6, beq)) # beq gr[3] gr[6] jump C (PC 49 → 77, +28)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_LOOP, 0, 1, 0, 3, 6, beq)) # beq gr[3] gr[6] jump C (PC 47 → 101, +54)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_LOOP, 0, 1, 0, 3, 6, beq)) # beq gr[3] gr[6] jump C (PC 47 → 101, +54)
 
     f.write(data_movement_instruction(gr, gr, 0, 0, 3, 0, 0, 0, 1, 3, addi)) # gr[3] = gr[3] + 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -578,14 +578,14 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(gr, reg, 0, 0, 7, 0, 0, 0, 26, 0, mv)) # gr[7] = reg[26]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPD, 0, 1, 0, 0, 7, beq)) # beq 0 gr[7] jump D (PC 52 → 71, +19)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPD, 0, 1, 0, 0, 7, beq)) # beq 0 gr[7] jump D (PC 52 → 71, +19)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPD, 0, 1, 0, 0, 7, beq)) # beq 0 gr[7] jump D (PC 50 → 89, +39)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPD, 0, 1, 0, 0, 7, beq)) # beq 0 gr[7] jump D (PC 50 → 89, +39)
 
     f.write(data_movement_instruction(gr, reg, 0, 0, 5, 0, 0, 0, 27, 0, mv)) # gr[5] = reg[27]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPF, 0, 1, 0, 0, 5, beq)) # beq 0 gr[5] jump F (PC 54 → 75, +21)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPF, 0, 1, 0, 0, 5, beq)) # beq 0 gr[5] jump F (PC 54 → 75, +21)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPF, 0, 1, 0, 0, 5, beq)) # beq 0 gr[5] jump F (PC 52 → 95, +43)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPF, 0, 1, 0, 0, 5, beq)) # beq 0 gr[5] jump F (PC 52 → 95, +43)
 
     f.write(data_movement_instruction(reg, 0, 0, 0, 23, 0, 0, 0, 1, 0, si)) # reg23 = 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -603,7 +603,7 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(gr, reg, 0, 0, 9, 0, 0, 0, 30, 0, mv)) # gr[9] = reg[30]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPG, 0, 1, 0, 9, 8, blt)) # blt gr[9] gr[8] jump G (PC 57 → 76, +19)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPG, 0, 1, 0, 9, 8, blt)) # blt gr[9] gr[8] jump G (PC 61 → 98, +37)
     f.write(data_movement_instruction(gr, gr, 0, 0, JMPG, 0, 1, 0, 9, 8, blt)) # if false, move on to the b3 compute trace
 
 
@@ -617,20 +617,21 @@ def pe_instruction(pe_id):
 
     #jump B2 here (PC 58)
     f.write(data_movement_instruction(0, 0, 0, 0, 59, 0, 0, 0, 0, 0, set_PC)) # jump B2 compute trace
-    f.write(data_movement_instruction(0, 0, 0, 0, 59, 0, 0, 0, 0, 0, set_PC)) 
+    f.write(data_movement_instruction(0, 0, 0, 0, 59, 0, 0, 0, 0, 0, set_PC))
 
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    for i in range(4):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     # may need stalls after all of these
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPB_FWD, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump B (PC 58 → 47, -11)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPB_FWD, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump B (PC 58 → 47, -11)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPB_FWD, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump B (PC 69 → 47, -22)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPB_FWD, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump B (PC 69 → 47, -22)
     #end jump B2 here
     # End of Jump B
 
-    # Jump A (PC 59)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPH, 0, 1, 0, 3, 4, beq)) # beq gr[3] gr[4] jump H (PC 60 → 66, +6)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPH, 0, 1, 0, 3, 4, beq)) # beq gr[3] gr[4] jump H (PC 60 → 66, +6)
+    # Jump A (PC 70)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPH, 0, 1, 0, 3, 4, beq)) # beq gr[3] gr[4] jump H (PC 70 → 77, +7)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPH, 0, 1, 0, 3, 4, beq)) # beq gr[3] gr[4] jump H (PC 70 → 77, +7)
 
     f.write(data_movement_instruction(gr, gr, 0, 0, 3, 0, 0, 0, 1, 3, addi)) # gr[3] = gr[3] + 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -646,14 +647,14 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(gr, reg, 0, 0, 5, 0, 0, 0, 27, 0, mv)) # gr[5] = reg[27]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPI, 0, 0, 0, 0, 5, beq)) # beq 0 gr[5] jump I (PC 63 → 68, +5)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPI, 0, 0, 0, 0, 5, beq)) # beq 0 gr[5] jump I (PC 63 → 68, +5)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPI, 0, 0, 0, 0, 5, beq)) # beq 0 gr[5] jump I (PC 75 → 86, +11)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPI, 0, 0, 0, 0, 5, beq)) # beq 0 gr[5] jump I (PC 75 → 86, +11)
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPA_BACK, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump A (PC 64 → 59, -5)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPA_BACK, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump A (PC 64 → 59, -5)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPA_BACK, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump A (PC 76 → 70, -6)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPA_BACK, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump A (PC 76 → 70, -6)
     # End of Jump A
 
-    # Jump H (PC 65)
+    # Jump H (PC 71)
     # Do some compute and then jump to B
     f.write(data_movement_instruction(reg, 0, 0, 0, 23, 0, 0, 0, 1, 0, si)) # reg23 = 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -666,62 +667,65 @@ def pe_instruction(pe_id):
 
     for i in range(5):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) 
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPB_BACK, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump B (PC 67 → 47, -20)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPB_BACK, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump B (PC 67 → 47, -20)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPB_BACK, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump B (PC 85 → 47, -38)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPB_BACK, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump B (PC 85 → 47, -38)
     # End of Jump H
 
-    # Jump I (PC 68)
+    # Jump I (PC 80)
     f.write(data_movement_instruction(gr, gr, 0, 0, 20, 0, 0, 0, 1, 0, subi)) # reg20 = 0 - 1 so FFFFF hopefully
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(reg, 0, 0, 0, 21, 0, 0, 0, 0, 0, si)) # reg21 = 0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_I, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 70 → 77, +7)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_I, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 70 → 77, +7)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_I, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 88 → 101, +13)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_I, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 88 → 101, +13)
     # End of Jump I
 
-    # Jump D (PC 71)
+    # Jump D (PC 89)
     f.write(data_movement_instruction(gr, reg, 0, 0, 5, 0, 0, 0, 27, 0, mv)) # gr[5] = reg[27]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPE, 0, 1, 0, 0, 5, beq)) # beq 0 gr[5] jump E (PC 72 → 74, +2)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPE, 0, 1, 0, 0, 5, beq)) # beq 0 gr[5] jump E (PC 72 → 74, +2)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPE, 0, 1, 0, 0, 5, beq)) # beq 0 gr[5] jump E (PC 90 → 94, +4)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPE, 0, 1, 0, 0, 5, beq)) # beq 0 gr[5] jump E (PC 90 → 94, +4)
 
     f.write(data_movement_instruction(reg, 0, 0, 0, 23, 0, 0, 0, 1, 0, si)) # reg23 = 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(0, 0, 0, 0, 42, 0, 0, 0, 0, 0, set_PC)) # go to jump D compute PC
-    f.write(data_movement_instruction(0, 0, 0, 0, 42, 0, 0, 0, 0, 0, set_PC)) 
+    f.write(data_movement_instruction(0, 0, 0, 0, 42, 0, 0, 0, 0, 0, set_PC))
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_D, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 73 → 77, +4)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_D, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 73 → 77, +4)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_D, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 93 → 101, +8)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_D, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 93 → 101, +8)
     # End of Jump D
 
-    # Jump E (PC 74)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_E, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 74 → 77, +3)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_E, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 74 → 77, +3)
+    # Jump E (PC 94)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_E, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 94 → 101, +7)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_E, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 94 → 101, +7)
     # End of Jump E
 
-    # Jump F (PC 75)
+    # Jump F (PC 95)
     f.write(data_movement_instruction(reg, 0, 0, 0, 23, 0, 0, 0, 1, 0, si)) # reg23 = 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(0, 0, 0, 0, 46, 0, 0, 0, 0, 0, set_PC)) # go to jump F compute PC
-    f.write(data_movement_instruction(0, 0, 0, 0, 46, 0, 0, 0, 0, 0, set_PC)) 
+    f.write(data_movement_instruction(0, 0, 0, 0, 46, 0, 0, 0, 0, 0, set_PC))
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_F, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 75 → 77, +2)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_F, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 75 → 77, +2)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_F, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 97 → 101, +4)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_FROM_F, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump C (PC 97 → 101, +4)
     # End of Jump F
 
-    # Jump G (PC 76)
+    # Jump G (PC 98)
     f.write(data_movement_instruction(0, 0, 0, 0, 55, 0, 0, 0, 0, 0, set_PC)) # jump G compute trace
-    f.write(data_movement_instruction(0, 0, 0, 0, 55, 0, 0, 0, 0, 0, set_PC)) 
+    f.write(data_movement_instruction(0, 0, 0, 0, 55, 0, 0, 0, 0, 0, set_PC))
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPB2, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump B2 (PC 76 → 58, -18)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPB2, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump B2 (PC 76 → 58, -18)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPB2, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump B2 (PC 100 → 64, -36)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPB2, 0, 0, 0, 0, 0, beq)) # beq 0 0 jump B2 (PC 100 → 64, -36)
     # End of Jump G
 
     # Jump C
@@ -847,15 +851,42 @@ def pe_instruction(pe_id):
     f.close()
 
 
+
+def pe_1_instruction():
+    f = InstructionWriter("instructions/gbv/pe_1_instruction.txt")
+
+    # Just halt - do nothing
+    for i in range(1500):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
+
+    f.close()
+
+def pe_2_instruction():
+    f = InstructionWriter("instructions/gbv/pe_2_instruction.txt")
+
+    # Just halt - do nothing
+    for i in range(1500):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
+
+    f.close()
+
+def pe_3_instruction():
+    f = InstructionWriter("instructions/gbv/pe_3_instruction.txt")
+
+    # Just halt - do nothing
+    for i in range(1500):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
+
+    f.close()
+
 if not os.path.exists("instructions/gbv"):
     os.makedirs("instructions/gbv")
 gbv_compute_v3()
 gbv_main_instruction()
-# pe_0_instruction()
-# pe_1_instruction()
-# pe_2_instruction()
-# pe_3_instruction()
 pe_instruction(0)
-pe_instruction(1)
-pe_instruction(2)
-pe_instruction(3)
+pe_1_instruction()
+pe_2_instruction()
+pe_3_instruction()
