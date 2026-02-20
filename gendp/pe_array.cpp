@@ -16,6 +16,7 @@ PerfCounter totalSpmRequests = 0;
 PerfCounter lsqFullStalls = 0;
 PerfCounter peHalted = 0;
 PerfCounter forwardableBankConflict = 0;
+PerfCounter controllerSpinCycles = 0;
 
 pe_array::pe_array(int input_size, int output_size) {
 
@@ -909,6 +910,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
     } else if (opcode == 8) {       // bne rs1 rs2 offset
         rs1 = sext_imm_1;
         rs2 = reg_1;
+        if (rs2 == 13) controllerSpinCycles++;
 #ifdef PROFILE
         printf("bne %d %d %d", rs1, rs2, sext_imm_0);
 #endif
@@ -1540,6 +1542,7 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     printf("ForwardableBankConflict: %d\n", forwardableBankConflict);
     printf("LsqFullStalls: %d\n", lsqFullStalls);
     printf("PeHalted: %d\n", peHalted);
+    printf("SyncSpinBNEs: %d\n", controllerSpinCycles);
 
     // fprintf(stderr, "Finish simulation.\n");
 }
