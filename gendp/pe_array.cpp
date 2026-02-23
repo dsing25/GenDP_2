@@ -375,41 +375,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #endif
 
     if (is_magic) {
-        constexpr int MEM_BLOCK_SIZE = 32;
-        constexpr int PADDING_SIZE = 30;
-        constexpr int EXTRA_O_LOAD_ADDR = 7*MEM_BLOCK_SIZE;
-        constexpr int BLOCK_0_START = 0;
-        constexpr int BLOCK_1_START = MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE;
-        constexpr int MAX_WF_LEN = 16384;
-        constexpr int N_WFS = 5;
-        constexpr int PAST_WFS_SIZE = N_WFS * 3 * MAX_WF_LEN;
-        //4 previous scores, 3 affine wavefronts, each wavefront MEM_BLOCK entries. Rotating buffer
-        auto past_wf_at = [&](int wf_i, int affine_i, int idx) -> int& {
-            return s2->buffer[(wf_i * 3 + affine_i) * MAX_WF_LEN + idx];
-        };
-        static std::ofstream magic_wfs_out("magic_wfs_out.txt");
-        assert(S2_BUFFER_INTS >= PAST_WFS_SIZE);
-        int (&gr)[16] = main_addressing_register;
-        auto mvdq = [&](int dst, int src, bool toSPM){
-            //TODO this is not realistic. We need to access blocks not arbitrary location.
-            for (int i =0; i < 8; i++){
-                if (toSPM){
-                    SPM_unit->buffer[dst+i] = s2->buffer[src+i];
-                } else {
-                    s2->buffer[dst+i] = SPM_unit->buffer[src+i];
-                }
-            }
-        };
-        auto mvdqi = [&](int dst, int val, bool toSPM){
-            for (int i =0; i < 8; i++){
-                if (toSPM){
-                    SPM_unit->buffer[dst+i] = val;
-                } else {
-                    s2->buffer[dst+i] = val;
-                }
-            }
-        };
-
         constexpr int MAGIC_MASK_BITS = 8;
         constexpr int MAGIC_MASK = (1 << MAGIC_MASK_BITS) - 1;
         int magic_id = magic_payload;
@@ -419,20 +384,44 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             magic_mask = magic_payload & MAGIC_MASK;
         }
 
-        if (magic_id == 4) {
-            fprintf(stderr, "ERROR: magic payload 4 should no longer be used.\n");
-            exit(-1);
-        } else if (magic_id == 2){
-        //INCREMENT CURRENT_WF_I (no longer expected in ISA stream)
-            fprintf(stderr, "ERROR: magic payload 2 should no longer be used.\n");
-            exit(-1);
-        } else if (magic_id == 3){
-            fprintf(stderr, "ERROR: magic payload 3 should no longer be used.\n");
-            exit(-1);
-        } else if (magic_id == 5) {
-            // Exit condition reached - print final score (wf_len - 1)
-            printf("qqq %d qqq\n", main_addressing_register[12] - 1);
+        if (magic_id == 1) {
         } else if (magic_id == 6) {
+            //WFA initializations
+            int MEM_BLOCK_SIZE = 32;
+            int PADDING_SIZE = 30;
+            int EXTRA_O_LOAD_ADDR = 7*MEM_BLOCK_SIZE;
+            int BLOCK_0_START = 0;
+            int BLOCK_1_START = MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE;
+            int MAX_WF_LEN = 16384;
+            int N_WFS = 5;
+            int PAST_WFS_SIZE = N_WFS * 3 * MAX_WF_LEN;
+            //4 previous scores, 3 affine wavefronts, each wavefront MEM_BLOCK entries. Rotating buffer
+            auto past_wf_at = [&](int wf_i, int affine_i, int idx) -> int& {
+                return s2->buffer[(wf_i * 3 + affine_i) * MAX_WF_LEN + idx];
+            };
+            static std::ofstream magic_wfs_out("magic_wfs_out.txt");
+            assert(S2_BUFFER_INTS >= PAST_WFS_SIZE);
+            int (&gr)[16] = main_addressing_register;
+            auto mvdq = [&](int dst, int src, bool toSPM){
+                //TODO this is not realistic. We need to access blocks not arbitrary location.
+                for (int i =0; i < 8; i++){
+                    if (toSPM){
+                        SPM_unit->buffer[dst+i] = s2->buffer[src+i];
+                    } else {
+                        s2->buffer[dst+i] = SPM_unit->buffer[src+i];
+                    }
+                }
+            };
+            auto mvdqi = [&](int dst, int val, bool toSPM){
+                for (int i =0; i < 8; i++){
+                    if (toSPM){
+                        SPM_unit->buffer[dst+i] = val;
+                    } else {
+                        s2->buffer[dst+i] = val;
+                    }
+                }
+            };
+
             // Display inputs and outputs for the same wavefront block
             int current_wf_size = main_addressing_register[12];
             int this_block_start = main_addressing_register[10];
@@ -546,9 +535,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
 
             magic_wfs_out << std::endl;
-        } else if (magic_id == 7) {
-            fprintf(stderr, "ERROR: magic payload 7 should no longer be used.\n");
-            exit(-1);
         } else {
             fprintf(stderr, "ERROR: PE_ARRAY PC=%d cycle=%d unknown magic id %d (payload %d mask 0x%x).\n",
                     *PC, cycle, magic_id, magic_payload, magic_mask);
