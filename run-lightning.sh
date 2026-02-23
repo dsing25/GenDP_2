@@ -55,5 +55,17 @@ bash scripts/chain_throughput.sh 1 $CHAIN_DATA_FILE | tee >(grep verified >> ../
 #cd ../../
 #bash scripts/poa_throughput.sh | tee >(grep verified >> ../success.txt)
 
+### WFA
+cd $GenDP_WORK_DIR/gendp
+python3 scripts/wfa_instruction_generator.py
+make clean && make -j ADDRESS_SANITIZER=0
+python3 scripts/wfa_check_correctness.py \
+  "$GenDP_WORK_DIR/../kernel/Wfa/Datasets/shortSeq.seq" -n 3
+
+### GWFA
+cd $GenDP_WORK_DIR/gendp
+python3 scripts/gwfa_instruction_generator.py
+python3 scripts/gwfa_check_correctness.py 1
+
 cd $GenDP_WORK_DIR
 cat success.txt

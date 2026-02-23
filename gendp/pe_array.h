@@ -2,6 +2,7 @@
 #define PE_ARRAY_H
 #include "pe.h"
 #include <set>
+#include <cstdint>
 #include "simulator.h"
 #include "FIFO.h"
 #include <list>
@@ -26,6 +27,7 @@ class pe_array {
         
         int main_PC;
         int input_buffer_size, output_buffer_size;
+        uint64_t va_regfile[16];
 
         void run(int cycle_limit, int simd, int setting, int main_instruction_setting);
         void show_gr();

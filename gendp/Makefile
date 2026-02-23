@@ -22,7 +22,7 @@ ifeq ($(ADDRESS_SANITIZER),1)
 endif
 
 
-OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o simulator.o
+OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o gwfa_sim.o simulator.o
 
 ifeq ($(debug),1)
 CXXFLAGS+= -DDEBUG
@@ -41,7 +41,8 @@ LIB_SIMULATOR_OBJECTS= \
 			data_buffer.o \
 			pe.o \
 			FIFO.o \
-			pe_array.o
+			pe_array.o \
+			gwfa_kernel.o
 
 BIN_PATH = ./
 
@@ -63,6 +64,12 @@ $(TARGET) : $(OBJECT) $(LIBS)
 
 .cpp.o:
 	$(CXX) -c $(HEADER) $(CXXFLAGS) -fpermissive -o $@ $<
+
+gwfa_kernel.o: ../../kernel/Gwfa/gwfa.c ../../kernel/Gwfa/gwfa.h
+	@echo compiling $@ && gcc -c -O3 -I../../kernel/Gwfa -o $@ $<
+
+gwfa_kernel_o3.o: ../../kernel/Gwfa/gwfa.c ../../kernel/Gwfa/gwfa.h
+	@echo compiling $@ && gcc -c -O3 -I../../kernel/Gwfa -o $@ $<
 
 libsimulator.a:  $(LIB_SIMULATOR_OBJECTS)
 	rm -f $@

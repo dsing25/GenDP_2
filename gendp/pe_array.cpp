@@ -3,6 +3,9 @@
 #include "sys_def.h"
 #include "data_buffer.h"
 #include "simulator.h"
+extern "C" {
+#include "../../kernel/Gwfa/gwfa.h"
+}
 #include <iomanip>
 #include <cstdlib>
 #include <cstring>
@@ -31,6 +34,7 @@ pe_array::pe_array(int input_size, int output_size) {
 
     main_addressing_register[0] = 0;
     main_PC = 0;
+    memset(va_regfile, 0, sizeof(va_regfile));
     //+1 allows addressing full range. 1 is dummy data. Not legal in real hardware
     SPM_unit = new SPM(SPM_ADDR_NUM+1, &active_event_producers);
     for (i = 0; i < PE_NUM; i++)
@@ -385,6 +389,57 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         }
 
         if (magic_id == 1) {
+            // GWFA init: no-op (va_regfile + regs
+            // already populated by gwfa_sim.cpp)
+        } else if (magic_id == 2) {
+            // GWFA compute: reconstruct sub from
+            // va_regfile, call gwfa()
+            // va_regfile: [0]=graphSeq [1]=seq_off
+            //   [2]=seq_len [3]=arc [4]=idx [5]=q
+            // gr: [16]=ql [17]=n_vtx [18]=n_arc
+            //   [19]=startV [20]=startOff
+            //   [21]=endV [22]=endOff [23]=s_term
+            int &gr16 = main_addressing_register[16];
+            bool has_graph = (va_regfile[0] != 0);
+            int score;
+            if (!has_graph) {
+                score = -1;
+            } else {
+                subgfa_subgraph_t sub;
+                sub.graphSeq = (char*)(uintptr_t)
+                    va_regfile[0];
+                sub.seq_off = (uint32_t*)(uintptr_t)
+                    va_regfile[1];
+                sub.seq_len = (int32_t*)(uintptr_t)
+                    va_regfile[2];
+                sub.arc = (subgfa_arc_t*)(uintptr_t)
+                    va_regfile[3];
+                sub.idx = (uint64_t*)(uintptr_t)
+                    va_regfile[4];
+                sub.n_vtx =
+                    main_addressing_register[17];
+                sub.n_arc =
+                    main_addressing_register[18];
+                const char *q =
+                    (const char*)(uintptr_t)
+                    va_regfile[5];
+                score = gwfa(
+                    main_addressing_register[16],
+                    q,
+                    main_addressing_register[19],
+                    main_addressing_register[20],
+                    main_addressing_register[21],
+                    main_addressing_register[22],
+                    &sub,
+                    main_addressing_register[23],
+                    0);
+            }
+            main_addressing_register[12] = score;
+        } else if (magic_id == 3) {
+            // GWFA cleanup: print score, zero va_regfile
+            printf("qqq %d qqq\n",
+                main_addressing_register[12]);
+            memset(va_regfile, 0, sizeof(va_regfile));
         } else if (magic_id == 6) {
             //WFA initializations
             int MEM_BLOCK_SIZE = 32;
@@ -401,7 +456,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             };
             static std::ofstream magic_wfs_out("magic_wfs_out.txt");
             assert(S2_BUFFER_INTS >= PAST_WFS_SIZE);
-            int (&gr)[16] = main_addressing_register;
+            int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
             auto mvdq = [&](int dst, int src, bool toSPM){
                 //TODO this is not realistic. We need to access blocks not arbitrary location.
                 for (int i =0; i < 8; i++){
@@ -535,6 +590,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
 
             magic_wfs_out << std::endl;
+        } else if (magic_id == 5) {
+            // WFA: print final score
+            int score = main_addressing_register[12] - 1;
+            printf("qqq %d qqq\n", score);
         } else {
             fprintf(stderr, "ERROR: PE_ARRAY PC=%d cycle=%d unknown magic id %d (payload %d mask 0x%x).\n",
                     *PC, cycle, magic_id, magic_payload, magic_mask);

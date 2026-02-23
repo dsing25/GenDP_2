@@ -60,6 +60,21 @@ run_poa() {
   bash scripts/poa_throughput.sh | tee >(grep CUPS >> ../success.txt)
 }
 
+run_wfa() {
+  cd "$GenDP_WORK_DIR/gendp"
+  python3 scripts/wfa_instruction_generator.py
+  make -j ADDRESS_SANITIZER=0
+  python3 scripts/wfa_check_correctness.py \
+    "$GenDP_WORK_DIR/../kernel/Wfa/Datasets/seq10k.seq" -n 1
+}
+
+run_gwfa() {
+  cd "$GenDP_WORK_DIR/gendp"
+  python3 scripts/gwfa_instruction_generator.py
+  make -j ADDRESS_SANITIZER=0
+  python3 scripts/gwfa_check_correctness.py 1
+}
+
 # Dispatch
 case "$KERNEL" in
   ""|"all") run_bsw; run_chain; run_phmm; run_poa ;;
@@ -67,8 +82,10 @@ case "$KERNEL" in
   chain)    run_chain ;;
   phmm|pairhmm) run_phmm ;;
   poa)      run_poa ;;
+  wfa)      run_wfa ;;
+  gwfa)     run_gwfa ;;
   *)
-    echo "Unknown kernel '$KERNEL'. Valid options: BSW, CHAIN, PHMM, POA."
+    echo "Unknown kernel '$KERNEL'. Valid: bsw, chain, phmm, poa, wfa, gwfa."
     exit 1
     ;;
 esac
