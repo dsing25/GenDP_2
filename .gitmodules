@@ -22,3 +22,6 @@
 [submodule "gendp/kernel/WFA-proxy"]
 	path = gendp/kernel/WFA-proxy
 	url = git@github.com:UM-mbit/wfa-proxy.git
+[submodule "gendp/kernel/Gwfa"]
+	path = gendp/kernel/Gwfa
+	url = git@github.com:UM-mbit/GwfaGdpKernel.git
