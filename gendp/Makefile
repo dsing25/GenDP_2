@@ -65,11 +65,11 @@ $(TARGET) : $(OBJECT) $(LIBS)
 .cpp.o:
 	$(CXX) -c $(HEADER) $(CXXFLAGS) -fpermissive -o $@ $<
 
-gwfa_kernel.o: ../../kernel/Gwfa/gwfa.c ../../kernel/Gwfa/gwfa.h
-	@echo compiling $@ && gcc -c -O3 -I../../kernel/Gwfa -o $@ $<
+gwfa_kernel.o: kernel/Gwfa/gwfa.c kernel/Gwfa/gwfa.h
+	@echo compiling $@ && gcc -c -O3 -Ikernel/Gwfa -o $@ $<
 
-gwfa_kernel_o3.o: ../../kernel/Gwfa/gwfa.c ../../kernel/Gwfa/gwfa.h
-	@echo compiling $@ && gcc -c -O3 -I../../kernel/Gwfa -o $@ $<
+gwfa_kernel_o3.o: kernel/Gwfa/gwfa.c kernel/Gwfa/gwfa.h
+	@echo compiling $@ && gcc -c -O3 -Ikernel/Gwfa -o $@ $<
 
 libsimulator.a:  $(LIB_SIMULATOR_OBJECTS)
 	rm -f $@

@@ -4,7 +4,7 @@
 #include <climits>
 
 extern "C" {
-#include "../../kernel/Gwfa/gwfa.h"
+#include "kernel/Gwfa/gwfa.h"
 }
 
 /* ---- Dump file helpers ---- */
@@ -66,14 +66,36 @@ static std::vector<uint64_t> parseU64Line(
     return v;
 }
 
+/* ---- 2-bit encoding: A=0 C=1 G=2 T=3 ---- */
+
+static inline uint32_t char_to_2bit(char c)
+{
+    switch (c) {
+    case 'A': case 'a': return 0;
+    case 'C': case 'c': return 1;
+    case 'G': case 'g': return 2;
+    case 'T': case 't': return 3;
+    default: return 0;
+    }
+}
+
+static uint32_t *encode_2bit(
+    const char *s, size_t len)
+{
+    size_t nw = (len + 15) / 16;
+    uint32_t *out = (uint32_t*)calloc(
+        nw, sizeof(uint32_t));
+    for (size_t i = 0; i < len; ++i)
+        out[i >> 4] |=
+            char_to_2bit(s[i])
+            << ((i & 0xF) << 1);
+    return out;
+}
+
 /* Local struct for dump loading only */
 struct GwfaIterInput {
     int32_t ql;
-    std::string q;
-    uint32_t startV;
-    int32_t startOff;
-    uint32_t endV;
-    int32_t endOff;
+    uint32_t *q_enc;  // 2-bit packed query
     int32_t s_term;
     uint32_t n_vtx;
     uint64_t n_arc;
@@ -96,9 +118,8 @@ static subgfa_subgraph_t *buildSubgraph(
     sub->n_vtx = n_vtx;
     sub->n_arc = n_arc;
 
-    size_t slen = graphSeq.size();
-    sub->graphSeq = (char*)malloc(slen);
-    memcpy(sub->graphSeq, graphSeq.data(), slen);
+    sub->graphSeq = encode_2bit(
+        graphSeq.data(), graphSeq.size());
 
     sub->seq_off = (uint32_t*)
         malloc(n_vtx * sizeof(uint32_t));
@@ -131,10 +152,6 @@ loadGwfaDump(const std::string &dumpDir)
 {
     FILE *fql   = openDumpFile(dumpDir, "ql.txt");
     FILE *fq    = openDumpFile(dumpDir, "q.txt");
-    FILE *fsv   = openDumpFile(dumpDir, "startV.txt");
-    FILE *fso   = openDumpFile(dumpDir, "startOff.txt");
-    FILE *fev   = openDumpFile(dumpDir, "endV.txt");
-    FILE *feo   = openDumpFile(dumpDir, "endOff.txt");
     FILE *fst   = openDumpFile(dumpDir, "s_term.txt");
     FILE *fnv   = openDumpFile(dumpDir, "n_vtx.txt");
     FILE *fna   = openDumpFile(dumpDir, "n_arc.txt");
@@ -152,16 +169,12 @@ loadGwfaDump(const std::string &dumpDir)
     while (readLine(fql, line)) {
         GwfaIterInput inp;
         inp.ql = std::stoi(line);
-        readLine(fq, inp.q);
 
-        readLine(fsv, line);
-        inp.startV = (uint32_t)std::stoul(line);
-        readLine(fso, line);
-        inp.startOff = std::stoi(line);
-        readLine(fev, line);
-        inp.endV = (uint32_t)std::stoul(line);
-        readLine(feo, line);
-        inp.endOff = std::stoi(line);
+        std::string q_str;
+        readLine(fq, q_str);
+        inp.q_enc = encode_2bit(
+            q_str.data(), q_str.size());
+
         readLine(fst, line);
         inp.s_term = std::stoi(line);
 
@@ -210,8 +223,6 @@ loadGwfaDump(const std::string &dumpDir)
     }
 
     fclose(fql);  fclose(fq);
-    fclose(fsv);  fclose(fso);
-    fclose(fev);  fclose(feo);
     fclose(fst);
     fclose(fnv);  fclose(fna);
     fclose(fgs);  fclose(fsoff);
@@ -280,6 +291,14 @@ void gwfa_simulation(
     for (int i = 0; i < n; i++) {
         auto &inp = inputs[i];
 
+        // No graph → score = -1
+        if (!inp.sub) {
+            printf("qqq -1 qqq\n");
+            free(inp.q_enc);
+            inp.q_enc = NULL;
+            continue;
+        }
+
         // Reset controller state
         pa->buffer_reset(
             pa->main_addressing_register,
@@ -291,47 +310,47 @@ void gwfa_simulation(
         // Populate va_regfile with graph pointers
         // [0]=graphSeq [1]=seq_off [2]=seq_len
         // [3]=arc [4]=idx [5]=q
-        if (inp.sub) {
-            pa->va_regfile[0] = (uint64_t)(uintptr_t)
-                inp.sub->graphSeq;
-            pa->va_regfile[1] = (uint64_t)(uintptr_t)
-                inp.sub->seq_off;
-            pa->va_regfile[2] = (uint64_t)(uintptr_t)
-                inp.sub->seq_len;
-            pa->va_regfile[3] = (uint64_t)(uintptr_t)
-                inp.sub->arc;
-            pa->va_regfile[4] = (uint64_t)(uintptr_t)
-                inp.sub->idx;
-        }
+        pa->va_regfile[0] = (uint64_t)(uintptr_t)
+            inp.sub->graphSeq;
+        pa->va_regfile[1] = (uint64_t)(uintptr_t)
+            inp.sub->seq_off;
+        pa->va_regfile[2] = (uint64_t)(uintptr_t)
+            inp.sub->seq_len;
+        pa->va_regfile[3] = (uint64_t)(uintptr_t)
+            inp.sub->arc;
+        pa->va_regfile[4] = (uint64_t)(uintptr_t)
+            inp.sub->idx;
         pa->va_regfile[5] = (uint64_t)(uintptr_t)
-            inp.q.c_str();
+            inp.q_enc;
 
         // Populate registers with integer params
-        // [16]=ql [17]=n_vtx [18]=n_arc
-        // [19]=startV [20]=startOff
-        // [21]=endV [22]=endOff [23]=s_term
+        // [16]=ql [17]=n_vtx [18]=n_arc [23]=s_term
         pa->main_addressing_register[16] = inp.ql;
         pa->main_addressing_register[17] = inp.n_vtx;
         pa->main_addressing_register[18] =
             (int)inp.n_arc;
-        pa->main_addressing_register[19] = inp.startV;
-        pa->main_addressing_register[20] = inp.startOff;
-        pa->main_addressing_register[21] = inp.endV;
-        pa->main_addressing_register[22] = inp.endOff;
         pa->main_addressing_register[23] = inp.s_term;
 
-        pa->run(1000, 0, PE_4_SETTING,
+        // Max cycles: 8 per edit distance + overhead
+        int max_cycles =
+            inp.s_term * 10 + 100;
+        if (max_cycles < 1000) max_cycles = 1000;
+        pa->run(max_cycles, 0, PE_4_SETTING,
             MAIN_INSTRUCTION_1);
 
-        // Free subgraph (gwfa_sim owns the memory)
+        // Free memory (gwfa_sim owns it)
+        free(inp.q_enc);
+        inp.q_enc = NULL;
         if (inp.sub) {
             subgfa_subgraph_destroy(inp.sub);
             inp.sub = NULL;
         }
     }
 
-    // Free remaining unprocessed subgraphs
+    // Free remaining unprocessed inputs
     for (int i = n; i < (int)inputs.size(); i++) {
+        free(inputs[i].q_enc);
+        inputs[i].q_enc = NULL;
         if (inputs[i].sub) {
             subgfa_subgraph_destroy(inputs[i].sub);
             inputs[i].sub = NULL;

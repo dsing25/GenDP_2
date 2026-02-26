@@ -8,7 +8,7 @@ Usage: python3 scripts/gwfa_check_correctness.py <mode>
 
 Prereqs:
   - Build sim: make clean && make -j
-  - Generate golden: cd kernel/Gwfa && make -j && ./gwfa Datasets/Gwfa256
+  - Golden scores at kernel/Gwfa/Datasets/Gwfa295/trueScores.txt
 """
 
 import sys
@@ -18,9 +18,9 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent  # gendp/
-KERNEL_DIR = REPO_ROOT.parent.parent / 'kernel' / 'Gwfa'
-DUMP_DIR = KERNEL_DIR / 'Datasets' / 'Gwfa256'
-GOLDEN_SCORES = KERNEL_DIR / 'scores.txt'
+KERNEL_DIR = REPO_ROOT / 'kernel' / 'Gwfa'
+DUMP_DIR = KERNEL_DIR / 'Datasets' / 'Gwfa295'
+GOLDEN_SCORES = DUMP_DIR / 'trueScores.txt'
 SIM_PATH = REPO_ROOT / 'sim'
 
 MODES = {
@@ -88,8 +88,9 @@ def main():
     if not GOLDEN_SCORES.exists():
         print(f"Golden scores not found at "
               f"{GOLDEN_SCORES}")
-        print("Generate with: cd kernel/Gwfa && "
-              "make -j && ./gwfa Datasets/Gwfa256")
+        print("Expected at: "
+              "kernel/Gwfa/Datasets/Gwfa295/"
+              "trueScores.txt")
         sys.exit(1)
 
     golden = load_golden(GOLDEN_SCORES)
