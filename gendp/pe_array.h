@@ -46,9 +46,14 @@ class pe_array {
         void pe_comp_instruction_buffer_write_from_ddr(int addr, unsigned long data[], int id);
 
         void buffer_reset(int* buffer, int num);
+        void write_spm_magic(int addr, int value);
+
+        void write_s2(int addr, int value);
 
         int decode(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting);
         int decode_output(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting);
+        bool willStallPair(unsigned long slot0,
+                           unsigned long slot1);
 
         LoadResult load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd);
         void store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd);
@@ -71,7 +76,8 @@ class pe_array {
         std::set<EventProducer*> active_event_producers;
 
         SPM * SPM_unit;
-
+        S2 * s2;
+        CtrlLSQ * lsq;
 
 };
 

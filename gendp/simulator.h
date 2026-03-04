@@ -7,6 +7,17 @@
 
 extern int cycle;
 
+inline int lineAddr(int addr) { return (addr >> 1) << 1; }
+inline int lineOffset(int addr) { return addr & 1; }
+
+typedef int PerfCounter;
+extern PerfCounter totalSpmRequests;
+extern PerfCounter bankConflictStalls;
+extern PerfCounter lsqFullStalls;
+extern PerfCounter peHalted;
+extern PerfCounter forwardableBankConflict;
+extern PerfCounter controllerSpinCycles;
+
 enum EventType {
     SPM_DATA_READY
 };
@@ -44,9 +55,9 @@ class PushableProducerSet {
  * This is used within a PE for loads to/from SPM
  */
 struct LoadResult {
-    int data[SPM_BANDWIDTH];
+    int data[LINE_SIZE];
     LoadResult() {
-        for (int i = 0; i < SPM_BANDWIDTH; i++) {
+        for (int i = 0; i < LINE_SIZE; i++) {
             data[i] = 42;
         }
     }

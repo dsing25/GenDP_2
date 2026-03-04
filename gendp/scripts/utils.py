@@ -37,16 +37,16 @@ def data_movement_instruction(dest, src, reg_immBar_0, reg_auto_increase_0, imm_
     9 reg_1
    10 opcode
     '''
-    instr = "0" * 10 \
+    instr = "0" * 6 \
             + "{:0>4b}".format(dest) \
             + "{:0>4b}".format(src) \
             + "{:0>1b}".format(reg_immBar_0) \
             + "{:0>1b}".format(reg_auto_increase_0) \
-            + "{:0>14b}".format(imm_0 & 0x3fff) \
+            + "{:0>16b}".format(imm_0 & 0xffff) \
             + "{:0>4b}".format(reg_0) \
             + "{:0>1b}".format(reg_immBar_1) \
             + "{:0>1b}".format(reg_auto_increase_1) \
-            + "{:0>14b}".format(imm_1 & 0x3fff) \
+            + "{:0>16b}".format(imm_1 & 0xffff) \
             + "{:0>4b}".format(reg_1) \
             + "{:0>6b}".format(opcode)
     value = int(instr, 2)
@@ -67,21 +67,55 @@ class InstructionWriter:
     '''
     def __init__(self, filepath):
         self.filepath = filepath
-        self.file = open(self.filepath, 'w')
+        self.file = open(self.filepath, 'w+')
+        self.write_count = 0
 
         root, ext = os.path.splitext(self.filepath)
         self.hr_path = f"{root}_HR{ext}"
-        self.hr_file = open(self.hr_path, 'w')
+        self.hr_file = open(self.hr_path, 'w+')
 
     def write(self, value):
         self.file.write(value)
         frame = inspect.currentframe().f_back
         line = inspect.getframeinfo(frame).code_context[0].strip()
         expr_text = line[line.find('(')+1:]  # crude extraction
-        self.hr_file.write(f"{value[2:-1].ljust(16)} {expr_text}\n")
+        self.hr_file.write(
+            f"{value[2:-1].ljust(16)} {expr_text}\n")
+        self.write_count += 1
+
+    @property
+    def pc(self):
+        return self.write_count // 2
+
+    def patch_imm0(self, write_index, new_imm0):
+        '''Rewrite imm0 field of a previously written
+        instruction (by write_index, 0-based).
+        Each write() call increments the index.'''
+        self.file.flush()
+        self.file.seek(0)
+        lines = self.file.readlines()
+        val = int(lines[write_index].strip(), 16)
+        mask = 0xFFFF << 32
+        val = (val & ~mask) | ((new_imm0 & 0xFFFF) << 32)
+        lines[write_index] = hex(val) + "\n"
+        self.file.seek(0)
+        self.file.writelines(lines)
+        self.file.truncate()
+        # Also patch HR file
+        self.hr_file.flush()
+        self.hr_file.seek(0)
+        hr_lines = self.hr_file.readlines()
+        old_hr = hr_lines[write_index]
+        parts = old_hr.split(None, 1)
+        rest = parts[1] if len(parts) > 1 else "\n"
+        hr_lines[write_index] = (
+            f"{val:x}".ljust(16) + " " + rest)
+        self.hr_file.seek(0)
+        self.hr_file.writelines(hr_lines)
+        self.hr_file.truncate()
 
     def close(self):
         self.file.close()
-
+        self.hr_file.close()
 
 

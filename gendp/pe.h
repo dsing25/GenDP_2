@@ -10,15 +10,24 @@ class pe {
     public:
         struct OutstandingReq{
             int dst;
-            int addr;
+            int addr;       // destination addr (reg/gr)
+            int spm_addr;   // original SPM access addr
             bool single_load;
             bool valid;
-            OutstandingReq() : dst(-42), addr(-42), single_load(false),valid(false) {}
+            int bp_shift;        // shift for 2-bit extract
+            bool two_bit_extract; // apply shift+mask
+            OutstandingReq()
+                : dst(-42), addr(-42), spm_addr(0),
+                  single_load(false), valid(false),
+                  bp_shift(0), two_bit_extract(false) {}
             void clear() {
                 dst = -42;
                 addr = -42;
+                spm_addr = 0;
                 single_load = false;
                 valid = false;
+                bp_shift = 0;
+                two_bit_extract = false;
             }
         };
 
@@ -39,9 +48,17 @@ class pe {
         int get_gr_10();
         void reset();
 
-        void recieve_spm_data(int data[SPM_BANDWIDTH]);
+        void recieve_spm_data(int data[LINE_SIZE]);
 
         void show_comp_reg(const char** reg_names = nullptr);
+
+        // SPM request port - populated by PE, consumed by pe_array arbitration
+        OutstandingRequest* spmReqPort = nullptr;
+
+        bool stalled() const { return spmReqPort != nullptr; }
+
+        // Track if PE is halted (executing halt instruction)
+        bool halted = false;
 
         // ld/st data
         int load_data, store_data;
@@ -76,6 +93,9 @@ class pe {
 
         //-1 means there is no outstanding request
         OutstandingReq outstanding_req;
+
+        // Set by load() when reading SPM, consumed by store()
+        int last_spm_load_addr = 0;
 
 
 

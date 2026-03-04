@@ -1,6 +1,24 @@
 #include "sys_def.h"
 #include "wfa.h"
 
+namespace {
+constexpr int MAX_WF_LEN = 16384;
+constexpr int N_WFS = 5;
+constexpr int MEM_BLOCK_SIZE = 32;
+constexpr int PAST_WFS_SIZE = N_WFS * 3 * MAX_WF_LEN;
+constexpr int S2_META_BASE = PAST_WFS_SIZE;
+
+inline int encode_bp(char c) {
+    switch (c) {
+        case 'A': return 0;
+        case 'C': return 1;
+        case 'G': return 2;
+        case 'T': return 3;
+        default:  return c & 0x3;
+    }
+}
+} // namespace
+
 int wfa_simulate(pe_array *pe_array_unit, align_input_t& align_input, int n, FILE* fp, 
                  int show_output) {
 
@@ -46,7 +64,106 @@ int wfa_simulate(pe_array *pe_array_unit, align_input_t& align_input, int n, FIL
     //for (i = 0; i < (int)bsw_input->max_qlen; i++)
     //    pe_array_unit->input_buffer_write_from_ddr_unsigned(i+11+bsw_input->max_tlen*2+bsw_input->max_qlen, &bsw_input->H_row32[i]);
 
-    pe_array_unit->run(n, simd, PE_4_SETTING, MAIN_INSTRUCTION_1);
+    int pattern_len_raw = align_input.pattern_length;
+    int text_len_raw = align_input.text_length;
+
+    std::string pattern_seq(align_input.pattern, pattern_len_raw);
+    pattern_seq.push_back('D');
+    std::string text_seq(align_input.text, text_len_raw);
+    text_seq.push_back('L');
+
+    int first_extend_len = 0;
+    int min_len = (pattern_len_raw < text_len_raw) ? pattern_len_raw : text_len_raw;
+    while (first_extend_len < min_len &&
+           align_input.pattern[first_extend_len] == align_input.text[first_extend_len]) {
+        first_extend_len++;
+    }
+
+    for (int i = 0; i < PAST_WFS_SIZE; i++) {
+        pe_array_unit->write_s2(i, -42);
+    }
+    auto past_wf_index = [](int wf_i, int affine_i, int idx) {
+        return (wf_i * 3 + affine_i) * MAX_WF_LEN + idx;
+    };
+    constexpr int INITIAL_WF_LEN = MEM_BLOCK_SIZE;
+    int wf_i = 0;
+    for (int j = 0; j < INITIAL_WF_LEN; j++) {
+        for (int k = 0; k < 3; k++) {
+            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), MIN_INT);
+        }
+    }
+    wf_i++;
+    for (int j = 0; j < INITIAL_WF_LEN; j++) {
+        for (int k = 0; k < 3; k++) {
+            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), MIN_INT);
+        }
+    }
+    wf_i++;
+    for (int j = 0; j < INITIAL_WF_LEN; j++) {
+        for (int k = 0; k < 3; k++) {
+            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), MIN_INT);
+        }
+    }
+    pe_array_unit->write_s2(past_wf_index(wf_i, 2, 0), first_extend_len);
+    wf_i++;
+    for (int j = 0; j < INITIAL_WF_LEN; j++) {
+        for (int k = 0; k < 3; k++) {
+            pe_array_unit->write_s2(past_wf_index(wf_i, k, j), MIN_INT);
+        }
+    }
+    for (int j = 0; j < INITIAL_WF_LEN; j++) {
+        for (int k = 0; k < 3; k++) {
+            pe_array_unit->write_s2(past_wf_index(wf_i + 1, k, j), MIN_INT);
+        }
+    }
+    pe_array_unit->write_s2(past_wf_index(wf_i, 2, 1), first_extend_len);
+
+    // Pack text: 16 base pairs per 32-bit word
+    int n_text_words =
+        (static_cast<int>(text_seq.size()) + 15) / 16;
+    for (int w = 0; w < n_text_words; w++) {
+        int packed = 0;
+        for (int b = 0; b < 16
+             && w * 16 + b
+                < static_cast<int>(text_seq.size());
+             b++)
+            packed |=
+                encode_bp(text_seq[w*16+b])
+                << (b * 2);
+        int pe_id = (w / 2) % 4;
+        int local_addr =
+            TEXT_START + (w / 8) * 2 + (w % 2);
+        int raw_addr =
+            pe_id * SPM_BANK_GROUP_SIZE + local_addr;
+        pe_array_unit->write_spm_magic(
+            raw_addr, packed);
+    }
+
+    // Pack pattern: 16 base pairs per 32-bit word
+    int n_pat_words =
+        (static_cast<int>(pattern_seq.size()) + 15) / 16;
+    for (int w = 0; w < n_pat_words; w++) {
+        int packed = 0;
+        for (int b = 0; b < 16
+             && w * 16 + b
+                < static_cast<int>(pattern_seq.size());
+             b++)
+            packed |=
+                encode_bp(pattern_seq[w*16+b])
+                << (b * 2);
+        int pe_id = (w / 2) % 4;
+        int local_addr =
+            PATTERN_START + (w / 8) * 2 + (w % 2);
+        int raw_addr =
+            pe_id * SPM_BANK_GROUP_SIZE + local_addr;
+        pe_array_unit->write_spm_magic(
+            raw_addr, packed);
+    }
+
+    pe_array_unit->write_s2(S2_META_BASE + 0, pattern_len_raw);
+    pe_array_unit->write_s2(S2_META_BASE + 1, text_len_raw);
+
+    pe_array_unit->run(n, simd, PE_4_SETTING, MAIN_INSTRUCTION_2);
 
     return 0; //TODO link to score output
     //if (show_output) pe_array_unit->bsw_show_output_buffer(fp);
@@ -64,7 +181,9 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
     std::string kernel_name = "wfa";
 //void load_instructions(std::string kernel_name, size_t n_comp_instructions, size_t pe_group_size, pe_array *pe_array_unit) {
     unsigned long compute_instruction[n_comp_instructions][COMP_INSTR_BUFFER_GROUP_SIZE];
-    unsigned long main_instruction[CTRL_INSTR_BUFFER_NUM];
+    unsigned long main_instruction
+        [CTRL_INSTR_BUFFER_NUM]
+        [CTRL_INSTR_BUFFER_GROUP_SIZE];
     unsigned long pe_instruction[pe_group_size][CTRL_INSTR_BUFFER_NUM][CTRL_INSTR_BUFFER_GROUP_SIZE];
     for (int i = 0; i < pe_group_size; i++) {
         for (int j = 0; j < CTRL_INSTR_BUFFER_NUM; j++) {
@@ -73,7 +192,8 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
         }
     }
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {
-        main_instruction[i] = 0x42;
+        main_instruction[i][0] = 0xe;  // NOP
+        main_instruction[i][1] = 0xe;  // NOP
     }
 
     std::string compute_instruction_file = "instructions/"+kernel_name+"/compute_instruction.txt";
@@ -107,7 +227,7 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
     if (fp_main_instruction.is_open()) {
         read_index = 0;
         while(getline(fp_main_instruction, line)) {
-            main_instruction[read_index] = std::stoull(line, 0, 0);
+            main_instruction[read_index/2][read_index%2] = std::stoull(line, 0, 0);
             read_index++;
         }
     } else {
@@ -142,10 +262,8 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
 
     // Load main & pe instructions into pe_array instruction buffer
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {
-        unsigned long tmp[CTRL_INSTR_BUFFER_GROUP_SIZE];
-        tmp[0] = 0x20f7800000000;
-        tmp[1] = main_instruction[i];
-        pe_array_unit->main_instruction_buffer_write_from_ddr(i, tmp);
+        pe_array_unit->main_instruction_buffer_write_from_ddr(
+            i, main_instruction[i]);
         for (int j = 0; j < pe_group_size; j++){
             //ctrl
             pe_array_unit->pe_instruction_buffer_write_from_ddr(i, pe_instruction[j][i], j);

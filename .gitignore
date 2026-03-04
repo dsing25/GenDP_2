@@ -22,3 +22,9 @@ __pycache__/
 Traces/
 simGlobals.cpp
 simGlobals.h
+magic_wfs_out.txt
+wfaTrace.txt
+*_sonnet.txt
+*_opus.txt
+*tmp*
+*.swp

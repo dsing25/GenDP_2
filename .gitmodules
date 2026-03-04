@@ -19,3 +19,6 @@
 [submodule "WFA-kernel"]
 	path = gendp/kernel/WFA-kernel
 	url = https://github.com/kaplannp/WFA-kernel.git
+[submodule "gendp/kernel/WFA-proxy"]
+	path = gendp/kernel/WFA-proxy
+	url = git@github.com:UM-mbit/wfa-proxy.git

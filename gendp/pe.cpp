@@ -5,16 +5,20 @@
 #include <iostream>
 
 // Apply address swizzling for mvi instruction
-// Moves lower N_SWIZZLE_BITS to high positions of address
+// Keeps bit[0] as line offset, moves bits[2:1] to top
 inline int apply_address_swizzle(int addr) {
     if (addr < 0 || addr > SPM_ADDR_NUM) {
         fprintf(stderr, "Error: address %d out of bound for swizzling\n", addr);
         exit(-1);
     }
     int addr_masked = addr & ((1u << ADDR_LEN) - 1);
-    int lower_bits = addr_masked & ((1u << N_SWIZZLE_BITS) - 1);
-    int upper_bits = addr_masked >> N_SWIZZLE_BITS;
-    int new_addr = upper_bits | (lower_bits << (ADDR_LEN - N_SWIZZLE_BITS));
+    int line_off  = addr_masked & 1;
+    int bank_bits = (addr_masked >> 1)
+        & ((1u << N_SWIZZLE_BITS) - 1);
+    int rest      = addr_masked >> (N_SWIZZLE_BITS + 1);
+    int new_addr  = line_off
+        | (rest << 1)
+        | (bank_bits << (ADDR_LEN - N_SWIZZLE_BITS));
     return new_addr;
 }
 
@@ -66,7 +70,7 @@ void pe::reset() {
     PC[1] = 0;
 }
 
-void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
+void pe::recieve_spm_data(int data[LINE_SIZE]){
     if (!outstanding_req.valid){
         fprintf(stderr, "Error: No outstanding request present, but recieve_spm_data called for PE[%d]\n", id);
         exit(-1);
@@ -77,29 +81,63 @@ void pe::recieve_spm_data(int data[SPM_BANDWIDTH]){
     switch (outstanding_req.dst){
         case CTRL_REG:
             if (outstanding_req.single_load) {
-                regfile_unit->register_file[outstanding_req.addr] = data[0];
+                {
+                int val =
+                    data[outstanding_req.spm_addr & 1];
+                if (outstanding_req.two_bit_extract)
+                    val = (val >> outstanding_req.bp_shift)
+                        & 0x3;
+                regfile_unit->register_file[
+                    outstanding_req.addr] = val;
+                }
 #ifdef PROFILE
-            printf("reg[%d] = %d\n", id, outstanding_req.addr, data[0]);
+                printf("reg[%d] = %d\n",
+                    outstanding_req.addr,
+                    data[outstanding_req.spm_addr & 1]);
 #endif
             } else {
-                for (int i = 0; i < SPM_BANDWIDTH; i++)
-                    regfile_unit->register_file[outstanding_req.addr + i] = data[i];
-                    //regfile_unit->write_addr[outstanding_req.addr + i] = data[i];
+                for (int i = 0;
+                     i < LINE_SIZE; i++)
+                    regfile_unit->register_file[
+                        outstanding_req.addr + i] =
+                        data[i];
 #ifdef PROFILE
-                printf("reg[%d,%d] = [%d,%d]\n", id, outstanding_req.addr, outstanding_req.addr+1, data[0], data[1]);
+                printf("reg[%d,%d] = [%d,%d]\n",
+                    outstanding_req.addr,
+                    outstanding_req.addr+1,
+                    data[0], data[1]);
 #endif
             }
             break;
         case CTRL_GR:
-            addr_regfile_unit->buffer[outstanding_req.addr] = data[0];
+            {
+            int val =
+                data[outstanding_req.spm_addr & 1];
+            if (outstanding_req.two_bit_extract) {
+                val = (val >> outstanding_req.bp_shift)
+                    & 0x3;
+            }
+            addr_regfile_unit->buffer[
+                outstanding_req.addr] = val;
+            }
 #ifdef PROFILE
-            printf("gr[%d] = %d\n", id, outstanding_req.addr, data[0]);
+            printf("gr[%d] = %d\n",
+                outstanding_req.addr,
+                data[outstanding_req.spm_addr & 1]);
 #endif
             break;
         case CTRL_OUT_PORT:
-            store_data = data[0];
+            {
+            int val =
+                data[outstanding_req.spm_addr & 1];
+            if (outstanding_req.two_bit_extract)
+                val = (val >> outstanding_req.bp_shift)
+                    & 0x3;
+            store_data = val;
+            }
 #ifdef PROFILE
-            printf("out = %d\n", id, data[0]);
+            printf("out = %d\n",
+                data[outstanding_req.spm_addr & 1]);
 #endif
             break;
         default:
@@ -193,8 +231,19 @@ void pe::run(int simd) {
 #endif
 
     // Control
+    if (PC[1] < 0 || PC[1] >= CTRL_INSTR_BUFFER_NUM) {
+        fprintf(stderr, "PE[%d] PC[1]=%d out of bounds\n", id, PC[1]);
+        exit(-1);
+    }
+    if (PC[0] < 0 || PC[0] >= CTRL_INSTR_BUFFER_NUM) {
+        fprintf(stderr, "PE[%d] PC[0]=%d out of bounds\n", id, PC[0]);
+        exit(-1);
+    }
     decode(ctrl_instr_buffer_unit->buffer[PC[1]][1], &PC[1], src_dest[1], &ctrl_op[1], simd, &ctrl_write_addrs[0], &ctrl_write_data[0]);
     decode(ctrl_instr_buffer_unit->buffer[PC[0]][0], &PC[0], src_dest[0], &ctrl_op[0], simd, &ctrl_write_addrs[1], &ctrl_write_data[1]);
+
+    // Track if PE is halted (both slots executing halt instruction, opcode 15)
+    halted = (ctrl_op[0] == 15 && ctrl_op[1] == 15);
 
     addr_regfile_unit->write(ctrl_write_addrs, ctrl_write_data, CTRL_REGFILE_WRITE_PORTS);
 
@@ -251,7 +300,7 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
 #endif
 
     if (source_pos == CTRL_REG) {
-        int n_loads = single_data ? 1 : SPM_BANDWIDTH;
+        int n_loads = single_data ? 1 : LINE_SIZE;
         for (int i = 0; i < n_loads; i++) {
             int addr = source_addr + i;
             if (addr >= 0 && addr < REGFILE_ADDR_NUM) {
@@ -271,7 +320,7 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
         printf(" to ");
 #endif
     } else if (source_pos == CTRL_GR) {
-        int n_loads = single_data ? 1 : SPM_BANDWIDTH;
+        int n_loads = single_data ? 1 : LINE_SIZE;
         for (int i = 0; i < n_loads; i++) {
             int addr = source_addr + i;
             if (addr >= 0 && addr < ADDR_REGISTER_NUM) {
@@ -291,9 +340,21 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
         printf(" to ");
 #endif
     } else if (source_pos == CTRL_SPM) {
-        int access_addr = swizzle ? apply_address_swizzle(source_addr) : source_addr;
+        int access_addr = swizzle
+            ? apply_address_swizzle(source_addr)
+            : source_addr;
         bool isVirtualAddr = !swizzle;
-        SPM_unit->access(access_addr, id, SpmAccessT::READ, single_data, LoadResult(), isVirtualAddr);
+        last_spm_load_addr = access_addr;
+        spmReqPort = new OutstandingRequest();
+        spmReqPort->addr = access_addr;
+        spmReqPort->peid = id;
+        spmReqPort->access_t = SpmAccessT::READ;
+        spmReqPort->single_data = single_data;
+        if (!single_data)
+            assert(lineOffset(access_addr) == 0
+                && "Double-data SPM read requires "
+                   "even addr");
+        spmReqPort->isVirtualAddr = isVirtualAddr;
 #ifdef PROFILE
     if (simd)
         printf("%lx from SPM[%d]%s to ", SPM_unit->access_magic(id, access_addr), source_addr, swizzle ? " (swizzled)" : "");
@@ -347,15 +408,19 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
 #endif
     if (src_pos == CTRL_SPM) {
         //in this case we need to wait a cycle, so we put it into outstanding
-        if (dest_pos != CTRL_REG && dest_pos != CTRL_GR && dest_pos != CTRL_OUT_PORT) {
-            fprintf(stderr, "Error: unsupported dest %d for SPM source store in PE[%d]\n", dest_pos, id);
+        if (dest_pos != CTRL_REG && dest_pos != CTRL_GR
+            && dest_pos != CTRL_OUT_PORT) {
+            fprintf(stderr,
+                "Error: unsupported dest %d for SPM source"
+                " store in PE[%d]\n", dest_pos, id);
             exit(-1);
         }
-        assert(!outstanding_req.valid); //should not have outstanding already
+        assert(!outstanding_req.valid);
         outstanding_req.valid = true;
         outstanding_req.single_load = single_data;
         outstanding_req.dst = dest_pos;
         outstanding_req.addr = dest_addr;
+        outstanding_req.spm_addr = last_spm_load_addr;
         //still log the dest we're sending to
 #ifdef PROFILE
         switch (dest_pos) {
@@ -393,9 +458,25 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
                 exit(-1);
             }
         } else if (dest_pos == 2) {
-            int access_addr = swizzle ? apply_address_swizzle(dest_addr) : dest_addr;
+            int access_addr = swizzle
+                ? apply_address_swizzle(dest_addr) : dest_addr;
             bool isVirtualAddr = !swizzle;
-            SPM_unit->access(access_addr, id, SpmAccessT::WRITE, single_data, data, isVirtualAddr);
+            spmReqPort = new OutstandingRequest();
+            spmReqPort->peid = id;
+            spmReqPort->access_t = SpmAccessT::WRITE;
+            spmReqPort->isVirtualAddr = isVirtualAddr;
+            spmReqPort->addr = access_addr;
+            if (single_data) {
+                spmReqPort->single_data = true;
+                int s = lineOffset(access_addr);
+                spmReqPort->data.data[s] = data.data[0];
+            } else {
+                assert(lineOffset(access_addr) == 0
+                    && "Double-data SPM write "
+                       "requires even addr");
+                spmReqPort->single_data = false;
+                spmReqPort->data = data;
+            }
 #ifdef PROFILE
             printf("SPM[%d]%s.\t", dest_addr, swizzle ? " (swizzled)" : "");
 #endif
@@ -473,13 +554,14 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     int reg_auto_increasement_flag_0 = (instruction & reg_auto_increasement_flag_0_mask) >> (INSTRUCTION_WIDTH - 2*MEMORY_COMPONENTS_ADDR_WIDTH - 2);
     int reg_imm_0 = (instruction & reg_imm_0_mask) >> (2 + IMMEDIATE_WIDTH + 2 * GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_imm_0_sign_bit = (instruction & reg_imm_0_sign_bit_mask) >> (INSTRUCTION_WIDTH - 2*MEMORY_COMPONENTS_ADDR_WIDTH - 3);
-    int sext_imm_0 = reg_imm_0 | (reg_imm_0_sign_bit ? 0xFFFFC000 : 0);
+    int imm_sign_extend_mask = ~((1 << IMMEDIATE_WIDTH) - 1);
+    int sext_imm_0 = reg_imm_0 | (reg_imm_0_sign_bit ? imm_sign_extend_mask : 0);
     int reg_0 = (instruction & reg_0_mask) >> (2 + IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_immBar_flag_1 = (instruction & reg_immBar_flag_1_mask) >> (1 + IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_auto_increasement_flag_1 = (instruction & reg_auto_increasement_flag_1_mask) >> (IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_imm_1 = (instruction & reg_imm_1_mask) >> (GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH);
     int reg_imm_1_sign_bit = (instruction & reg_imm_1_sign_bit_mask) >> (IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + CTRL_OPCODE_WIDTH - 1);
-    int sext_imm_1 = reg_imm_1 | (reg_imm_1_sign_bit ? 0xFFFFC000 : 0);
+    int sext_imm_1 = reg_imm_1 | (reg_imm_1_sign_bit ? imm_sign_extend_mask : 0);
     int reg_1 = (instruction & reg_1_mask) >> CTRL_OPCODE_WIDTH;
     int opcode = instruction & opcode_mask;
 
@@ -787,6 +869,12 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         if (reg_auto_increasement_flag_1)
             addr_regfile_unit->buffer[reg_1]++;
         (*PC)++;
+    } else if (opcode == CTRL_MVDQ) {
+        fprintf(stderr, "not implemented yet\n");
+        exit(-1);
+    } else if (opcode == CTRL_MVDQI) {
+        fprintf(stderr, "not implemented yet\n");
+        exit(-1);
     } else if (opcode == CTRL_MVI) {
 #ifdef PROFILE
         printf("Move with Index Swizzle ");
@@ -801,6 +889,57 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             fprintf(stderr, "PE[%d] PC=%d illegal mvi from %d to %d\n", id, *PC, src, dest);
             exit(-1);
         }
+
+        if (reg_auto_increasement_flag_0)
+            addr_regfile_unit->buffer[reg_0]++;
+        if (reg_auto_increasement_flag_1)
+            addr_regfile_unit->buffer[reg_1]++;
+        (*PC)++;
+    } else if (opcode == CTRL_MVI2) {
+#ifdef PROFILE
+        printf("Move with 2-bit Extract ");
+#endif
+        assert(src == CTRL_SPM);
+        // Compute bp-level address from operands
+        int bp_addr;
+        if (reg_immBar_flag_1)
+            bp_addr =
+                addr_regfile_unit->buffer[sext_imm_1]
+                + addr_regfile_unit->buffer[reg_1];
+        else
+            bp_addr = sext_imm_1
+                + addr_regfile_unit->buffer[reg_1];
+        int bp_offset = bp_addr & 0xF;
+        int word_addr = bp_addr >> 4;
+
+        // Swizzle and issue SPM read
+        int access_addr =
+            apply_address_swizzle(word_addr);
+        last_spm_load_addr = access_addr;
+        spmReqPort = new OutstandingRequest();
+        spmReqPort->addr = access_addr;
+        spmReqPort->peid = id;
+        spmReqPort->access_t = SpmAccessT::READ;
+        spmReqPort->single_data = true;
+        spmReqPort->isVirtualAddr = false;
+
+        // Set up outstanding req for destination
+        int dest_addr;
+        if (reg_immBar_flag_0)
+            dest_addr =
+                addr_regfile_unit->buffer[sext_imm_0]
+                + addr_regfile_unit->buffer[reg_0];
+        else
+            dest_addr = sext_imm_0
+                + addr_regfile_unit->buffer[reg_0];
+        assert(!outstanding_req.valid);
+        outstanding_req.valid = true;
+        outstanding_req.single_load = true;
+        outstanding_req.dst = dest;
+        outstanding_req.addr = dest_addr;
+        outstanding_req.spm_addr = access_addr;
+        outstanding_req.bp_shift = bp_offset << 1;
+        outstanding_req.two_bit_extract = true;
 
         if (reg_auto_increasement_flag_0)
             addr_regfile_unit->buffer[reg_0]++;
@@ -836,4 +975,3 @@ void pe::show_comp_reg(const char** reg_names) {
     for (i = 0; i < REGFILE_ADDR_NUM; i++)
         regfile_unit->show_data(i, reg_names);
 }
-

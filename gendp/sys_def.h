@@ -27,9 +27,18 @@
 #define FIFO_ADDR_NUM 3072
 
 #define SPM_ACCESS_LATENCY 2
-#define SPM_BANDWIDTH 2
-#define SPM_ADDR_NUM 2048
-#define SPM_BANK_SIZE 512
+#define LINE_SIZE 2
+#define SPM_ADDR_NUM 32768
+#define SPM_BANK_GROUP_SIZE 8192  // Size of each bank-group (1 per PE)
+#define SPM_BANK_SIZE 4096        // Actual bank size (2 banks per bank-group)
+#define SPM_NUM_BANKS 8           // 4 bank-groups × 2 banks each
+#define S2_BUFFER_BYTES (1024 * 1024) // 1 MB, int-addressable (4 bytes per int)
+#define S2_BUFFER_INTS (S2_BUFFER_BYTES / 4)
+#define S2_NUM_BANKS 4
+#define S2_READ_LATENCY 6
+#define S2_WRITE_LATENCY 3
+#define LSQ_MAX_ENTRIES_PER_BANK 8
+#define CTRL_PEID 656
 #define MAIN_ADDR_REGISTER_NUM 16
 #define CTRL_INSTR_BUFFER_NUM 2000
 #define COMP_INSTR_BUFFER_GROUP_NUM 200
@@ -55,7 +64,7 @@
 
 #define COMP_OPCODE_WIDTH 5
 #define MEMORY_COMPONENTS_ADDR_WIDTH 4
-#define IMMEDIATE_WIDTH 14
+#define IMMEDIATE_WIDTH 16
 #define GLOBAL_REGISTER_ADDR_WIDTH 4
 #define CTRL_OPCODE_WIDTH 6
 #define INSTRUCTION_WIDTH ((MEMORY_COMPONENTS_ADDR_WIDTH + IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + 2) * 2 + CTRL_OPCODE_WIDTH)
@@ -64,7 +73,7 @@
 
 #define COMP_NOP_INSTRUCTION 0x1ef7800000000
 #define CTRL_NOP_INSTRUCTION 0xe
-#define MIN_INT -99
+#define MIN_INT -9999
 
 // Opcode
 #define ADDITION 0
@@ -129,7 +138,11 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_MVD 19
 #define CTRL_SUBI 20
 #define CTRL_MVI 21
-#define CTRL_BLTU 22
+#define CTRL_MVDQ 22
+#define CTRL_MVDQI 23
+#define CTRL_BARRIER 24
+#define CTRL_MVI2 25
+#define CTRL_BLTU 26
 
 // DEST/SRCS
 #define CTRL_REG 0
@@ -143,14 +156,15 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_IN_INSTR 8
 #define CTRL_OUT_PORT 9
 #define CTRL_OUT_INSTR 10
+#define CTRL_S2 15
 //FIFO [11, 12, 13, 14]
 
 // Address swizzling parameters for mvi instruction
 #define N_SWIZZLE_BITS 2
-#define ADDR_LEN 11
+#define ADDR_LEN 15
 
-// DNA sequence start addresses for magic instruction initialization
-#define PATTERN_START 226
-#define TEXT_START 369
+// DNA sequence start addresses for magic instruction initialization. No swizzle start
+#define PATTERN_START 512
+#define TEXT_START 1160
 
 #endif
