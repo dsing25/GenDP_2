@@ -12,6 +12,7 @@ Prereqs:
 """
 
 import sys
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -21,7 +22,9 @@ REPO_ROOT = SCRIPT_DIR.parent  # gendp/
 KERNEL_DIR = REPO_ROOT / 'kernel' / 'Gwfa'
 DUMP_DIR = KERNEL_DIR / 'Datasets' / 'Gwfa295'
 GOLDEN_SCORES = DUMP_DIR / 'trueScores.txt'
+GOLDEN_DEBUG = DUMP_DIR / 'wfDebugTrue0.txt'
 SIM_PATH = REPO_ROOT / 'sim'
+SIM_DEBUG_OUT = REPO_ROOT / 'wfDebug.txt'
 
 MODES = {
     '1': {'name': 'fast',  'n': 15},
@@ -69,6 +72,108 @@ def run_sim(n, verbose=False):
     return scores
 
 
+def run_sim_debug(s_term_dbg=5):
+    """Run simulator with GWFA_S_TERM_DBG set, n=1."""
+    cmd = [
+        str(SIM_PATH), '-k', '7',
+        '-i', str(DUMP_DIR), '-n', '1',
+    ]
+    env = os.environ.copy()
+    env['GWFA_S_TERM_DBG'] = str(s_term_dbg)
+    print(f"Running: {' '.join(cmd)}")
+    print(f"  GWFA_S_TERM_DBG={s_term_dbg}")
+    result = subprocess.run(
+        cmd, cwd=str(REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=None, text=True, timeout=600,
+        env=env)
+    if result.returncode != 0:
+        print(f"ERROR: simulator exited with code "
+              f"{result.returncode}")
+        sys.exit(1)
+    return result
+
+
+def parse_steps(text):
+    """Parse wfDebug text into per-step blocks.
+    Returns [(header, sorted_z, sorted_wf), ...]"""
+    steps = []
+    cur_h = cur_z = cur_wf = None
+    for line in text.splitlines():
+        if line.startswith("[gfa_ed_step]"):
+            if cur_h is not None:
+                steps.append((cur_h, sorted(cur_z), sorted(cur_wf)))
+            cur_h, cur_z, cur_wf = line, [], []
+        elif line.startswith("Z\t"):
+            cur_z.append(line)
+        elif line.startswith("WF\t"):
+            cur_wf.append(line)
+    if cur_h is not None:
+        steps.append((cur_h, sorted(cur_z), sorted(cur_wf)))
+    return steps
+
+
+def check_debug_trace(s_term_dbg=5):
+    """Mode 3: run sim with limited steps, compare
+    wfDebug.txt against golden wfDebugTrue0.txt."""
+    if not GOLDEN_DEBUG.exists():
+        print(f"Golden debug file not found: "
+              f"{GOLDEN_DEBUG}")
+        sys.exit(1)
+
+    # Remove stale output
+    if SIM_DEBUG_OUT.exists():
+        SIM_DEBUG_OUT.unlink()
+
+    run_sim_debug(s_term_dbg)
+
+    if not SIM_DEBUG_OUT.exists():
+        print("ERROR: wfDebug.txt not produced")
+        sys.exit(1)
+
+    sim_text = SIM_DEBUG_OUT.read_text()
+    golden_text = GOLDEN_DEBUG.read_text()
+
+    sim_steps = parse_steps(sim_text)
+    golden_steps = parse_steps(golden_text)
+
+    n = min(len(sim_steps), len(golden_steps))
+    if n == 0:
+        print("ERROR: no steps parsed")
+        sys.exit(1)
+    print(f"Comparing {n} steps "
+          f"(sim={len(sim_steps)}, "
+          f"golden={len(golden_steps)})")
+
+    passed = 0
+    failed = 0
+    for i in range(n):
+        sh, sz, swf = sim_steps[i]
+        gh, gz, gwf = golden_steps[i]
+        ok = (sh == gh and sz == gz and swf == gwf)
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+            print(f"  step {i} MISMATCH")
+            if sh != gh:
+                print(f"    header: sim={sh}")
+                print(f"    header: gld={gh}")
+            if sz != gz:
+                print(f"    Z lines differ "
+                      f"(sim={len(sz)}, gld={len(gz)})")
+            if swf != gwf:
+                print(f"    WF lines differ "
+                      f"(sim={len(swf)}, gld={len(gwf)})")
+
+    print()
+    print("=" * 50)
+    print(f"Debug trace: {passed} passed, "
+          f"{failed} failed out of {n} steps")
+    print("=" * 50)
+    return failed
+
+
 def main():
     if len(sys.argv) < 2 or \
        sys.argv[1] not in MODES:
@@ -80,10 +185,16 @@ def main():
         print("  3: debug (1 iteration, verbose)")
         sys.exit(1)
 
-    mode = MODES[sys.argv[1]]
-    verbose = sys.argv[1] == '3'
-    n = mode['n']
+    mode_key = sys.argv[1]
+    mode = MODES[mode_key]
     print(f"=== GWFA {mode['name']} mode ===")
+
+    if mode_key == '3':
+        failed = check_debug_trace(s_term_dbg=5)
+        sys.exit(1 if failed else 0)
+
+    verbose = False
+    n = mode['n']
 
     if not GOLDEN_SCORES.exists():
         print(f"Golden scores not found at "
@@ -113,8 +224,6 @@ def main():
             zip(sim_scores, golden)):
         if s == g:
             passed += 1
-            if verbose:
-                print(f"  [{i}] PASS score={s}")
         else:
             failed += 1
             print(f"  [{i}] FAIL "

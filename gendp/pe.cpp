@@ -1,8 +1,12 @@
 #include "pe.h"
+#include "FIFO.h"
 #include "sys_def.h"
 #include <cassert>
 #include "simulator.h"
 #include <iostream>
+extern "C" {
+#include "kernel/Gwfa/gwfa.h"
+}
 
 // Apply address swizzling for mvi instruction
 // Keeps bit[0] as line offset, moves bits[2:1] to top
@@ -581,8 +585,37 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 #endif
 
     if (is_magic) {
-        //Used to wreak simulator havoc. Put whatever you want here
-        printf("Magic!!!!! payload = %d\n", magic_payload);
+        int magic_id = magic_payload;
+        if (magic_id == 8) {
+            gwfa_tile_compute(&SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE]);
+        } else if (magic_id == 11) {
+            // Boundary sort: compare-and-swap last B of this PE with first B of next PE
+            int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+            int tb_n = spm[768]; // META_OFF
+            if (id < 3) {
+                int *next = &SPM_unit->buffer[(id + 1) * SPM_BANK_GROUP_SIZE];
+                int next_tb_n = next[768];
+                if (tb_n > 0 && next_tb_n > 0) {
+                    int my_off = 256 + 2 * (tb_n - 1);
+                    int nx_off = 256;
+                    if ((uint32_t)spm[my_off] > (uint32_t)next[nx_off]) {
+                        int tmp_vd = spm[my_off], tmp_k = spm[my_off + 1];
+                        spm[my_off] = next[nx_off];
+                        spm[my_off + 1] = next[nx_off + 1];
+                        next[nx_off] = tmp_vd;
+                        next[nx_off + 1] = tmp_k;
+                    }
+                }
+            } else {
+                // PE 3: push last B entry to FIFO, decrement count
+                if (tb_n > 0) {
+                    int off = 256 + 2 * (tb_n - 1);
+                    fifo_out[0]->push(spm[off]);     // vd
+                    fifo_out[1]->push(spm[off + 1]); // k
+                    spm[768] = tb_n - 1;
+                }
+            }
+        }
         (*PC)++;
     } else if (opcode == 0) {              // add rd rs1 rs2
         rd = reg_imm_0;

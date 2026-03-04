@@ -260,8 +260,7 @@ void gwfa_simulation(
     pe_array *pa = new pe_array(1024, 1024);
 
     // Load main instructions from file
-    std::string main_instr_file =
-        "instructions/gwfa/main_instruction.txt";
+    std::string main_instr_file = "instructions/gwfa/main_instruction.txt";
     unsigned long main_instruction[CTRL_INSTR_BUFFER_NUM];
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++)
         main_instruction[i] = 0x42;
@@ -271,21 +270,44 @@ void gwfa_simulation(
         int read_index = 0;
         fp.open(main_instr_file, std::ios::in);
         if (!fp.is_open()) {
-            fprintf(stderr, "Cannot open %s\n",
-                main_instr_file.c_str());
+            fprintf(stderr, "Cannot open %s\n", main_instr_file.c_str());
             exit(-1);
         }
         while (getline(fp, line))
-            main_instruction[read_index++] =
-                std::stoull(line, 0, 0);
+            main_instruction[read_index++] = std::stoull(line, 0, 0);
         fp.close();
     }
+
+    // Load PE instructions from files
+    const int pe_group_size = 4;
+    static unsigned long pe_instr[pe_group_size][CTRL_INSTR_BUFFER_NUM][CTRL_INSTR_BUFFER_GROUP_SIZE];
+    for (int i = 0; i < pe_group_size; i++)
+        for (int j = 0; j < CTRL_INSTR_BUFFER_NUM; j++) {
+            pe_instr[i][j][0] = CTRL_NOP_INSTRUCTION;
+            pe_instr[i][j][1] = CTRL_NOP_INSTRUCTION;
+        }
+    for (int i = 0; i < pe_group_size; i++) {
+        std::string pe_file = "instructions/gwfa/pe_" + std::to_string(i) + "_instruction.txt";
+        std::fstream fp;
+        fp.open(pe_file, std::ios::in);
+        if (fp.is_open()) {
+            std::string line;
+            int read_index = 0;
+            while (getline(fp, line)) {
+                pe_instr[i][read_index / 2][read_index % 2] = std::stoull(line, 0, 0);
+                read_index++;
+            }
+            fp.close();
+        }
+    }
+
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {
         unsigned long tmp[CTRL_INSTR_BUFFER_GROUP_SIZE];
         tmp[0] = 0x20f7800000000;
         tmp[1] = main_instruction[i];
-        pa->main_instruction_buffer_write_from_ddr(
-            i, tmp);
+        pa->main_instruction_buffer_write_from_ddr(i, tmp);
+        for (int j = 0; j < pe_group_size; j++)
+            pa->pe_instruction_buffer_write_from_ddr(i, pe_instr[j][i], j);
     }
 
     for (int i = 0; i < n; i++) {
@@ -330,11 +352,14 @@ void gwfa_simulation(
         pa->main_addressing_register[18] =
             (int)inp.n_arc;
         pa->main_addressing_register[23] = inp.s_term;
+        const char *st_env = getenv("GWFA_S_TERM_DBG");
+        if (st_env)
+            pa->main_addressing_register[23] = atoi(st_env);
 
-        // Max cycles: 8 per edit distance + overhead
+        // Max cycles: scale with edit distance × tiles per step
         int max_cycles =
-            inp.s_term * 10 + 100;
-        if (max_cycles < 1000) max_cycles = 1000;
+            inp.s_term * 10000 + 10000;
+        if (max_cycles < 100000) max_cycles = 100000;
         pa->run(max_cycles, 0, PE_4_SETTING,
             MAIN_INSTRUCTION_1);
 

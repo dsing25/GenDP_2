@@ -14,6 +14,10 @@ extern "C" {
 #define MAX_RANGE NUM_FRACTION_BITS
 #define NUM_INTEGER_BITS 5
 
+#ifndef GWFA_DBG_DEFAULT
+#define GWFA_DBG_DEFAULT 0
+#endif
+
 PerfCounter bankConflictStalls = 0;
 PerfCounter totalSpmRequests = 0;
 PerfCounter lsqFullStalls = 0;
@@ -39,6 +43,8 @@ pe_array::pe_array(int input_size, int output_size) {
     SPM_unit = new SPM(SPM_ADDR_NUM+1, &active_event_producers);
     for (i = 0; i < PE_NUM; i++)
         pe_unit[i] = new pe(i, SPM_unit);
+    pe_unit[3]->fifo_out[0] = &fifo_unit[0][0];
+    pe_unit[3]->fifo_out[1] = &fifo_unit[0][1];
     load_data = 0;
     store_data = 0;
     from_fifo = 0;
@@ -400,20 +406,73 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 sub.n_vtx = main_addressing_register[17];
                 sub.n_arc = main_addressing_register[18];
                 const uint32_t *q = (const uint32_t*)(uintptr_t)va_regfile[5];
-                gwfa_init(main_addressing_register[16], q, &sub, 0);
+                gwfa_init(main_addressing_register[16], q, &sub, GWFA_DBG_DEFAULT);
             }
+            main_addressing_register[15] = gwfa_get_n_a();
         } else if (magic_id == 2) {
-            // GWFA extend: one step at distance gr[12]. If done, set SPM[8191]=1.
-            int done = gwfa_extend_step(main_addressing_register[12]);
-            if (done) write_spm_magic(8191, 1);
+            // GWFA extend (tiled): one step at distance gr[12].
+            int done = gwfa_extend_step_tiled(main_addressing_register[12], SPM_unit->buffer);
+            if (done) write_spm_magic(32767, 1);
         } else if (magic_id == 3) {
             // GWFA print score, zero va_regfile
             printf("qqq %d qqq\n", gwfa_get_score());
             memset(va_regfile, 0, sizeof(va_regfile));
         } else if (magic_id == 4) {
-            gwfa_reset_step();
+            // GWFA begin step: prep wavefront state for next edit distance
+            gwfa_begin_step();
         } else if (magic_id == 5) {
+            // GWFA debug: print wavefront trace at distance gr[12]
             gwfa_debug_step(main_addressing_register[12]);
+        } else if (magic_id == 7) {
+            // GWFA tile load diags: load 64 diags per PE from cursor gr[14]
+            int32_t cursor = main_addressing_register[14];
+            for (int pe = 0; pe < 4; pe++) {
+                int *pe_spm = SPM_unit->buffer + pe * SPM_BANK_GROUP_SIZE;
+                gwfa_tile_load_one(cursor + pe * 64, pe_spm);
+            }
+        } else if (magic_id == 8) {
+            // GWFA tile load seq info: load node seq metadata into each PE's SPM
+            for (int pe = 0; pe < 4; pe++) {
+                int *pe_spm = SPM_unit->buffer + pe * SPM_BANK_GROUP_SIZE;
+                gwfa_tile_load_seq_info(pe_spm);
+            }
+        } else if (magic_id == 9) {
+            // GWFA tile writeback with FIFO carry for boundary sort
+            int *pe0 = SPM_unit->buffer + 0 * SPM_BANK_GROUP_SIZE;
+            int32_t cursor = main_addressing_register[14];
+            // 1. Pop FIFO from previous tile, compare-swap with PE0's first B
+            if (cursor > 0) {
+                int fifo_vd = fifo_unit[0][0].pop();
+                int fifo_k  = fifo_unit[0][1].pop();
+                if (pe0[768] > 0 && (uint32_t)fifo_vd > (uint32_t)pe0[256]) {
+                    int tmp_vd = pe0[256], tmp_k = pe0[257];
+                    pe0[256] = fifo_vd; pe0[257] = fifo_k;
+                    fifo_vd = tmp_vd; fifo_k = tmp_k;
+                }
+                gwfa_B_push((uint32_t)fifo_vd, fifo_k);
+            }
+            // 2. Writeback all PEs
+            for (int pe = 0; pe < 4; pe++) {
+                int *pe_spm = SPM_unit->buffer + pe * SPM_BANK_GROUP_SIZE;
+                gwfa_tile_writeback_one(pe_spm);
+            }
+            // 3. Advance cursor
+            int32_t n_a = main_addressing_register[15];
+            int32_t remaining = n_a - cursor;
+            main_addressing_register[14] += remaining < 256 ? remaining : 256;
+        } else if (magic_id == 12) {
+            // GWFA FIFO flush: write remaining boundary element to s_B_a
+            int *pe0 = SPM_unit->buffer + 0 * SPM_BANK_GROUP_SIZE;
+            pe0[256]     = main_addressing_register[3]; // vd
+            pe0[256 + 1] = main_addressing_register[4]; // k
+            pe0[768]     = 1; // tb_n = 1
+            pe0[769]     = 0; // ta_n = 0
+            gwfa_tile_writeback_one(pe0);
+        } else if (magic_id == 10) {
+            // GWFA phase 2: cross-node propagation, update n_a in gr[15]
+            int done = gwfa_phase2(main_addressing_register[12]);
+            main_addressing_register[15] = gwfa_get_n_a();
+            if (done) write_spm_magic(32767, 1);
         } else if (magic_id == 6) {
             //WFA initializations
             int MEM_BLOCK_SIZE = 32;
@@ -565,7 +624,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
             magic_wfs_out << std::endl;
         } else if (magic_id == 5) {
-            // WFA: print final score
+            // WFA print final score (NOTE: unreachable — caught by GWFA id==5 above)
             int score = main_addressing_register[12] - 1;
             printf("qqq %d qqq\n", score);
         } else {

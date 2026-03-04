@@ -449,6 +449,10 @@ python3 scripts/<kernel>_check_correctness.py <sim_output> <golden_output>
 bash scripts/<kernel>_throughput.sh <num_cases>
 ```
 
+## Style
+For c++ limit the line length to 100 characters, but avoid unecessary line breaks.
+For instruction_generator.py files never put a line break within a f.write instruction
+
 ## Additional Documentation
 
 - **Complete ISA Manual**: See `docs.md` for detailed instruction encoding, opcode reference, addressing modes, and programming patterns

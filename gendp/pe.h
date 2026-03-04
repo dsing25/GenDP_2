@@ -5,6 +5,8 @@
 #include "crossbar.h"
 #include "simulator.h"
 
+class FIFO;
+
 class pe {
 
     public:
@@ -66,6 +68,9 @@ class pe {
 
         // public for magic instruction initialization
         addr_regfile *addr_regfile_unit = new addr_regfile(ADDR_REGISTER_NUM);
+
+        // FIFO output ports (set by pe_array for PE3 boundary sort)
+        FIFO *fifo_out[2] = {nullptr, nullptr};
 
     private:
         //helper
