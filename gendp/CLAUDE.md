@@ -212,22 +212,49 @@ f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))    # nop 
 f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))    # data ready
 ```
 
-### VLIW Execution Order (CRITICAL)
+### VLIW Concurrent Execution (CRITICAL)
 
-Control instructions execute in pairs (2 slots), but the execution order is counter-intuitive:
-- First written instruction → Slot 0 → executes SECOND
-- Second written instruction → Slot 1 → executes FIRST
+Control instructions execute in pairs (2 slots per PC). Both slots execute
+**CONCURRENTLY**. Both read register state from **BEFORE** the cycle.
+There is **NO data forwarding** between slots.
 
-This matters for hazards involving arithmetic operations that write to `gr`:
+Hazard rules:
+- **RAW** (A writes X, B reads X): B gets OLD value, not A's result.
+  **NEVER** pair instructions with a RAW dependency — the dependent
+  instruction will silently get stale data. Even though the simulator
+  implements slots sequentially, treat them as concurrent. Avoiding
+  RAW hazards is the **programmer's responsibility**.
+- **WAW** (both write same dest): undefined behavior. **NEVER** pair.
+- **WAR** (A reads X, B writes X): A gets OLD value. **Safe** — both
+  read pre-cycle state.
+
+Additional structural constraints:
+- `mvdq + mvdq` or `mvdq + mv` in same cycle = structural hazard.
+- Two SPM accesses in same cycle = structural hazard (1 port/PE).
+- Slot 1 (second written) cannot hold: magic, branch, jump, halt,
+  set_PC, barrier, or SI/MV to IO destinations (in_buf, out_buf,
+  fifos).
+- Slot 0 (first written) double-executes via decode_output unless
+  opcode is add/sub/addi/set_8/si(non-IO)/mv(non-IO)/NOP.
 
 ```python
-# INCORRECT - read sees NEW value because increment executes first
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))   # Slot 0: executes 2nd
-f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))   # Slot 1: gr[1]++ executes 1st!
+# SAFE — no register overlap between slots
+f.write(data_movement_instruction(
+    gr, gr, 0, 0, 1, 0, 0, 0, MBS, 1, addi))   # gr[1]+=MBS
+f.write(data_movement_instruction(
+    gr, gr, 0, 0, 6, 0, 0, 0, MBS, 6, addi))   # gr[6]+=MBS
 
-# CORRECT - place increment in Slot 0 so it executes AFTER the read
-f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))   # Slot 0: executes 2nd
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))   # Slot 1: executes 1st
+# HAZARD (WAW) — both write gr[1], undefined
+f.write(data_movement_instruction(
+    gr, gr, 0, 0, 1, 0, 0, 0, 5, 0, mv))       # writes gr[1]
+f.write(data_movement_instruction(
+    gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))     # also writes gr[1]!
+
+# HAZARD (RAW) — B depends on A's output but gets stale data
+f.write(data_movement_instruction(
+    gr, gr, 0, 0, 5, 0, 0, 0, 1, 6, add))      # A: gr[5]=gr[1]+gr[6]
+f.write(data_movement_instruction(
+    gr, gr, 0, 0, 2, 0, 0, 0, 5, 0, mv))       # B: gr[2]=gr[5] STALE!
 ```
 
 ### Synchronization Pattern

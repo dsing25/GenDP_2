@@ -163,7 +163,7 @@ int wfa_simulate(pe_array *pe_array_unit, align_input_t& align_input, int n, FIL
     pe_array_unit->write_s2(S2_META_BASE + 0, pattern_len_raw);
     pe_array_unit->write_s2(S2_META_BASE + 1, text_len_raw);
 
-    pe_array_unit->run(n, simd, PE_4_SETTING, MAIN_INSTRUCTION_1);
+    pe_array_unit->run(n, simd, PE_4_SETTING, MAIN_INSTRUCTION_2);
 
     return 0; //TODO link to score output
     //if (show_output) pe_array_unit->bsw_show_output_buffer(fp);
@@ -181,7 +181,9 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
     std::string kernel_name = "wfa";
 //void load_instructions(std::string kernel_name, size_t n_comp_instructions, size_t pe_group_size, pe_array *pe_array_unit) {
     unsigned long compute_instruction[n_comp_instructions][COMP_INSTR_BUFFER_GROUP_SIZE];
-    unsigned long main_instruction[CTRL_INSTR_BUFFER_NUM];
+    unsigned long main_instruction
+        [CTRL_INSTR_BUFFER_NUM]
+        [CTRL_INSTR_BUFFER_GROUP_SIZE];
     unsigned long pe_instruction[pe_group_size][CTRL_INSTR_BUFFER_NUM][CTRL_INSTR_BUFFER_GROUP_SIZE];
     for (int i = 0; i < pe_group_size; i++) {
         for (int j = 0; j < CTRL_INSTR_BUFFER_NUM; j++) {
@@ -190,7 +192,8 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
         }
     }
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {
-        main_instruction[i] = 0x42;
+        main_instruction[i][0] = 0xe;  // NOP
+        main_instruction[i][1] = 0xe;  // NOP
     }
 
     std::string compute_instruction_file = "instructions/"+kernel_name+"/compute_instruction.txt";
@@ -224,7 +227,7 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
     if (fp_main_instruction.is_open()) {
         read_index = 0;
         while(getline(fp_main_instruction, line)) {
-            main_instruction[read_index] = std::stoull(line, 0, 0);
+            main_instruction[read_index/2][read_index%2] = std::stoull(line, 0, 0);
             read_index++;
         }
     } else {
@@ -259,10 +262,8 @@ void wfa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
 
     // Load main & pe instructions into pe_array instruction buffer
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {
-        unsigned long tmp[CTRL_INSTR_BUFFER_GROUP_SIZE];
-        tmp[0] = 0x20f7800000000;
-        tmp[1] = main_instruction[i];
-        pe_array_unit->main_instruction_buffer_write_from_ddr(i, tmp);
+        pe_array_unit->main_instruction_buffer_write_from_ddr(
+            i, main_instruction[i]);
         for (int j = 0; j < pe_group_size; j++){
             //ctrl
             pe_array_unit->pe_instruction_buffer_write_from_ddr(i, pe_instruction[j][i], j);

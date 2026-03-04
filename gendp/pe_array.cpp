@@ -1220,7 +1220,19 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
     printf("PC = %d\t", *PC);
 #endif
     if (main_instruction_setting == MAIN_INSTRUCTION_2) {
-        if (((opcode == 4 || opcode == 5) && (dest != 5 && dest != 6 && dest != 11 && dest != 12 && dest != 13 && dest != 14)) || opcode == 14) {
+        // Arithmetic (opcodes 0-3) now runs pre-PE via
+        // decode(). Skip here to avoid double-execution.
+        if (opcode <= 3) {
+#ifdef PROFILE
+            printf("\n");
+#endif
+            return 0;
+        }
+        if (((opcode == 4 || opcode == 5)
+             && (dest != 5 && dest != 6 && dest != 11
+                 && dest != 12 && dest != 13
+                 && dest != 14))
+            || opcode == 14) {
 #ifdef PROFILE
             printf("\n");
 #endif
@@ -1473,6 +1485,98 @@ void pe_array::process_events() {
 
 }
 
+// Pre-check whether executing both VLIW slots would
+// cause an LSQ stall. Returns true if either (or both
+// combined) would overflow an LSQ bank.
+bool pe_array::willStallPair(
+    unsigned long slot0, unsigned long slot1)
+{
+    // Combined address lists for canEnqueue
+    int spmAddrs[10], s2Addrs[10];
+    int nSpm = 0, nS2 = 0;
+
+    unsigned long instrs[2] = {slot0, slot1};
+    for (int s = 0; s < 2; s++) {
+        unsigned long instr = instrs[s];
+        bool is_magic = (instr >> 63) & 1;
+        if (is_magic) continue;
+
+        int opcode = instr & 0x3F;
+        int dest   = (instr >> 54) & 0xF;
+        int src    = (instr >> 50) & 0xF;
+        int riB0   = (instr >> 49) & 1;
+        int imm0   = (instr >> 32) & 0xFFFF;
+        if (imm0 & 0x8000) imm0 |= ~0xFFFF;
+        int r0     = (instr >> 28) & 0xF;
+        int riB1   = (instr >> 27) & 1;
+        int imm1   = (instr >> 10) & 0xFFFF;
+        if (imm1 & 0x8000) imm1 |= ~0xFFFF;
+        int r1     = (instr >> 6)  & 0xF;
+
+        bool srcSpm  = (src  == CTRL_SPM);
+        bool srcS2   = (src  == CTRL_S2);
+        bool destSpm = (dest == CTRL_SPM);
+        bool destS2  = (dest == CTRL_S2);
+        bool spmS2   = (srcSpm && destS2)
+                     || (srcS2 && destSpm);
+
+        if (opcode == 5 && spmS2) {
+            // mv SPM<->S2: one spm addr, one s2 addr
+            int addr0 = (riB0
+                ? main_addressing_register[imm0 & 0xF]
+                : imm0)
+                + main_addressing_register[r0];
+            int addr1 = (riB1
+                ? main_addressing_register[imm1 & 0xF]
+                : imm1)
+                + main_addressing_register[r1];
+            // dest uses addr0 (field 0), src uses addr1
+            int spmA = destSpm ? addr0 : addr1;
+            int s2A  = destS2  ? addr0 : addr1;
+            spmAddrs[nSpm++] = spmA;
+            s2Addrs[nS2++]   = s2A;
+        } else if (opcode == CTRL_MVDQ && spmS2) {
+            // mvdq SPM<->S2: 4-5 entries each side
+            int addr0 = (riB0
+                ? main_addressing_register[imm0 & 0xF]
+                : imm0)
+                + main_addressing_register[r0];
+            int addr1 = (riB1
+                ? main_addressing_register[imm1 & 0xF]
+                : imm1)
+                + main_addressing_register[r1];
+            int spmA = destSpm ? addr0 : addr1;
+            int s2A  = destS2  ? addr0 : addr1;
+            // Even/odd bank patterns (mirrors decode)
+            if (spmA % 2 == 0) {
+                for (int i = 0; i < 4; i++)
+                    spmAddrs[nSpm++] = spmA + 2*i;
+            } else {
+                spmAddrs[nSpm++] = spmA;
+                spmAddrs[nSpm++] = spmA + 1;
+                spmAddrs[nSpm++] = spmA + 3;
+                spmAddrs[nSpm++] = spmA + 5;
+                spmAddrs[nSpm++] = spmA + 7;
+            }
+            if (s2A % 2 == 0) {
+                for (int i = 0; i < 4; i++)
+                    s2Addrs[nS2++] = s2A + 2*i;
+            } else {
+                s2Addrs[nS2++] = s2A;
+                s2Addrs[nS2++] = s2A + 1;
+                s2Addrs[nS2++] = s2A + 3;
+                s2Addrs[nS2++] = s2A + 5;
+                s2Addrs[nS2++] = s2A + 7;
+            }
+        }
+        // All other opcodes (including barrier): no stall
+    }
+
+    if (nSpm == 0 && nS2 == 0) return false;
+    return !lsq->canEnqueue(
+        spmAddrs, nSpm, s2Addrs, nS2);
+}
+
 
 void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_setting) {
     int i, j, flag, old_PC;
@@ -1491,7 +1595,35 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                     c.s2Addr, c.data);
         }
 
-        flag = decode(main_instruction_buffer[main_PC][1], &main_PC, simd, setting, main_instruction_setting);
+        // Pre-check: if either slot would stall on LSQ,
+        // skip both to prevent double-execution bugs.
+        bool pairStalls = false;
+        if (main_instruction_setting
+            == MAIN_INSTRUCTION_2) {
+            pairStalls = willStallPair(
+                main_instruction_buffer[main_PC][0],
+                main_instruction_buffer[main_PC][1]);
+            if (pairStalls) lsqFullStalls++;
+        }
+
+        if (!pairStalls) {
+            flag = decode(
+                main_instruction_buffer[main_PC][1],
+                &main_PC, simd, setting,
+                main_instruction_setting);
+        }
+
+        // Pre-PE decode of slot[0]: arithmetic + non-I/O
+        // ops. Uses MI_1 filter to skip I/O-dest instrs
+        // (handled post-PE by decode_output).
+        if (main_instruction_setting
+            == MAIN_INSTRUCTION_2 && !pairStalls) {
+            int slot0_PC = old_PC;
+            decode(main_instruction_buffer[old_PC][0],
+                &slot0_PC, simd, setting,
+                MAIN_INSTRUCTION_1);
+        }
+
         pe_unit[0]->load_data = store_data;
         pe_unit[0]->load_instruction[0] = PE_instruction[0];
         pe_unit[0]->load_instruction[1] = PE_instruction[1];
@@ -1600,9 +1732,14 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         from_fifo = 0;
 
         if (main_instruction_setting == MAIN_INSTRUCTION_1)
-            decode_output(main_instruction_buffer[old_PC][1], &old_PC, simd, setting, main_instruction_setting);
-        else if (main_instruction_setting == MAIN_INSTRUCTION_2)
-            decode_output(main_instruction_buffer[old_PC][0], &old_PC, simd, setting, main_instruction_setting);
+            decode_output(main_instruction_buffer[old_PC][1],
+                &old_PC, simd, setting,
+                main_instruction_setting);
+        else if (main_instruction_setting
+                 == MAIN_INSTRUCTION_2 && !pairStalls)
+            decode_output(main_instruction_buffer[old_PC][0],
+                &old_PC, simd, setting,
+                main_instruction_setting);
 
         //zkn TODO I don't know if these should be in the above else or not
         main_addressing_register[13] = pe_unit[0]->get_gr_10() && pe_unit[1]->get_gr_10();

@@ -51,6 +51,8 @@ class pe_array {
 
         int decode(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting);
         int decode_output(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting);
+        bool willStallPair(unsigned long slot0,
+                           unsigned long slot1);
 
         LoadResult load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd);
         void store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd);
