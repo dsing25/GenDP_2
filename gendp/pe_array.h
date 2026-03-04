@@ -26,6 +26,7 @@ class pe_array {
         unsigned long compute_instruction_buffer[COMP_INSTR_BUFFER_GROUP_NUM][COMP_INSTR_BUFFER_GROUP_SIZE];
         
         int main_PC;
+        int ras = 0;
         int input_buffer_size, output_buffer_size;
         uint64_t va_regfile[16];
 

@@ -41,6 +41,8 @@ mvdq = 22
 mvdqi = 23
 barrier = 24
 mvi2 = 25
+call = 26
+ret = 27
 # these instruction tags here are for data movement
 # use sys_def.h for compute tags
 

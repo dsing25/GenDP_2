@@ -1154,6 +1154,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         printf("subi gr[%d] gr[%d] %d (%d %d %d)\n", rd, rs2, imm, sum, add_a, add_b);
 #endif
         (*PC)++;
+    } else if (opcode == CTRL_CALL) {
+        ras = *PC + 1;
+        *PC = sext_imm_0;
+#ifdef PROFILE
+        printf("call %d (ras=%d)\n", sext_imm_0, ras);
+#endif
+    } else if (opcode == CTRL_RET) {
+        *PC = ras;
+#ifdef PROFILE
+        printf("ret (PC=%d)\n", ras);
+#endif
     } else {
         fprintf(stderr, "main control instruction opcode error. opcode = %d\n", opcode);
         exit(-1);
@@ -1222,7 +1233,8 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
     if (main_instruction_setting == MAIN_INSTRUCTION_2) {
         // Arithmetic (opcodes 0-3) now runs pre-PE via
         // decode(). Skip here to avoid double-execution.
-        if (opcode <= 3) {
+        if (opcode <= 3 || opcode == CTRL_CALL
+            || opcode == CTRL_RET) {
 #ifdef PROFILE
             printf("\n");
 #endif

@@ -267,10 +267,12 @@ Controller.out_port → PE[0].in_port → PE[0].out_port → PE[1].in_port → .
 | 21   | Move Interleaved      | `mvi`      | Move with address swizzling                  |
 | 22   | Move Double Quad      | `mvdq`     | Move 8 words (block)                         |
 | 23   | Move Double Quad Imm  | `mvdqi`    | Write 8 words of immediate                   |
+| 26   | Call                  | `call`     | ras = PC+1; PC = target (absolute)           |
+| 27   | Return                | `ret`      | PC = ras                                     |
 
 ### Import Statement
 ```python
-from opcodes import add, sub, addi, si, mv, bne, beq, bge, blt, jump, set_PC, none, halt, shifti_r, shifti_l, ANDI, mvd, subi, mvi, mvdq, mvdqi
+from opcodes import add, sub, addi, si, mv, bne, beq, bge, blt, jump, set_PC, none, halt, shifti_r, shifti_l, ANDI, mvd, subi, mvi, mvdq, mvdqi, call, ret
 ```
 
 ---
@@ -1085,6 +1087,81 @@ f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0xFF, 5, ANDI))
 f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 3, 2, ANDI))
 ```
 
+#### `call` (opcode 26) - Function Call
+
+Single-level subroutine call. Saves the return address (PC+1) in the
+`ras` (return address save) register, then jumps to the target address.
+
+**Syntax**:
+```
+call target
+```
+
+**Encoding**:
+```python
+data_movement_instruction(
+    0, 0,       # dest, src: unused
+    0, 0,       # flags: unused
+    target,     # imm_0: absolute jump target (sign-extended)
+    0, 0, 0,    # unused
+    0, 0,       # unused
+    call        # opcode: 26
+)
+```
+
+**Behavior**:
+1. `ras = PC + 1` (save return address)
+2. `PC = target` (jump to subroutine)
+
+**Lockstep constraint**: Both VLIW slots must contain `call` with the
+same target. Never pair `call` with another opcode.
+
+**Limitations**: Single-level only — nested calls overwrite `ras`.
+
+**Example**:
+```python
+# Call subroutine at address FUNC_START
+f.write(data_movement_instruction(
+    0, 0, 0, 0, FUNC_START, 0, 0, 0, 0, 0, call))
+f.write(data_movement_instruction(
+    0, 0, 0, 0, FUNC_START, 0, 0, 0, 0, 0, call))
+```
+
+#### `ret` (opcode 27) - Return from Call
+
+Returns to the address saved in `ras` by a prior `call`.
+
+**Syntax**:
+```
+ret
+```
+
+**Encoding**:
+```python
+data_movement_instruction(
+    0, 0,       # dest, src: unused
+    0, 0,       # flags: unused
+    0, 0, 0, 0, # unused
+    0, 0,       # unused
+    ret         # opcode: 27
+)
+```
+
+**Behavior**:
+1. `PC = ras` (jump to saved return address)
+
+**Lockstep constraint**: Both VLIW slots must contain `ret`.
+Never pair `ret` with another opcode.
+
+**Example**:
+```python
+# Return from subroutine
+f.write(data_movement_instruction(
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ret))
+f.write(data_movement_instruction(
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ret))
+```
+
 ---
 
 ## Scratchpad Memory (SPM)
@@ -1540,7 +1617,7 @@ To change PADDING_SIZE from 30 to 64 words (to add more reserved space):
 add=0, sub=1, addi=2, si=4, mv=5, bne=8, beq=9, bge=10, blt=11,
 jump=12, set_PC=13, none=14, halt=15, shifti_r=16, shifti_l=17,
 ANDI=18, mvd=19, subi=20, mvi=21, mvdq=22, mvdqi=23,
-barrier=24
+barrier=24, mvi2=25, call=26, ret=27
 ```
 
 ### Source/Destination Numbers

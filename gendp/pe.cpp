@@ -50,6 +50,7 @@ pe::pe(int _id, SPM* spm) {
     comp_PC = COMP_INSTR_BUFFER_GROUP_NUM - 1;
     PC[0] = 0;
     PC[1] = 0;
+    ras = 0;
 }
 pe::~pe() {
     delete comp_instr_buffer_unit;
@@ -72,6 +73,7 @@ void pe::reset() {
     comp_PC = COMP_INSTR_BUFFER_GROUP_NUM - 1;
     PC[0] = 0;
     PC[1] = 0;
+    ras = 0;
 }
 
 void pe::recieve_spm_data(int data[LINE_SIZE]){
@@ -956,6 +958,17 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         if (reg_auto_increasement_flag_1)
             addr_regfile_unit->buffer[reg_1]++;
         (*PC)++;
+    } else if (opcode == CTRL_CALL) {
+        ras = *PC + 1;
+        *PC = sext_imm_0;
+#ifdef PROFILE
+        printf("call %d (ras=%d)\t", sext_imm_0, ras);
+#endif
+    } else if (opcode == CTRL_RET) {
+        *PC = ras;
+#ifdef PROFILE
+        printf("ret (PC=%d)\t", ras);
+#endif
     } else {
         fprintf(stderr, "PE[%d] control instruction opcode error.\n", id);
         exit(-1);

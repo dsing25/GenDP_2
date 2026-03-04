@@ -38,6 +38,7 @@ class pe {
 
         int id;
         int PC[2], comp_PC;
+        int ras = 0;
         int src_dest[2][2];
 
         void run(int simd);
