@@ -298,7 +298,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 // #endif
 
 if (is_magic) {
-    // No-op: Magic instructions currently disabled
+    // Magic instruction: Preload equality vectors into PE0 SPM
+    // Payload value can be used to select different magic operations
+
+    if (magic_payload == 1) {
+        // Magic payload 1: Load equality vectors into PE0 SPM slots 0-3
+        // TODO: Replace these hardcoded values with your actual equality vectors
+        SPM_unit->access_magic(0, 0) = 0x12345678;  // PE0 SPM[0]
+        SPM_unit->access_magic(0, 1) = 0xABCDEF00;  // PE0 SPM[1]
+        SPM_unit->access_magic(0, 2) = 0xDEADBEEF;  // PE0 SPM[2]
+        SPM_unit->access_magic(0, 3) = 0xCAFEBABE;  // PE0 SPM[3]
+
+#ifdef PROFILE
+        printf("Magic instruction (payload=%d): Loaded equality vectors into PE0 SPM[0-3]\n", magic_payload);
+#endif
+    }
+
     (*PC)++;
     return 0;
 }
