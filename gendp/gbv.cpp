@@ -26,6 +26,9 @@ int gbv_simulate(pe_array *pe_array_unit, gbv_align_input_t& align_input, int n,
     pe_array_unit->input_buffer_write_from_ddr_unsigned(4, &align_input.right_VP);
     pe_array_unit->input_buffer_write_from_ddr(5, &align_input.right_scoreEnd);
 
+    // Basepair value (0-3)
+    pe_array_unit->input_buffer_write_from_ddr(6, &align_input.basepair);
+
     pe_array_unit->run(n, simd, PE_4_SETTING, MAIN_INSTRUCTION_1);
 
     return 0; // TODO: Return actual score/output if needed
@@ -139,7 +142,7 @@ void gbv_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
         gbv_align_input_t align_input;
     char charline[256];
     while (true) {
-        // Read 6 lines for each input struct: left VN, VP, scoreEnd, right VN, VP, scoreEnd
+        // Read 7 lines for each input struct: left VN, VP, scoreEnd, right VN, VP, scoreEnd, basepair
 
         // Left slice
         if (!fgets(charline, sizeof(charline), input_file)) break;
@@ -160,6 +163,10 @@ void gbv_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
 
         if (!fgets(charline, sizeof(charline), input_file)) break;
         align_input.right_scoreEnd = atoi(charline);
+
+        // Basepair value (0, 1, 2, or 3)
+        if (!fgets(charline, sizeof(charline), input_file)) break;
+        align_input.basepair = atoi(charline);
 
         int score_out = gbv_simulate(pe_array_unit, align_input, GBV_MAX_CYCLES, fp, show_output);
         gbv_output.push_back(score_out);

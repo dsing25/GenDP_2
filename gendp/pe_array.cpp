@@ -382,10 +382,10 @@ if (is_magic) {
     if (magic_payload == 1) {
         // Magic payload 1: Load equality vectors into PE0 SPM slots 0-3
         // TODO: Replace these hardcoded values with your actual equality vectors
-        SPM_unit->access_magic(0, 0) = 0x12345678;  // PE0 SPM[0]
-        SPM_unit->access_magic(0, 1) = 0xABCDEF00;  // PE0 SPM[1]
-        SPM_unit->access_magic(0, 2) = 0xDEADBEEF;  // PE0 SPM[2]
-        SPM_unit->access_magic(0, 3) = 0xCAFEBABE;  // PE0 SPM[3]
+        SPM_unit->access_magic(0, 0) = 553914624;  // PE0 SPM[0] BA
+        SPM_unit->access_magic(0, 1) = 412155976;  // PE0 SPM[1] BT
+        SPM_unit->access_magic(0, 2) = 526336;  // PE0 SPM[2] BC
+        SPM_unit->access_magic(0, 3) = 3328370359;  // PE0 SPM[3] BG
 
 #ifdef PROFILE
         printf("Magic instruction (payload=%d): Loaded equality vectors into PE0 SPM[0-3]\n", magic_payload);
@@ -841,7 +841,7 @@ if (is_magic) {
             printf(" not jump.\n");
 #endif
         }
-    } else if (opcode == 22) {       // bltu rs1 rs2 offset (unsigned)
+    } else if (opcode == CTRL_BLTU) {       // bltu rs1 rs2 offset (unsigned)
         rs1 = sext_imm_1;
         rs2 = reg_1;
 #ifdef PROFILE

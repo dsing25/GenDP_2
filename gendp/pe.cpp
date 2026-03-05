@@ -756,7 +756,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             printf(" not jump.\t");
 #endif
         }
-    } else if (opcode == 22) {       // bltu rs1 rs2 offset (unsigned)
+    } else if (opcode == CTRL_BLTU) {       // bltu rs1 rs2 offset (unsigned)
         rs1 = sext_imm_1;
         rs2 = reg_1;
 #ifdef PROFILE

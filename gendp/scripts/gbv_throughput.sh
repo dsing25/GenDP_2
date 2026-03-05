@@ -21,5 +21,5 @@ python3 scripts/gbv_instruction_generator.py
 make clean && make -j $BUILD_FLAG
 cp sim sim_gbv
 
-./sim_gbv -k 6 -i ../gbv-dataset/gbvInput.txt -o gbvOutput.txt -s -n -1 > "$OUTPUT_FILE"
+./sim_gbv -k 7 -i ../gbv-dataset/gbvInput.txt -o gbvOutput.txt -s -n -1 > "$OUTPUT_FILE"
 echo "Output written to: $OUTPUT_FILE"

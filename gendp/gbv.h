@@ -62,6 +62,9 @@ typedef struct {
   uint32_t right_VN;        // Right VN vector
   uint32_t right_VP;        // Right VP vector
   int right_scoreEnd;       // Right score end
+
+  // Basepair vector (0-3: A/C/G/T)
+  int basepair;             // Basepair value (0, 1, 2, or 3)
 } gbv_align_input_t;
 
 // High-level simulation function for GBV kernel

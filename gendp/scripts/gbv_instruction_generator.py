@@ -297,6 +297,7 @@ def gbv_compute_v3():
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) 
 
 
+
     # do data movement to finalize the merge slices
     #END OF mergeTwoSlices - 4 Input
 
@@ -318,7 +319,7 @@ def gbv_compute_v3():
     f.write(compute_instruction(BWISE_OR, INVALID, COPY, 1, 4, 0, 0, 0, 0, 1))  # Eq = Eq | hinN
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
-    f.write(compute_instruction(BWISE_AND, COPY, ADD, 1, 3, 3, 0, 0, 0, 20)) # temp1 = ((Eq & VP) copied, then + VP)
+    f.write(compute_instruction(BWISE_AND, COPY, ADD, 1, 3, 0, 0, 3, 0, 20)) # temp1 = ((Eq & VP) copied, then + VP)
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
     f.write(compute_instruction(BWISE_XOR, COPY, BWISE_OR, 20, 3, 1, 0, 0, 0, 6))  # Xh = (temp1 ^ VP) copied, then OR with Eq
@@ -333,11 +334,11 @@ def gbv_compute_v3():
     f.write(compute_instruction(BWISE_AND, INVALID, COPY, 3, 6, 0, 0, 0, 0, 9))  # Mh = VP & Xh
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
-    f.write(compute_instruction(LSHIFT_1, COPY, BWISE_OR, 9, 0, 4, 0, 0, 0, 22)) # tempMh = ((Mh << 1) copied, then OR with hinN)
+    f.write(compute_instruction(LSHIFT_1, COPY, BWISE_OR, 9, 0, 0, 0, 4, 0, 22)) # tempMh = (Mh << 1) | hinN
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
     #Cycle 8 below
     f.write(compute_instruction(RSHIFT_WORD, INVALID, COPY, 9, 0, 0, 0, 0, 0, 4))  # hinN = Mh >> (word)
-    f.write(compute_instruction(LSHIFT_1, COPY, BWISE_OR, 8, 0, 5, 0, 0, 0, 23)) # tempPh = ((Ph << 1) copied, then OR with hinP)
+    f.write(compute_instruction(LSHIFT_1, COPY, BWISE_OR, 8, 0, 0, 0, 5, 0, 23)) # tempPh = (Ph << 1) | hinP
 
     f.write(compute_instruction(BWISE_OR, COPY, BWISE_NOT, 7, 23, 0, 0, 0, 0, 20)) # temp1 = (~(Xv | tempPh)) after copy
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
@@ -346,7 +347,7 @@ def gbv_compute_v3():
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
     f.write(compute_instruction(RSHIFT_WORD, INVALID, COPY, 8, 0, 0, 0, 0, 0, 5))  # hinP = Ph >> (word), 
-    f.write(compute_instruction(BWISE_AND, INVALID, INVALID, 23, 7, 0, 0, 0, 0, 2))  # slice.VN = tempPh & Xv
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 23, 7, 0, 0, 0, 0, 2))  # slice.VN = tempPh & Xv
 
     f.write(compute_instruction(SUBTRACTION, INVALID, COPY, 11, 4, 0, 0, 0, 0, 11))  # scoreEnd = scoreEnd - hinN
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
@@ -354,11 +355,11 @@ def gbv_compute_v3():
     f.write(compute_instruction(ADD, INVALID, COPY, 11, 5, 0, 0, 0, 0, 11))  # scoreEnd = scoreEnd + hinP
     f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
 
-    f.write(compute_instruction(POPCOUNT, POPCOUNT, SUBTRACTION, 3, 0, 0, 0, 2, 0, 20))  # temp1 = popcount(VP) - popcount(VN)
-    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    # f.write(compute_instruction(POPCOUNT, POPCOUNT, SUBTRACTION, 3, 0, 0, 0, 2, 0, 20))  # temp1 = popcount(VP) - popcount(VN)
+    # f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
     
-    f.write(compute_instruction(ADD, INVALID, ADD, 20, 10, 11, 0, 0, 0, 11)) # scoreEnd = (temp1 + scorebefore) + scoreEnd
-    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) # cycle 15 finished here
+    # f.write(compute_instruction(ADD, INVALID, ADD, 20, 10, 11, 0, 0, 0, 11)) # scoreEnd = (temp1 + scorebefore) + scoreEnd
+    # f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)) # cycle 15 finished here
 
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt                                          
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt   
@@ -466,6 +467,9 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(reg, in_port, 0, 0, 19, 0, 0, 0, 0, 0, mv)) # reg[19] = in
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 6, 0, 0, 0, 0, 0, mv))  # gr[6] = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, set_PC))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, set_PC))                         
 
@@ -505,10 +509,10 @@ def pe_instruction(pe_id):
     # f.write(data_movement_instruction(reg, reg, 0, 0, 18, 0, 0, 0, 25, 0, mv)) # reg[18] = reg[25]    
     # f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    # Data Movement for merge2Input that stores data into SPM 
+    # Data Movement for merge2Input that stores data into SPM
     # differenceMasks is the next step after this data movement
 
-    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si)) # gr[2] = 0
+    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 4, 0, si)) # gr[2] = 4 (offset to avoid magic SPM[0-3])
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(SPM, reg, 0, 1, 0, 2, 0, 0, 12, 0, mv)) # SPM[gr[2]] = reg[12]
@@ -572,8 +576,8 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(gr, gr, 0, 0, JMPA, 0, 0, 0, 0, 4, blt)) # blt 0 gr[4] jump A (PC 44 → 70, +26)
 
     # Jump B - jump here from H
-    f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, 32, 0, si)) # gr[6] = 32 (wordsize)
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) # in here so code works, can be deleted later
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) # COMMENT THIS OUT LATER AND MAKE SURE THE OFFSETS WORK PROPERLY
 
     f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0, 0, si)) # gr[3] = 0 (for loop i=0 counter)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -581,8 +585,8 @@ def pe_instruction(pe_id):
     # Temp Jump - jump here every other time when you want to come to jump B
     # jump to here (PC 47) when looping back after the initial conditions are set for jump B
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_LOOP, 0, 1, 0, 3, 6, beq)) # beq gr[3] gr[6] jump C (PC 47 → 101, +54)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_LOOP, 0, 1, 0, 3, 6, beq)) # beq gr[3] gr[6] jump C (PC 47 → 101, +54)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_LOOP, 0, 0, 0, 32, 3, beq)) # beq 32 gr[3] jump C (PC 47 → 101, +54)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPC_LOOP, 0, 0, 0, 32, 3, beq)) # beq 32 gr[3] jump C (PC 47 → 101, +54)
 
     f.write(data_movement_instruction(gr, gr, 0, 0, 3, 0, 0, 0, 1, 3, addi)) # gr[3] = gr[3] + 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -741,7 +745,7 @@ def pe_instruction(pe_id):
     # End of Jump G
 
     # Jump C
-    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si)) # gr[2] = 0
+    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 4, 0, si)) # gr[2] = 4 (offset to avoid magic SPM[0-3])
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     # End of Jump C
 
@@ -815,18 +819,27 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(reg, 0, 0, 0, 25, 0, 0, 0, 1, 0, si)) # reg[25] = 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    for i in range(9):
+    for i in range(6):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(reg, 0, 0, 0, 5, 0, 0, 0, 1, 0, si)) # reg[5] = 1
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) # REMOVE THIS LATER. Currently used to set hinP as a workaround
+
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 1, 0, 0, 0, 0, 6, mv))  # reg[1] = SPM[gr[6]]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) # this is the Eq vector being grabbed from the SPM
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))     # SPM latency cycle 2
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))     # Data ready
 
     f.write(data_movement_instruction(reg, reg, 0, 0, 2, 0, 0, 0, 28, 0, mv))   # reg[2] = reg[28]
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) # reg[28] has result VN
 
     f.write(data_movement_instruction(reg, reg, 0, 0, 3, 0, 0, 0, 29, 0, mv))   # reg[3] = reg[29]
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) # reg[29] has result VP
 
     f.write(data_movement_instruction(reg, reg, 0, 0, 11, 0, 0, 0, 30, 0, mv))  # reg[11] = reg[30]
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) # reg[30] has result scoreEnd
 
     # f.write(data_movement_instruction(reg, reg, 0, 0, 10, 0, 0, 0, 25, 0, mv))  # reg[10] = reg[25]
     # f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -843,29 +856,36 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si)) # gr[2] = 0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    for i in range(9):
+    for i in range(8):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(SPM, reg, 0, 0, 8, 10, 0, 0, 2, 0, mv)) # SPM[8(gr[10])] = reg[2]
+    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 2, 1, shifti_l))  # gr[2] = gr[1] << 2                                                                                                                                                                                                                                                                              
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                                                                                                                                                                                                                                                                                         
+                                                                                                                                                                                                                                                                                                                                                                                    
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 10, 2, addi))    # gr[2] = gr[2] + 10                                                                                                                                                                                                                                                                              
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+                                                                                                                                                                                                                                                                                                                                                                                    
+    f.write(data_movement_instruction(SPM, reg, 0, 1, 0, 2, 0, 0, 2, 0, mv))     # SPM[gr[2]] = reg[2]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(SPM, reg, 0, 1, 8, 10, 0, 0, 3, 0, mv)) # SPM[8(gr[10]++)] = reg[3]
+    f.write(data_movement_instruction(SPM, reg, 0, 1, 0, 2, 0, 0, 3, 0, mv))     # SPM[gr[2]++] = reg[3]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-
-    f.write(data_movement_instruction(SPM, reg, 0, 1, 8, 10, 0, 0, 11, 0, mv)) # SPM[8(gr[10]++)] = reg[11]
+    f.write(data_movement_instruction(SPM, reg, 0, 1, 0, 2, 0, 0, 11, 0, mv))    # SPM[gr[2]++] = reg[11]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                                  # halt
