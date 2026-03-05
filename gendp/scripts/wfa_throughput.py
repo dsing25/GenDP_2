@@ -47,6 +47,7 @@ def run_simulator(idx, pattern, text, sim_path='./sim_o3', verbose=False):
             ('pe_halted',      r'PeHalted:\s+(\d+)'),
             ('fwd_conflicts',  r'ForwardableBankConflict:\s+(\d+)'),
             ('sync_spins',     r'SyncSpinBNEs:\s+(\d+)'),
+            ('pe_comp_halted', r'PeCompHalted:\s+(\d+)'),
         ]:
             m = re.search(pat, result.stdout)
             if m:
@@ -129,15 +130,20 @@ def main():
         sys.exit(1)
 
     keys = ['cycles', 'spm_requests', 'bank_conflicts',
-            'lsq_stalls', 'pe_halted', 'fwd_conflicts', 'sync_spins']
+            'lsq_stalls', 'pe_halted', 'fwd_conflicts',
+            'sync_spins', 'pe_comp_halted']
     totals = {k: [] for k in keys}
     for i, m in enumerate(results):
         vals = {k: m.get(k, 0) for k in keys}
         totals_line = (
             f"Run {i+1}/{len(pairs)}: cycles={vals['cycles']}, "
-            f"SPM_req={vals['spm_requests']}, conflicts={vals['bank_conflicts']}, "
-            f"fwd_conflicts={vals['fwd_conflicts']}, LSQ_stalls={vals['lsq_stalls']}, "
-            f"PE_halted={vals['pe_halted']/4:.2f}, sync_spins={vals['sync_spins']}")
+            f"SPM_req={vals['spm_requests']}, "
+            f"conflicts={vals['bank_conflicts']}, "
+            f"fwd_conflicts={vals['fwd_conflicts']}, "
+            f"LSQ_stalls={vals['lsq_stalls']}, "
+            f"PE_halted={vals['pe_halted']/4:.2f}, "
+            f"PE_comp_halted={vals['pe_comp_halted']/4:.2f}, "
+            f"sync_spins={vals['sync_spins']}")
         print(totals_line)
         if golden_scores is not None:
             sim_score = m.get('score')
@@ -168,6 +174,11 @@ def main():
             print(f"Avg {label}: {sum(totals[k])/n:.1f}")
     if totals['pe_halted']:
         print(f"Avg PE halted: {sum(totals['pe_halted'])/n/4:.2f}")
+    if totals['pe_comp_halted']:
+        print(
+            f"Avg PE comp halted: "
+            f"{sum(totals['pe_comp_halted'])/n/4:.2f}"
+        )
     if golden_scores is not None:
         print("SCORES VERIFIED")
     else:

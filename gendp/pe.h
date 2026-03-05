@@ -59,6 +59,7 @@ class pe {
 
         // Track if PE is halted (executing halt instruction)
         bool halted = false;
+        bool comp_halted = false;
 
         // ld/st data
         int load_data, store_data;

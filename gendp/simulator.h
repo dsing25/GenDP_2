@@ -17,6 +17,7 @@ extern PerfCounter lsqFullStalls;
 extern PerfCounter peHalted;
 extern PerfCounter forwardableBankConflict;
 extern PerfCounter controllerSpinCycles;
+extern PerfCounter peCompHalted;
 
 enum EventType {
     SPM_DATA_READY

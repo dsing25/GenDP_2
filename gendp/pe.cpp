@@ -181,6 +181,7 @@ void pe::run(int simd) {
 #endif
     comp_decoder_unit.execute(instruction[0], op[0], input_addr[0], &output_addr[0], &comp_PC);
     comp_decoder_unit.execute(instruction[1], op[1], input_addr[1], &output_addr[1], &i);
+    comp_halted = (op[0][0] == HALT);
 //#ifdef PROFILE
 //    printf("\n");
 //#endif

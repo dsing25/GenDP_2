@@ -17,6 +17,7 @@ PerfCounter lsqFullStalls = 0;
 PerfCounter peHalted = 0;
 PerfCounter forwardableBankConflict = 0;
 PerfCounter controllerSpinCycles = 0;
+PerfCounter peCompHalted = 0;
 
 pe_array::pe_array(int input_size, int output_size) {
 
@@ -1605,6 +1606,15 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         }
         peHalted += num_halted;
 
+        // Count compute-halted PEs
+        int num_comp_halted = 0;
+        for (i = 0; i < total_pes; i++) {
+            if (pe_unit[i]->comp_halted) {
+                num_comp_halted++;
+            }
+        }
+        peCompHalted += num_comp_halted;
+
         // SPM bank arbitration with conflict detection (round-robin)
         int start_pe = cycle % 4;
         for (int offset = 0; offset < 4; offset++) {
@@ -1680,6 +1690,7 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     printf("LsqFullStalls: %d\n", lsqFullStalls);
     printf("PeHalted: %d\n", peHalted);
     printf("SyncSpinBNEs: %d\n", controllerSpinCycles);
+    printf("PeCompHalted: %d\n", peCompHalted);
 
     // fprintf(stderr, "Finish simulation.\n");
 }
