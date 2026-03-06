@@ -18,6 +18,9 @@ PerfCounter peHalted = 0;
 PerfCounter forwardableBankConflict = 0;
 PerfCounter controllerSpinCycles = 0;
 PerfCounter peCompHalted = 0;
+PerfCounter peCtrlNops = 0;
+PerfCounter peCompNops = 0;
+PerfCounter controllerNops = 0;
 
 pe_array::pe_array(int input_size, int output_size) {
 
@@ -355,6 +358,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #endif
     if (main_instruction_setting == MAIN_INSTRUCTION_2) {
         if (((opcode == 4 || opcode == 5) && (dest == 5 || dest == 6 || dest == 11 || dest == 12 || dest == 13 || dest == 14)) || opcode == 14) {
+            if (opcode == 14) controllerNops++;
             (*PC)++;
 #ifdef PROFILE
             printf("\n");
@@ -1016,6 +1020,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #endif
         (*PC)++;
     } else if (opcode == 14) {      // None
+        controllerNops++;
         (*PC)++;
 #ifdef PROFILE
         printf("No-op.\n");
@@ -1691,6 +1696,9 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     printf("PeHalted: %d\n", peHalted);
     printf("SyncSpinBNEs: %d\n", controllerSpinCycles);
     printf("PeCompHalted: %d\n", peCompHalted);
+    printf("PeCtrlNops: %d\n", peCtrlNops);
+    printf("PeCompNops: %d\n", peCompNops);
+    printf("ControllerNops: %d\n", controllerNops);
 
     // fprintf(stderr, "Finish simulation.\n");
 }

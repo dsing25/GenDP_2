@@ -48,6 +48,10 @@ def run_simulator(idx, pattern, text, sim_path='./sim_o3', verbose=False):
             ('fwd_conflicts',  r'ForwardableBankConflict:\s+(\d+)'),
             ('sync_spins',     r'SyncSpinBNEs:\s+(\d+)'),
             ('pe_comp_halted', r'PeCompHalted:\s+(\d+)'),
+            ('pe_ctrl_nops',   r'PeCtrlNops:\s+(\d+)'),
+            ('pe_comp_nops',   r'PeCompNops:\s+(\d+)'),
+            ('controller_nops',
+                r'ControllerNops:\s+(\d+)'),
         ]:
             m = re.search(pat, result.stdout)
             if m:
@@ -131,7 +135,9 @@ def main():
 
     keys = ['cycles', 'spm_requests', 'bank_conflicts',
             'lsq_stalls', 'pe_halted', 'fwd_conflicts',
-            'sync_spins', 'pe_comp_halted']
+            'sync_spins', 'pe_comp_halted',
+            'pe_ctrl_nops', 'pe_comp_nops',
+            'controller_nops']
     totals = {k: [] for k in keys}
     for i, m in enumerate(results):
         vals = {k: m.get(k, 0) for k in keys}
@@ -143,7 +149,10 @@ def main():
             f"LSQ_stalls={vals['lsq_stalls']}, "
             f"PE_halted={vals['pe_halted']/4:.2f}, "
             f"PE_comp_halted={vals['pe_comp_halted']/4:.2f}, "
-            f"sync_spins={vals['sync_spins']}")
+            f"sync_spins={vals['sync_spins']}, "
+            f"ctrl_nops={vals['pe_ctrl_nops']}, "
+            f"comp_nops={vals['pe_comp_nops']}, "
+            f"ctrl_nops_arr={vals['controller_nops']}")
         print(totals_line)
         if golden_scores is not None:
             sim_score = m.get('score')
@@ -179,6 +188,13 @@ def main():
             f"Avg PE comp halted: "
             f"{sum(totals['pe_comp_halted'])/n/4:.2f}"
         )
+    for k, label in [
+        ('pe_ctrl_nops', 'PE ctrl NOPs'),
+        ('pe_comp_nops', 'PE comp NOPs'),
+        ('controller_nops', 'controller NOPs'),
+    ]:
+        if totals[k]:
+            print(f"Avg {label}: {sum(totals[k])/n:.1f}")
     if golden_scores is not None:
         print("SCORES VERIFIED")
     else:

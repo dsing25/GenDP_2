@@ -1,4 +1,5 @@
 #include "comp_decoder.h"
+#include "simulator.h"
 
 comp_decoder::comp_decoder() {}
 comp_decoder::~comp_decoder() {}
@@ -16,6 +17,8 @@ void comp_decoder::execute(unsigned long instruction, int* op, int* in_addr, int
         printf("Magic!!!!! payload = %d\n", magic_payload);
         instruction = COMP_NOP_INSTRUCTION; //don't crash rest of simulator
     }
+    if (instruction == COMP_NOP_INSTRUCTION)
+        peCompNops++;
 
     int i;
     unsigned long out_addr_mask, in_addr_mask[6], op_mask[3];

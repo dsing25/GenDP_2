@@ -769,6 +769,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 #endif
         (*PC)++;
     } else if (opcode == 14) {      // None
+        peCtrlNops++;
         (*PC)++;
 #ifdef PROFILE
         printf("No-op.\t");

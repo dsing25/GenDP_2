@@ -18,6 +18,9 @@ extern PerfCounter peHalted;
 extern PerfCounter forwardableBankConflict;
 extern PerfCounter controllerSpinCycles;
 extern PerfCounter peCompHalted;
+extern PerfCounter peCtrlNops;
+extern PerfCounter peCompNops;
+extern PerfCounter controllerNops;
 
 enum EventType {
     SPM_DATA_READY
