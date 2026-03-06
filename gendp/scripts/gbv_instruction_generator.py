@@ -372,7 +372,7 @@ def gbv_main_instruction():
 
     # mergeTwoSlices 2 Input Data Movement
     # Get Left/Right Slices Into PE Array
-    PE_COMPUTE_START = 8
+    PE_COMPUTE_START = 8 # this isnt used anywhere anymore so doesnt matter for right now
     # changing this pe compute start basically changes when the pe data movement starts
     # making this 9 means the reg11 = reg15 and first compute instruction happen together
     # making this 8 means the compute starts then the reg11=reg15 happens

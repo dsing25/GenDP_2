@@ -11,6 +11,262 @@
 #define MAX_RANGE NUM_FRACTION_BITS
 #define NUM_INTEGER_BITS 5
 
+// ==== Graph Structure for Graph Alignment ====
+#define MAX_GRAPH_NODES 1000
+#define MAX_NODE_SEQ_LEN 256   // Max base pairs per node
+#define MAX_NEIGHBORS 10       // Max in/out neighbors per node
+
+struct GraphNode {
+    uint32_t node_id;
+    char sequence[MAX_NODE_SEQ_LEN];  // DNA sequence as ASCII ('A', 'C', 'G', 'T')
+    uint16_t length;                  // Number of base pairs
+    uint32_t in_neighbors[MAX_NEIGHBORS];
+    uint32_t out_neighbors[MAX_NEIGHBORS];
+    uint8_t num_in_neighbors;
+    uint8_t num_out_neighbors;
+    bool valid;                       // Is this node slot occupied?
+
+    GraphNode() : node_id(0), length(0), num_in_neighbors(0), num_out_neighbors(0), valid(false) {
+        memset(sequence, 0, sizeof(sequence));
+        memset(in_neighbors, 0, sizeof(in_neighbors));
+        memset(out_neighbors, 0, sizeof(out_neighbors));
+    }
+};
+
+struct Graph {
+    GraphNode nodes[MAX_GRAPH_NODES];
+    int num_nodes;
+
+    Graph() : num_nodes(0) {}
+
+    // Read-only: Get node by ID
+    GraphNode* getNode(uint32_t node_id) {
+        for (int i = 0; i < MAX_GRAPH_NODES; i++) {
+            if (nodes[i].valid && nodes[i].node_id == node_id) {
+                return &nodes[i];
+            }
+        }
+        return nullptr;  // Not found
+    }
+
+    // Load graph from external file (e.g., params.bin serialized format)
+    // Format: Simple text file with:
+    //   Line 1: <num_nodes>
+    //   For each node:
+    //     <node_id> <length> <sequence> <num_in> <in_neighbor_ids...> <num_out> <out_neighbor_ids...>
+    bool loadFromFile(const char* filename) {
+        FILE* fp = fopen(filename, "r");
+        if (!fp) {
+            fprintf(stderr, "Error: Could not open graph file '%s'\n", filename);
+            return false;
+        }
+
+        int total_nodes = 0;
+        if (fscanf(fp, "%d", &total_nodes) != 1) {
+            fprintf(stderr, "Error: Could not read num_nodes from graph file\n");
+            fclose(fp);
+            return false;
+        }
+
+        if (total_nodes > MAX_GRAPH_NODES) {
+            fprintf(stderr, "Error: Graph has %d nodes but MAX_GRAPH_NODES=%d\n",
+                    total_nodes, MAX_GRAPH_NODES);
+            fclose(fp);
+            return false;
+        }
+
+        num_nodes = 0;
+        for (int i = 0; i < total_nodes; i++) {
+            GraphNode* node = &nodes[i];
+            node->valid = true;
+
+            // Read: node_id length sequence
+            if (fscanf(fp, "%u %hu %s", &node->node_id, &node->length, node->sequence) != 3) {
+                fprintf(stderr, "Error: Failed to read node %d\n", i);
+                fclose(fp);
+                return false;
+            }
+
+            // Read in-neighbors: num_in neighbor_ids...
+            if (fscanf(fp, "%hhu", &node->num_in_neighbors) != 1) {
+                fprintf(stderr, "Error: Failed to read num_in_neighbors for node %u\n", node->node_id);
+                fclose(fp);
+                return false;
+            }
+            for (int j = 0; j < node->num_in_neighbors; j++) {
+                if (fscanf(fp, "%u", &node->in_neighbors[j]) != 1) {
+                    fprintf(stderr, "Error: Failed to read in_neighbor %d for node %u\n", j, node->node_id);
+                    fclose(fp);
+                    return false;
+                }
+            }
+
+            // Read out-neighbors: num_out neighbor_ids...
+            if (fscanf(fp, "%hhu", &node->num_out_neighbors) != 1) {
+                fprintf(stderr, "Error: Failed to read num_out_neighbors for node %u\n", node->node_id);
+                fclose(fp);
+                return false;
+            }
+            for (int j = 0; j < node->num_out_neighbors; j++) {
+                if (fscanf(fp, "%u", &node->out_neighbors[j]) != 1) {
+                    fprintf(stderr, "Error: Failed to read out_neighbor %d for node %u\n", j, node->node_id);
+                    fclose(fp);
+                    return false;
+                }
+            }
+
+            num_nodes++;
+        }
+
+        fclose(fp);
+        printf("Graph loaded: %d nodes from '%s'\n", num_nodes, filename);
+        return true;
+    }
+};
+
+// Global graph structure
+static Graph graphStructure;
+
+// ==== DNA Encoding Utility ====
+// Convert DNA character to 2-bit encoding: A=00, C=01, G=10, T=11
+inline uint8_t encodeDNABase(char base) {
+    switch (base) {
+        case 'A': case 'a': return 0;
+        case 'C': case 'c': return 1;
+        case 'G': case 'g': return 2;
+        case 'T': case 't': return 3;
+        default: return 0;  // Default to A for invalid bases
+    }
+}
+
+// Decode 2-bit value back to DNA character
+inline char decodeDNABase(uint8_t encoded) {
+    const char bases[] = {'A', 'C', 'G', 'T'};
+    return bases[encoded & 0x3];
+}
+
+// ==== Priority Queue for Graph Alignment ====
+#define MAX_QUEUE_SIZE 20
+#define MAX_QUEUE_NEIGHBORS 10
+
+struct QueueEntry {
+    uint32_t target_node;        // Node ID to process (lookup in graphStructure)
+    int32_t  priority;           // Priority (lower = process first)
+    uint32_t spm_addr;           // SPM address where slice data (VP, VN, scoreEnd) stored
+
+    // Control flags (split out for clarity)
+    uint8_t  skip_first;         // 1 = from previous slice, 0 = from neighbor
+    uint8_t  force_calc;         // 1 = force calculation
+    uint8_t  first_calc;         // 1 = first time processing this node
+
+    // DNA sequence chunk (16 basepairs, 2 bits each)
+    // Encoding: A=00, C=01, G=10, T=11
+    // Example: 0x12 = [A,T,C,A] = [00,11,01,00] (LSB first)
+    uint32_t basepairs;          // Stores up to 16 bases
+
+    // Out-neighbors for propagation (stored directly for fast access)
+    uint32_t out_neighbors[MAX_QUEUE_NEIGHBORS];
+    uint8_t  num_out_neighbors;  // Number of valid out-neighbors (0 to MAX_QUEUE_NEIGHBORS)
+
+    QueueEntry() : target_node(0), priority(0), spm_addr(0),
+                   skip_first(0), force_calc(0), first_calc(0), basepairs(0), num_out_neighbors(0) {
+        memset(out_neighbors, 0, sizeof(out_neighbors));
+    }
+
+    bool operator>(const QueueEntry& other) const {
+        return priority > other.priority;  // Min-heap: lower priority comes first
+    }
+
+    // Set a basepair at specific position (0-15)
+    void setBasepair(int pos, char base) {
+        if (pos >= 0 && pos < 16) {
+            uint8_t encoded = encodeDNABase(base);
+            uint32_t mask = ~(0x3 << (pos * 2));  // Clear 2 bits at position
+            basepairs = (basepairs & mask) | (encoded << (pos * 2));
+        }
+    }
+
+    // Get basepair at specific position (0-15)
+    char getBasepair(int pos) const {
+        if (pos >= 0 && pos < 16) {
+            uint8_t encoded = (basepairs >> (pos * 2)) & 0x3;
+            return decodeDNABase(encoded);
+        }
+        return 'A';
+    }
+};
+
+struct PriorityQueue {
+    QueueEntry entries[MAX_QUEUE_SIZE];
+    int size;
+
+    PriorityQueue() : size(0) {}
+
+    void clear() {
+        size = 0;
+    }
+
+    bool empty() const {
+        return size == 0;
+    }
+
+    bool full() const {
+        return size >= MAX_QUEUE_SIZE;
+    }
+
+    // Insert with priority ordering (min-heap: lowest priority at index 0)
+    bool insert(const QueueEntry& entry) {
+        if (full()) return false;
+
+        // Find insertion position (sorted insert)
+        int pos = size;
+        while (pos > 0 && entries[pos - 1].priority > entry.priority) {
+            entries[pos] = entries[pos - 1];  // Shift right
+            pos--;
+        }
+
+        // Insert at position
+        entries[pos] = entry;
+        size++;
+        return true;
+    }
+
+    // Convenience insert with basic parameters
+    bool insert(uint32_t target, int32_t priority, uint32_t spm_addr, uint8_t skip_first) {
+        QueueEntry entry;
+        entry.target_node = target;
+        entry.priority = priority;
+        entry.spm_addr = spm_addr;
+        entry.skip_first = skip_first;
+        entry.force_calc = 0;
+        entry.first_calc = 0;
+        entry.basepairs = 0;
+        entry.num_out_neighbors = 0;
+        return insert(entry);
+    }
+
+    // Get top (lowest priority) without removing
+    QueueEntry top() const {
+        if (empty()) return QueueEntry();
+        return entries[0];
+    }
+
+    // Remove top element
+    bool pop() {
+        if (empty()) return false;
+
+        // Shift all elements left
+        for (int i = 0; i < size - 1; i++) {
+            entries[i] = entries[i + 1];
+        }
+        size--;
+        return true;
+    }
+};
+
+// Global priority queue for graph alignment
+static PriorityQueue graphAlignQueue;
+
 PerfCounter bankConflictStalls = 0;
 PerfCounter totalSpmRequests = 0;
 PerfCounter lsqFullStalls = 0;
@@ -390,6 +646,276 @@ if (is_magic) {
 #ifdef PROFILE
         printf("Magic instruction (payload=%d): Loaded equality vectors into PE0 SPM[0-3]\n", magic_payload);
 #endif
+    }
+    else if (magic_payload == 2) {
+        // Magic payload 2: Initialize/clear priority queue
+        graphAlignQueue.clear();
+
+#ifdef PROFILE
+        printf("Magic instruction (payload=%d): Queue cleared\n", magic_payload);
+#endif
+    }
+    else if (magic_payload == 3) {
+        // Magic payload 3: Insert into priority queue
+        // Input from addressing registers:
+        //   gr[0] = target_node (ID in graph)
+        //   gr[1] = priority
+        //   gr[2] = spm_addr (where VP/VN/scoreEnd stored)
+        //   gr[3] = skip_first (0 or 1)
+        //   gr[4] = basepairs (32-bit, 16 bases encoded)
+        // Output:
+        //   gr[5] = success (1 = inserted, 0 = queue full)
+        //   gr[6] = num_out_neighbors (number of neighbors loaded)
+        QueueEntry entry;
+        entry.target_node = main_addressing_register[0];
+        entry.priority = main_addressing_register[1];
+        entry.spm_addr = main_addressing_register[2];
+        entry.skip_first = (uint8_t)main_addressing_register[3];
+        entry.basepairs = main_addressing_register[4];
+        entry.force_calc = 0;
+        entry.first_calc = 0;
+
+        // Automatically populate out-neighbors from graph
+        GraphNode* node = graphStructure.getNode(entry.target_node);
+        if (node) {
+            entry.num_out_neighbors = (node->num_out_neighbors < MAX_QUEUE_NEIGHBORS)
+                                      ? node->num_out_neighbors
+                                      : MAX_QUEUE_NEIGHBORS;
+            for (int i = 0; i < entry.num_out_neighbors; i++) {
+                entry.out_neighbors[i] = node->out_neighbors[i];
+            }
+        } else {
+            entry.num_out_neighbors = 0;
+        }
+
+        bool success = graphAlignQueue.insert(entry);
+        main_addressing_register[5] = success ? 1 : 0;
+        main_addressing_register[6] = entry.num_out_neighbors;
+
+#ifdef PROFILE
+        if (node) {
+            printf("Magic instruction (payload=%d): Queue insert node=%u len=%u prio=%d spm=%u skip=%u neighbors=%u -> %s\n",
+                   magic_payload, entry.target_node, node->length, entry.priority,
+                   entry.spm_addr, entry.skip_first, entry.num_out_neighbors, success ? "OK" : "FULL");
+        } else {
+            printf("Magic instruction (payload=%d): Queue insert node=%u (NOT IN GRAPH) prio=%d spm=%u skip=%u -> %s\n",
+                   magic_payload, entry.target_node, entry.priority,
+                   entry.spm_addr, entry.skip_first, success ? "OK" : "FULL");
+        }
+#endif
+    }
+    else if (magic_payload == 4) {
+        // Magic payload 4: Pop from priority queue
+        bool success = graphAlignQueue.pop();
+
+        // Store result in gr[4]: 1 = success, 0 = queue empty
+        main_addressing_register[4] = success ? 1 : 0;
+
+#ifdef PROFILE
+        printf("Magic instruction (payload=%d): Queue pop -> %s\n",
+               magic_payload, success ? "OK" : "EMPTY");
+#endif
+    }
+    else if (magic_payload == 5) {
+        // Magic payload 5: Get top element (peek without removing)
+        // Output to addressing registers:
+        //   gr[0] = target_node
+        //   gr[1] = priority
+        //   gr[2] = spm_addr
+        //   gr[3] = skip_first
+        //   gr[4] = basepairs (32-bit)
+        //   gr[5] = valid (1 if queue not empty, 0 if empty)
+        //   gr[6] = num_out_neighbors
+        if (!graphAlignQueue.empty()) {
+            QueueEntry top = graphAlignQueue.top();
+            main_addressing_register[0] = top.target_node;
+            main_addressing_register[1] = top.priority;
+            main_addressing_register[2] = top.spm_addr;
+            main_addressing_register[3] = top.skip_first;
+            main_addressing_register[4] = top.basepairs;
+            main_addressing_register[5] = 1;  // valid
+            main_addressing_register[6] = top.num_out_neighbors;
+
+#ifdef PROFILE
+            GraphNode* node = graphStructure.getNode(top.target_node);
+            if (node) {
+                printf("Magic instruction (payload=%d): Queue top -> node=%u len=%u prio=%d spm=%u skip=%u neighbors=%u\n",
+                       magic_payload, top.target_node, node->length, top.priority,
+                       top.spm_addr, top.skip_first, top.num_out_neighbors);
+            } else {
+                printf("Magic instruction (payload=%d): Queue top -> node=%u prio=%d spm=%u skip=%u neighbors=%u\n",
+                       magic_payload, top.target_node, top.priority, top.spm_addr, top.skip_first, top.num_out_neighbors);
+            }
+#endif
+        } else {
+            main_addressing_register[5] = 0;  // invalid (queue empty)
+            main_addressing_register[6] = 0;
+
+#ifdef PROFILE
+            printf("Magic instruction (payload=%d): Queue top -> EMPTY\n", magic_payload);
+#endif
+        }
+    }
+    else if (magic_payload == 6) {
+        // Magic payload 6: Get queue size
+        // Output to gr[0]
+        main_addressing_register[0] = graphAlignQueue.size;
+
+#ifdef PROFILE
+        printf("Magic instruction (payload=%d): Queue size = %d\n", magic_payload, graphAlignQueue.size);
+#endif
+    }
+    else if (magic_payload == 7) {
+        // Magic payload 7: Get in-neighbor ID by index
+        // Input:
+        //   gr[0] = node_id
+        //   gr[1] = neighbor_index (0 to num_in_neighbors-1)
+        // Output:
+        //   gr[2] = neighbor_id
+        //   gr[4] = valid (1 if found, 0 if not)
+        uint32_t node_id = main_addressing_register[0];
+        int neighbor_idx = main_addressing_register[1];
+        GraphNode* node = graphStructure.getNode(node_id);
+
+        if (node && neighbor_idx >= 0 && neighbor_idx < node->num_in_neighbors) {
+            main_addressing_register[2] = node->in_neighbors[neighbor_idx];
+            main_addressing_register[4] = 1;  // valid
+
+#ifdef PROFILE
+            printf("Magic instruction (payload=%d): Get node=%u in_neighbor[%d]=%u\n",
+                   magic_payload, node_id, neighbor_idx, node->in_neighbors[neighbor_idx]);
+#endif
+        } else {
+            main_addressing_register[4] = 0;  // invalid
+
+#ifdef PROFILE
+            printf("Magic instruction (payload=%d): Get node=%u in_neighbor[%d] -> INVALID\n",
+                   magic_payload, node_id, neighbor_idx);
+#endif
+        }
+    }
+    else if (magic_payload == 8) {
+        // Magic payload 8: Get node info
+        // Input: gr[0] = node_id
+        // Output:
+        //   gr[1] = length
+        //   gr[2] = num_in_neighbors
+        //   gr[3] = num_out_neighbors
+        //   gr[4] = valid (1 if found, 0 if not)
+        uint32_t node_id = main_addressing_register[0];
+        GraphNode* node = graphStructure.getNode(node_id);
+
+        if (node) {
+            main_addressing_register[1] = node->length;
+            main_addressing_register[2] = node->num_in_neighbors;
+            main_addressing_register[3] = node->num_out_neighbors;
+            main_addressing_register[4] = 1;  // valid
+
+#ifdef PROFILE
+            printf("Magic instruction (payload=%d): Get node=%u -> len=%u in=%u out=%u\n",
+                   magic_payload, node_id, node->length, node->num_in_neighbors, node->num_out_neighbors);
+#endif
+        } else {
+            main_addressing_register[4] = 0;  // not found
+
+#ifdef PROFILE
+            printf("Magic instruction (payload=%d): Get node=%u -> NOT FOUND\n",
+                   magic_payload, node_id);
+#endif
+        }
+    }
+    else if (magic_payload == 9) {
+        // Magic payload 9: Get node sequence base
+        // Input:
+        //   gr[0] = node_id
+        //   gr[1] = position
+        // Output:
+        //   gr[2] = base (ASCII 'A', 'C', 'G', 'T')
+        //   gr[4] = valid
+        uint32_t node_id = main_addressing_register[0];
+        int pos = main_addressing_register[1];
+        GraphNode* node = graphStructure.getNode(node_id);
+
+        if (node && pos < node->length) {
+            main_addressing_register[2] = (uint32_t)node->sequence[pos];
+            main_addressing_register[4] = 1;  // valid
+
+#ifdef PROFILE
+            printf("Magic instruction (payload=%d): Get node=%u seq[%d]='%c'\n",
+                   magic_payload, node_id, pos, node->sequence[pos]);
+#endif
+        } else {
+            main_addressing_register[4] = 0;  // invalid
+
+#ifdef PROFILE
+            printf("Magic instruction (payload=%d): Get node=%u seq[%d] -> INVALID\n",
+                   magic_payload, node_id, pos);
+#endif
+        }
+    }
+    else if (magic_payload == 10) {
+        // Magic payload 10: Get out-neighbor ID by index
+        // Input:
+        //   gr[0] = node_id
+        //   gr[1] = neighbor_index (0 to num_out_neighbors-1)
+        // Output:
+        //   gr[2] = neighbor_id
+        //   gr[4] = valid (1 if found, 0 if not)
+        uint32_t node_id = main_addressing_register[0];
+        int neighbor_idx = main_addressing_register[1];
+        GraphNode* node = graphStructure.getNode(node_id);
+
+        if (node && neighbor_idx >= 0 && neighbor_idx < node->num_out_neighbors) {
+            main_addressing_register[2] = node->out_neighbors[neighbor_idx];
+            main_addressing_register[4] = 1;  // valid
+
+#ifdef PROFILE
+            printf("Magic instruction (payload=%d): Get node=%u out_neighbor[%d]=%u\n",
+                   magic_payload, node_id, neighbor_idx, node->out_neighbors[neighbor_idx]);
+#endif
+        } else {
+            main_addressing_register[4] = 0;  // invalid
+
+#ifdef PROFILE
+            printf("Magic instruction (payload=%d): Get node=%u out_neighbor[%d] -> INVALID\n",
+                   magic_payload, node_id, neighbor_idx);
+#endif
+        }
+    }
+    else if (magic_payload == 11) {
+        // Magic payload 11: Get out-neighbor from top queue entry by index
+        // Input:
+        //   gr[0] = neighbor_index (0 to num_out_neighbors-1)
+        // Output:
+        //   gr[1] = neighbor_node_id
+        //   gr[2] = valid (1 if found, 0 if not)
+        if (!graphAlignQueue.empty()) {
+            QueueEntry top = graphAlignQueue.top();
+            int neighbor_idx = main_addressing_register[0];
+
+            if (neighbor_idx >= 0 && neighbor_idx < top.num_out_neighbors) {
+                main_addressing_register[1] = top.out_neighbors[neighbor_idx];
+                main_addressing_register[2] = 1;  // valid
+
+#ifdef PROFILE
+                printf("Magic instruction (payload=%d): Queue top out_neighbor[%d]=%u\n",
+                       magic_payload, neighbor_idx, top.out_neighbors[neighbor_idx]);
+#endif
+            } else {
+                main_addressing_register[2] = 0;  // invalid index
+
+#ifdef PROFILE
+                printf("Magic instruction (payload=%d): Queue top out_neighbor[%d] -> INVALID (count=%u)\n",
+                       magic_payload, neighbor_idx, top.num_out_neighbors);
+#endif
+            }
+        } else {
+            main_addressing_register[2] = 0;  // queue empty
+
+#ifdef PROFILE
+            printf("Magic instruction (payload=%d): Queue top out_neighbor -> QUEUE EMPTY\n", magic_payload);
+#endif
+        }
     }
 
     (*PC)++;
