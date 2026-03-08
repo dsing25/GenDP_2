@@ -832,6 +832,15 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))     # SPM latency cycle 2
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))     # Data ready
 
+    # HERE WE should grab from SPM instead from the previous node value based on flags. safer to do this rather than pass the values
+    # between the registers
+    # reg > reg is fine passing when working on the same node
+    # this stops when the node is done executing and we go to a new node (this happens when diff Masks scoreDiff = 0)
+    # when scoreDiff = 0, we want to 
+    # probably dont do this here actually. 
+
+
+
     f.write(data_movement_instruction(reg, reg, 0, 0, 2, 0, 0, 0, 28, 0, mv))   # reg[2] = reg[28]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) # reg[28] has result VN
 

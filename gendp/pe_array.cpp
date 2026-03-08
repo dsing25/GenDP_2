@@ -15,10 +15,19 @@
 #define MAX_GRAPH_NODES 1000
 #define MAX_NODE_SEQ_LEN 256   // Max base pairs per node
 #define MAX_NEIGHBORS 10       // Max in/out neighbors per node
+#define PACKED_SEQ_WORDS (MAX_NODE_SEQ_LEN / 16)  // 256 bp / 16 bp per word = 16 words
 
 struct GraphNode {
     uint32_t node_id;
-    char sequence[MAX_NODE_SEQ_LEN];  // DNA sequence as ASCII ('A', 'C', 'G', 'T')
+
+    // ASCII DNA sequence (for compatibility/debugging)
+    char sequence[MAX_NODE_SEQ_LEN];
+
+    // Packed DNA sequence: 2 bits per base (A=00, C=01, G=10, T=11)
+    // Each uint32_t holds 16 basepairs (32 bits / 2 bits per bp)
+    // To extract bp at position i: (sequence_packed[i/16] >> ((i%16)*2)) & 0x3
+    uint32_t sequence_packed[PACKED_SEQ_WORDS];
+
     uint16_t length;                  // Number of base pairs
     uint32_t in_neighbors[MAX_NEIGHBORS];
     uint32_t out_neighbors[MAX_NEIGHBORS];
@@ -28,6 +37,7 @@ struct GraphNode {
 
     GraphNode() : node_id(0), length(0), num_in_neighbors(0), num_out_neighbors(0), valid(false) {
         memset(sequence, 0, sizeof(sequence));
+        memset(sequence_packed, 0, sizeof(sequence_packed));
         memset(in_neighbors, 0, sizeof(in_neighbors));
         memset(out_neighbors, 0, sizeof(out_neighbors));
     }
@@ -128,9 +138,14 @@ struct Graph {
         num_nodes = 5;
 
         // Node 69816: Length=64
+        // Sequence: TTTGTATGATTTCAATCTTTTAAAATTTATTGTCCAGGTACGGTTGCTCACACCTGTAATCCCA
         nodes[0].node_id = 69816;
         nodes[0].length = 64;
         strcpy(nodes[0].sequence, "TTTGTATGATTTCAATCTTTTAAAATTTATTGTCCAGGTACGGTTGCTCACACCTGTAATCCCA");
+        nodes[0].sequence_packed[0] = 0xC1FCB3BF;  // bp 0-15:  TTTGTATGATTTCAAT
+        nodes[0].sequence_packed[1] = 0xBCFC03FD;  // bp 16-31: CTTTTAAAATTTATTG
+        nodes[0].sequence_packed[2] = 0xDBE93A17;  // bp 32-47: TCCAGGTACGGTTGCT
+        nodes[0].sequence_packed[3] = 0x15C3B511;  // bp 48-63: CACACCTGTAATCCCA
         nodes[0].num_in_neighbors = 2;
         nodes[0].in_neighbors[0] = 69819;
         nodes[0].in_neighbors[1] = 69820;
@@ -142,6 +157,7 @@ struct Graph {
         nodes[1].node_id = 69819;
         nodes[1].length = 1;
         strcpy(nodes[1].sequence, "C");
+        nodes[1].sequence_packed[0] = 0x00000001;  // C (01 in binary)
         nodes[1].num_in_neighbors = 1;
         nodes[1].in_neighbors[0] = 69831;
         nodes[1].num_out_neighbors = 1;
@@ -152,6 +168,7 @@ struct Graph {
         nodes[2].node_id = 69820;
         nodes[2].length = 1;
         strcpy(nodes[2].sequence, "T");
+        nodes[2].sequence_packed[0] = 0x00000003;  // T (11 in binary)
         nodes[2].num_in_neighbors = 1;
         nodes[2].in_neighbors[0] = 69831;
         nodes[2].num_out_neighbors = 1;
@@ -159,9 +176,14 @@ struct Graph {
         nodes[2].valid = true;
 
         // Node 69830: Length=64
+        // Sequence: TTGAGTGTGTTTTTAATTTTCACATATTCGTGAATTATCTTGGTTTTCTTCTATTGATTTCTAG
         nodes[3].node_id = 69830;
         nodes[3].length = 64;
         strcpy(nodes[3].sequence, "TTGAGTGTGTTTTTAATTTTCACATATTCGTGAATTATCTTGGTTTTCTTCTATTGATTTCTAG");
+        nodes[3].sequence_packed[0] = 0x0FFEEE2F;  // bp 0-15:  TTGAGTGTGTTTTTAA
+        nodes[3].sequence_packed[1] = 0xB9F311FF;  // bp 16-31: TTTTCACATATTCGTG
+        nodes[3].sequence_packed[2] = 0x7FEBDCF0;  // bp 32-47: AATTATCTTGGTTTTC
+        nodes[3].sequence_packed[3] = 0x8DFCBCDF;  // bp 48-63: TTCTATTGATTTCTAG
         nodes[3].num_in_neighbors = 1;
         nodes[3].in_neighbors[0] = 69829;
         nodes[3].num_out_neighbors = 1;
@@ -169,9 +191,12 @@ struct Graph {
         nodes[3].valid = true;
 
         // Node 69831: Length=28
+        // Sequence: CTTCATTCCATTTTAGTCAGAGAAGGTA
         nodes[4].node_id = 69831;
         nodes[4].length = 28;
         strcpy(nodes[4].sequence, "CTTCATTCCATTTTAGTCAGAGAAGGTA");
+        nodes[4].sequence_packed[0] = 0x8FF17C7D;  // bp 0-15:  CTTCATTCCATTTTAG
+        nodes[4].sequence_packed[1] = 0x003A0887;  // bp 16-27: TCAGAGAAGGTA
         nodes[4].num_in_neighbors = 1;
         nodes[4].in_neighbors[0] = 69830;
         nodes[4].num_out_neighbors = 2;
@@ -180,6 +205,28 @@ struct Graph {
         nodes[4].valid = true;
 
         printf("Hardcoded verification graph initialized: 5 nodes (69816, 69819, 69820, 69830, 69831)\n");
+        printf("  Sequences stored in both ASCII and 2-bit packed format\n");
+
+        // Initialize queue with seed node 69830
+        graphAlignQueue.clear();
+        sliceNodeCAM.clear();
+
+        QueueEntry seedEntry;
+        seedEntry.target_node = 69830;
+        seedEntry.priority = 0;
+        seedEntry.spm_addr = sliceNodeCAM.allocateNode(69830);  // Allocate SPM address via CAM
+        seedEntry.flags = 0;
+        seedEntry.setSkipFirst(1);           // Seed node starts from extraSlice
+        seedEntry.setPrevSliceExists(0);     // No previous slice
+        seedEntry.setCurrSliceExists(1);     // Current slice exists
+        seedEntry.basepairs = nodes[3].sequence_packed[0];  // First 16bp: 0x0FFEEE2F
+        seedEntry.out_neighbors[0] = 69831;
+        seedEntry.num_out_neighbors = 1;
+        seedEntry.num_chunks = (nodes[3].length + 15) / 16;  // Node 69830 length=64 -> 4 chunks
+        graphAlignQueue.insert(seedEntry);
+
+        printf("Queue initialized with seed node 69830: SPM addr %u, chunks=%u, flags=0x%02X\n",
+               seedEntry.spm_addr, seedEntry.num_chunks, seedEntry.flags);
     }
 };
 
@@ -235,8 +282,11 @@ struct QueueEntry {
     uint32_t out_neighbors[MAX_QUEUE_NEIGHBORS];
     uint8_t  num_out_neighbors;  // Number of valid out-neighbors (0 to MAX_QUEUE_NEIGHBORS)
 
+    // Number of chunks to process for this node (node_length / 16, rounded up)
+    uint8_t  num_chunks;         // ceil(node_length / 16)
+
     QueueEntry() : target_node(0), priority(0), spm_addr(0),
-                   flags(0), basepairs(0), num_out_neighbors(0) {
+                   flags(0), basepairs(0), num_out_neighbors(0), num_chunks(0) {
         memset(out_neighbors, 0, sizeof(out_neighbors));
     }
 
@@ -341,9 +391,8 @@ struct PriorityQueue {
         entry.target_node = target;
         entry.priority = priority;
         entry.spm_addr = spm_addr;
-        entry.skip_first = skip_first;
-        entry.force_calc = 0;
-        entry.first_calc = 0;
+        entry.flags = 0;
+        entry.setSkipFirst(skip_first);
         entry.basepairs = 0;
         entry.num_out_neighbors = 0;
         return insert(entry);
@@ -368,8 +417,96 @@ struct PriorityQueue {
     }
 };
 
+// ==== Slice Node CAM (Content Addressable Memory) ====
+// Tracks nodes in current slice and their SPM addresses
+#define MAX_SLICE_NODES 32           // Max nodes in current slice
+#define SPM_SLICE_DATA_START 10      // Starting SPM address for slice data
+#define SPM_SLICE_DATA_SIZE 4        // Words per node (VN, VP, scoreEnd, reserved)
+
+struct SliceNodeCAM {
+    struct Entry {
+        uint32_t node_id;     // Node ID (key)
+        uint32_t spm_addr;    // SPM address where slice data stored (value)
+        bool valid;           // Entry is valid
+    };
+
+    Entry entries[MAX_SLICE_NODES];
+    int size;
+    uint32_t next_spm_addr;  // Next available SPM address for allocation
+
+    SliceNodeCAM() : size(0), next_spm_addr(SPM_SLICE_DATA_START) {
+        for (int i = 0; i < MAX_SLICE_NODES; i++) {
+            entries[i].valid = false;
+        }
+    }
+
+    // Clear CAM (for moving to next slice)
+    void clear() {
+        size = 0;
+        next_spm_addr = SPM_SLICE_DATA_START;
+        for (int i = 0; i < MAX_SLICE_NODES; i++) {
+            entries[i].valid = false;
+        }
+    }
+
+    // Lookup SPM address for a node (returns 0 if not found)
+    uint32_t getSpmAddr(uint32_t node_id) const {
+        for (int i = 0; i < MAX_SLICE_NODES; i++) {
+            if (entries[i].valid && entries[i].node_id == node_id) {
+                return entries[i].spm_addr;
+            }
+        }
+        return 0;  // Not found
+    }
+
+    // Check if node exists in current slice
+    bool hasNode(uint32_t node_id) const {
+        return getSpmAddr(node_id) != 0;
+    }
+
+    // Allocate SPM address for a node (auto-increments address pool)
+    // Returns SPM address, or 0 if CAM is full
+    uint32_t allocateNode(uint32_t node_id) {
+        // Check if already exists
+        uint32_t existing = getSpmAddr(node_id);
+        if (existing != 0) return existing;
+
+        // Find empty slot
+        if (size >= MAX_SLICE_NODES) return 0;  // CAM full
+
+        for (int i = 0; i < MAX_SLICE_NODES; i++) {
+            if (!entries[i].valid) {
+                entries[i].node_id = node_id;
+                entries[i].spm_addr = next_spm_addr;
+                entries[i].valid = true;
+                size++;
+
+                uint32_t allocated = next_spm_addr;
+                next_spm_addr += SPM_SLICE_DATA_SIZE;  // Reserve block for this node
+                return allocated;
+            }
+        }
+        return 0;  // Should not reach
+    }
+
+    // Remove node from CAM (deallocate)
+    bool removeNode(uint32_t node_id) {
+        for (int i = 0; i < MAX_SLICE_NODES; i++) {
+            if (entries[i].valid && entries[i].node_id == node_id) {
+                entries[i].valid = false;
+                size--;
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
 // Global priority queue for graph alignment
 static PriorityQueue graphAlignQueue;
+
+// Global CAM for tracking nodes in current slice
+static SliceNodeCAM sliceNodeCAM;
 
 PerfCounter bankConflictStalls = 0;
 PerfCounter totalSpmRequests = 0;
@@ -750,34 +887,27 @@ if (is_magic) {
         SPM_unit->access_magic(0, 2) = 526336;  // PE0 SPM[2] BC
         SPM_unit->access_magic(0, 3) = 3328370359;  // PE0 SPM[3] BG
 
-        // Initialize extraSlice values at SPM[100-104]
-        // extraSlice.VN = 0x0000000000000001
-        SPM_unit->access_magic(0, 100) = 1;           // VN_lo = 1
-        SPM_unit->access_magic(0, 101) = 0;           // VN_hi = 0
-
-        // extraSlice.VP = 0x9249249249249252 (10540996613550711954)
-        SPM_unit->access_magic(0, 102) = 1229530258;  // VP_lo = 0x49249252
-        SPM_unit->access_magic(0, 103) = 2454267026;  // VP_hi = 0x92492492
-
-        // extraSlice.scoreEnd = 22
-        SPM_unit->access_magic(0, 104) = 22;          // scoreEnd
+        // Initialize extraSlice values at SPM[4-6] (32-bit values only)
+        // From GbvTraces.log:
+        SPM_unit->access_magic(0, 4) = 1;            // VN (bottom 32 bits)
+        SPM_unit->access_magic(0, 5) = 1229530258;   // VP (bottom 32 bits) = 0x49249252
+        SPM_unit->access_magic(0, 6) = 1;            // scoreEnd (regfile[25] bottom 32 bits)
 
 #ifdef PROFILE
         printf("Magic instruction (payload=%d): Loaded equality vectors into PE0 SPM[0-3]\n", magic_payload);
-        printf("  Initialized extraSlice into SPM[100-104]:\n");
-        printf("    SPM[100] = VN_lo = 1\n");
-        printf("    SPM[101] = VN_hi = 0\n");
-        printf("    SPM[102] = VP_lo = 1229530258 (0x49249252)\n");
-        printf("    SPM[103] = VP_hi = 2454267026 (0x92492492)\n");
-        printf("    SPM[104] = scoreEnd = 22\n");
+        printf("  Initialized extraSlice into SPM[4-6]:\n");
+        printf("    SPM[4] = VN = 1\n");
+        printf("    SPM[5] = VP = 1229530258 (0x49249252)\n");
+        printf("    SPM[6] = scoreEnd = 1\n");
 #endif
     }
     else if (magic_payload == 2) {
-        // Magic payload 2: Initialize/clear priority queue
+        // Magic payload 2: Initialize/clear priority queue and CAM
         graphAlignQueue.clear();
+        sliceNodeCAM.clear();
 
 #ifdef PROFILE
-        printf("Magic instruction (payload=%d): Queue cleared\n", magic_payload);
+        printf("Magic instruction (payload=%d): Queue and CAM cleared\n", magic_payload);
 #endif
     }
     else if (magic_payload == 3) {
@@ -785,20 +915,30 @@ if (is_magic) {
         // Input from addressing registers:
         //   gr[0] = target_node (ID in graph)
         //   gr[1] = priority
-        //   gr[2] = spm_addr (where VP/VN/scoreEnd stored)
+        //   gr[2] = spm_addr (0 = auto-allocate via CAM, non-zero = use specified address)
         //   gr[3] = flags (8-bit packed: bit0=skip_first, bit1=prevSliceExists, bit2=currSliceExists)
         //   gr[4] = basepairs (32-bit, 16 bases encoded)
         // Output:
         //   gr[5] = success (1 = inserted, 0 = queue full)
         //   gr[6] = num_out_neighbors (number of neighbors loaded)
+        //   gr[7] = allocated_spm_addr (actual SPM address used)
         QueueEntry entry;
         entry.target_node = main_addressing_register[0];
         entry.priority = main_addressing_register[1];
-        entry.spm_addr = main_addressing_register[2];
+
+        // Auto-allocate SPM address via CAM if gr[2] is 0
+        if (main_addressing_register[2] == 0) {
+            entry.spm_addr = sliceNodeCAM.allocateNode(entry.target_node);
+        } else {
+            entry.spm_addr = main_addressing_register[2];
+            // Still register in CAM for tracking (won't reallocate if already exists)
+            sliceNodeCAM.allocateNode(entry.target_node);
+        }
+
         entry.flags = (uint8_t)main_addressing_register[3];  // Load all flags at once
         entry.basepairs = main_addressing_register[4];
 
-        // Automatically populate out-neighbors from graph
+        // Automatically populate out-neighbors and num_chunks from graph
         GraphNode* node = graphStructure.getNode(entry.target_node);
         if (node) {
             entry.num_out_neighbors = (node->num_out_neighbors < MAX_QUEUE_NEIGHBORS)
@@ -807,18 +947,22 @@ if (is_magic) {
             for (int i = 0; i < entry.num_out_neighbors; i++) {
                 entry.out_neighbors[i] = node->out_neighbors[i];
             }
+            // Calculate num_chunks: ceil(node_length / 16)
+            entry.num_chunks = (node->length + 15) / 16;
         } else {
             entry.num_out_neighbors = 0;
+            entry.num_chunks = 0;
         }
 
         bool success = graphAlignQueue.insert(entry);
         main_addressing_register[5] = success ? 1 : 0;
         main_addressing_register[6] = entry.num_out_neighbors;
+        main_addressing_register[7] = entry.spm_addr;  // Return allocated address
 
 #ifdef PROFILE
         if (node) {
-            printf("Magic instruction (payload=%d): Queue insert node=%u len=%u prio=%d spm=%u flags=0x%02X (skip=%u prev=%u curr=%u) neighbors=%u -> %s\n",
-                   magic_payload, entry.target_node, node->length, entry.priority,
+            printf("Magic instruction (payload=%d): Queue insert node=%u len=%u chunks=%u prio=%d spm=%u flags=0x%02X (skip=%u prev=%u curr=%u) neighbors=%u -> %s\n",
+                   magic_payload, entry.target_node, node->length, entry.num_chunks, entry.priority,
                    entry.spm_addr, entry.flags, entry.getSkipFirst(), entry.getPrevSliceExists(),
                    entry.getCurrSliceExists(), entry.num_out_neighbors, success ? "OK" : "FULL");
         } else {
@@ -850,6 +994,7 @@ if (is_magic) {
         //   gr[4] = basepairs (32-bit)
         //   gr[5] = valid (1 if queue not empty, 0 if empty)
         //   gr[6] = num_out_neighbors
+        //   gr[7] = num_chunks
         if (!graphAlignQueue.empty()) {
             QueueEntry top = graphAlignQueue.top();
             main_addressing_register[0] = top.target_node;
@@ -859,22 +1004,24 @@ if (is_magic) {
             main_addressing_register[4] = top.basepairs;
             main_addressing_register[5] = 1;  // valid
             main_addressing_register[6] = top.num_out_neighbors;
+            main_addressing_register[7] = top.num_chunks;
 
 #ifdef PROFILE
             GraphNode* node = graphStructure.getNode(top.target_node);
             if (node) {
-                printf("Magic instruction (payload=%d): Queue top -> node=%u len=%u prio=%d spm=%u flags=0x%02X (skip=%u prev=%u curr=%u) neighbors=%u\n",
-                       magic_payload, top.target_node, node->length, top.priority,
+                printf("Magic instruction (payload=%d): Queue top -> node=%u len=%u chunks=%u prio=%d spm=%u flags=0x%02X (skip=%u prev=%u curr=%u) neighbors=%u\n",
+                       magic_payload, top.target_node, node->length, top.num_chunks, top.priority,
                        top.spm_addr, top.flags, top.getSkipFirst(), top.getPrevSliceExists(),
                        top.getCurrSliceExists(), top.num_out_neighbors);
             } else {
-                printf("Magic instruction (payload=%d): Queue top -> node=%u prio=%d spm=%u flags=0x%02X neighbors=%u\n",
-                       magic_payload, top.target_node, top.priority, top.spm_addr, top.flags, top.num_out_neighbors);
+                printf("Magic instruction (payload=%d): Queue top -> node=%u chunks=%u prio=%d spm=%u flags=0x%02X neighbors=%u\n",
+                       magic_payload, top.target_node, top.num_chunks, top.priority, top.spm_addr, top.flags, top.num_out_neighbors);
             }
 #endif
         } else {
             main_addressing_register[5] = 0;  // invalid (queue empty)
             main_addressing_register[6] = 0;
+            main_addressing_register[7] = 0;
 
 #ifdef PROFILE
             printf("Magic instruction (payload=%d): Queue top -> EMPTY\n", magic_payload);
@@ -1041,6 +1188,38 @@ if (is_magic) {
             printf("Magic instruction (payload=%d): Queue top out_neighbor -> QUEUE EMPTY\n", magic_payload);
 #endif
         }
+    }
+    else if (magic_payload == 12) {
+        // Magic payload 12: Query CAM for node's SPM address
+        // Input:
+        //   gr[0] = node_id
+        // Output:
+        //   gr[1] = spm_addr (0 if not found)
+        //   gr[2] = found (1 if in CAM, 0 if not)
+        uint32_t node_id = main_addressing_register[0];
+        uint32_t spm_addr = sliceNodeCAM.getSpmAddr(node_id);
+        main_addressing_register[1] = spm_addr;
+        main_addressing_register[2] = (spm_addr != 0) ? 1 : 0;
+
+#ifdef PROFILE
+        printf("Magic instruction (payload=%d): CAM lookup node=%u -> spm=%u (%s)\n",
+               magic_payload, node_id, spm_addr, (spm_addr != 0) ? "FOUND" : "NOT FOUND");
+#endif
+    }
+    else if (magic_payload == 13) {
+        // Magic payload 13: Get CAM status
+        // Output:
+        //   gr[0] = CAM size (number of nodes in current slice)
+        //   gr[1] = CAM capacity (MAX_SLICE_NODES)
+        //   gr[2] = next_spm_addr (next address to be allocated)
+        main_addressing_register[0] = sliceNodeCAM.size;
+        main_addressing_register[1] = MAX_SLICE_NODES;
+        main_addressing_register[2] = sliceNodeCAM.next_spm_addr;
+
+#ifdef PROFILE
+        printf("Magic instruction (payload=%d): CAM status -> size=%d, capacity=%d, next_addr=%u\n",
+               magic_payload, sliceNodeCAM.size, MAX_SLICE_NODES, sliceNodeCAM.next_spm_addr);
+#endif
     }
 
     (*PC)++;

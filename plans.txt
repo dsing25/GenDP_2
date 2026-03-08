@@ -1,0 +1,27 @@
+pop a node from the queue into pe controller
+make sure the node id, SPM address is sent as well as the flags and the node basepair into gr2 and gr3 and gr4 and gr5
+check if skipfirst is true, if it is, move SPM data from extraslice into reg 12 reg 13 and reg 15 and into reg16 17 19 (VN VP scoreend)
+if it is false, set reg 12,13,15 to 0 0 and -1 (should be all 1s)
+do a merge operation between the left and right bitvectors (already implemented in reg 12-19) (this is saved as WS and sent into 2,3,11)
+save these 3 into the SPM also at some temporary location (maybe 10 11 12 spm addr)
+check if previousslice exists for that node based on the flags sent from pe controller
+if no previous slice exists, set a forceEq register to all ones XOR 1
+now the loops need to be implemented:
+main loop: iterates through each chunk in the node (get the amount of chunks) from bits 8 9 10 in the flags category, (iterate until we run of ot chunks to process)
+
+within this loop, i now process the basepairs that are sent in and grab the bottom 2 bits each time (this loop iterates 16 times total or until i run out of basepairs - check this condition)
+the SPM gets accessed based on the basepair grabbed, and sent into the Eq register (register 1) and then it gets Eq &= forceEq register
+getnextslice gets called, and then check if forceMask is true, if so, VP &= AllOnes XOR 1 and VN |= 1 (this runs on WS and creates newWS which is now in 2,3,11)
+check if extraslice scoreend from SPM is -1, if it isnt, then merge the extraslice with the current slice
+this means the current slice from reg 2 3 and 11 should move into 12 13 15 and the extraslice should move into 16 17 19
+after the merge, compare the score of the SPM at 10/11/12 and set hinP and hinN based on the score and the current score that is from the merge result (probably in 30)
+if extraslice score is -1, make hinP and hinN based on the newHP and newHN bitvectors... (nnot sure how to even implement this)
+do a bitshift on the loop condition which is the character chunk reader (the bottom 2 bits in the basepair) 
+update the loop conditions or bitshift the things newHP new HN etc. 
+exit first loop here
+exit second loop here
+
+do another merge then push nodes into the queue
+
+restart entire program with new node being popped 
+
