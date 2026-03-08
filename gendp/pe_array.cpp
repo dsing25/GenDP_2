@@ -122,6 +122,65 @@ struct Graph {
         printf("Graph loaded: %d nodes from '%s'\n", num_nodes, filename);
         return true;
     }
+
+    // Hardcoded initialization for verification graph (5 nodes from call #1)
+    void initHardcodedGraph() {
+        num_nodes = 5;
+
+        // Node 69816: Length=64
+        nodes[0].node_id = 69816;
+        nodes[0].length = 64;
+        strcpy(nodes[0].sequence, "TTTGTATGATTTCAATCTTTTAAAATTTATTGTCCAGGTACGGTTGCTCACACCTGTAATCCCA");
+        nodes[0].num_in_neighbors = 2;
+        nodes[0].in_neighbors[0] = 69819;
+        nodes[0].in_neighbors[1] = 69820;
+        nodes[0].num_out_neighbors = 1;
+        nodes[0].out_neighbors[0] = 69817;
+        nodes[0].valid = true;
+
+        // Node 69819: Length=1, Seq=C
+        nodes[1].node_id = 69819;
+        nodes[1].length = 1;
+        strcpy(nodes[1].sequence, "C");
+        nodes[1].num_in_neighbors = 1;
+        nodes[1].in_neighbors[0] = 69831;
+        nodes[1].num_out_neighbors = 1;
+        nodes[1].out_neighbors[0] = 69816;
+        nodes[1].valid = true;
+
+        // Node 69820: Length=1, Seq=T
+        nodes[2].node_id = 69820;
+        nodes[2].length = 1;
+        strcpy(nodes[2].sequence, "T");
+        nodes[2].num_in_neighbors = 1;
+        nodes[2].in_neighbors[0] = 69831;
+        nodes[2].num_out_neighbors = 1;
+        nodes[2].out_neighbors[0] = 69816;
+        nodes[2].valid = true;
+
+        // Node 69830: Length=64
+        nodes[3].node_id = 69830;
+        nodes[3].length = 64;
+        strcpy(nodes[3].sequence, "TTGAGTGTGTTTTTAATTTTCACATATTCGTGAATTATCTTGGTTTTCTTCTATTGATTTCTAG");
+        nodes[3].num_in_neighbors = 1;
+        nodes[3].in_neighbors[0] = 69829;
+        nodes[3].num_out_neighbors = 1;
+        nodes[3].out_neighbors[0] = 69831;
+        nodes[3].valid = true;
+
+        // Node 69831: Length=28
+        nodes[4].node_id = 69831;
+        nodes[4].length = 28;
+        strcpy(nodes[4].sequence, "CTTCATTCCATTTTAGTCAGAGAAGGTA");
+        nodes[4].num_in_neighbors = 1;
+        nodes[4].in_neighbors[0] = 69830;
+        nodes[4].num_out_neighbors = 2;
+        nodes[4].out_neighbors[0] = 69819;
+        nodes[4].out_neighbors[1] = 69820;
+        nodes[4].valid = true;
+
+        printf("Hardcoded verification graph initialized: 5 nodes (69816, 69819, 69820, 69830, 69831)\n");
+    }
 };
 
 // Global graph structure
@@ -149,15 +208,23 @@ inline char decodeDNABase(uint8_t encoded) {
 #define MAX_QUEUE_SIZE 20
 #define MAX_QUEUE_NEIGHBORS 10
 
+// Flag bit positions for QueueEntry.flags
+#define FLAG_SKIP_FIRST           0  // Bit 0: skip_first (1 = from previous slice, 0 = from neighbor)
+#define FLAG_PREV_SLICE_EXISTS    1  // Bit 1: previousSliceExists
+#define FLAG_CURR_SLICE_EXISTS    2  // Bit 2: currentSliceExists
+// Bits 3-7: Reserved for future use
+
 struct QueueEntry {
     uint32_t target_node;        // Node ID to process (lookup in graphStructure)
     int32_t  priority;           // Priority (lower = process first)
     uint32_t spm_addr;           // SPM address where slice data (VP, VN, scoreEnd) stored
 
-    // Control flags (split out for clarity)
-    uint8_t  skip_first;         // 1 = from previous slice, 0 = from neighbor
-    uint8_t  force_calc;         // 1 = force calculation
-    uint8_t  first_calc;         // 1 = first time processing this node
+    // Packed control flags (8 bits total)
+    // Bit 0: skip_first (1 = from previous slice, 0 = from neighbor)
+    // Bit 1: previousSliceExists
+    // Bit 2: currentSliceExists
+    // Bits 3-7: Reserved
+    uint8_t  flags;
 
     // DNA sequence chunk (16 basepairs, 2 bits each)
     // Encoding: A=00, C=01, G=10, T=11
@@ -169,13 +236,50 @@ struct QueueEntry {
     uint8_t  num_out_neighbors;  // Number of valid out-neighbors (0 to MAX_QUEUE_NEIGHBORS)
 
     QueueEntry() : target_node(0), priority(0), spm_addr(0),
-                   skip_first(0), force_calc(0), first_calc(0), basepairs(0), num_out_neighbors(0) {
+                   flags(0), basepairs(0), num_out_neighbors(0) {
         memset(out_neighbors, 0, sizeof(out_neighbors));
     }
 
     bool operator>(const QueueEntry& other) const {
         return priority > other.priority;  // Min-heap: lower priority comes first
     }
+
+    // === Flag Helper Methods ===
+
+    // Set a specific flag bit
+    inline void setFlag(uint8_t bit_position) {
+        flags |= (1 << bit_position);
+    }
+
+    // Clear a specific flag bit
+    inline void clearFlag(uint8_t bit_position) {
+        flags &= ~(1 << bit_position);
+    }
+
+    // Get a specific flag bit (returns 0 or 1)
+    inline uint8_t getFlag(uint8_t bit_position) const {
+        return (flags >> bit_position) & 1;
+    }
+
+    // Set flag to specific value (0 or 1)
+    inline void updateFlag(uint8_t bit_position, bool value) {
+        if (value) {
+            setFlag(bit_position);
+        } else {
+            clearFlag(bit_position);
+        }
+    }
+
+    // === Convenience accessors for specific flags ===
+
+    inline void setSkipFirst(bool value) { updateFlag(FLAG_SKIP_FIRST, value); }
+    inline bool getSkipFirst() const { return getFlag(FLAG_SKIP_FIRST); }
+
+    inline void setPrevSliceExists(bool value) { updateFlag(FLAG_PREV_SLICE_EXISTS, value); }
+    inline bool getPrevSliceExists() const { return getFlag(FLAG_PREV_SLICE_EXISTS); }
+
+    inline void setCurrSliceExists(bool value) { updateFlag(FLAG_CURR_SLICE_EXISTS, value); }
+    inline bool getCurrSliceExists() const { return getFlag(FLAG_CURR_SLICE_EXISTS); }
 
     // Set a basepair at specific position (0-15)
     void setBasepair(int pos, char base) {
@@ -295,6 +399,9 @@ pe_array::pe_array(int input_size, int output_size) {
     store_data = 0;
     from_fifo = 0;
     compute_reg_names = nullptr;
+
+    // Initialize hardcoded verification graph
+    graphStructure.initHardcodedGraph();
 }
 
 pe_array::~pe_array() {
@@ -643,8 +750,26 @@ if (is_magic) {
         SPM_unit->access_magic(0, 2) = 526336;  // PE0 SPM[2] BC
         SPM_unit->access_magic(0, 3) = 3328370359;  // PE0 SPM[3] BG
 
+        // Initialize extraSlice values at SPM[100-104]
+        // extraSlice.VN = 0x0000000000000001
+        SPM_unit->access_magic(0, 100) = 1;           // VN_lo = 1
+        SPM_unit->access_magic(0, 101) = 0;           // VN_hi = 0
+
+        // extraSlice.VP = 0x9249249249249252 (10540996613550711954)
+        SPM_unit->access_magic(0, 102) = 1229530258;  // VP_lo = 0x49249252
+        SPM_unit->access_magic(0, 103) = 2454267026;  // VP_hi = 0x92492492
+
+        // extraSlice.scoreEnd = 22
+        SPM_unit->access_magic(0, 104) = 22;          // scoreEnd
+
 #ifdef PROFILE
         printf("Magic instruction (payload=%d): Loaded equality vectors into PE0 SPM[0-3]\n", magic_payload);
+        printf("  Initialized extraSlice into SPM[100-104]:\n");
+        printf("    SPM[100] = VN_lo = 1\n");
+        printf("    SPM[101] = VN_hi = 0\n");
+        printf("    SPM[102] = VP_lo = 1229530258 (0x49249252)\n");
+        printf("    SPM[103] = VP_hi = 2454267026 (0x92492492)\n");
+        printf("    SPM[104] = scoreEnd = 22\n");
 #endif
     }
     else if (magic_payload == 2) {
@@ -661,7 +786,7 @@ if (is_magic) {
         //   gr[0] = target_node (ID in graph)
         //   gr[1] = priority
         //   gr[2] = spm_addr (where VP/VN/scoreEnd stored)
-        //   gr[3] = skip_first (0 or 1)
+        //   gr[3] = flags (8-bit packed: bit0=skip_first, bit1=prevSliceExists, bit2=currSliceExists)
         //   gr[4] = basepairs (32-bit, 16 bases encoded)
         // Output:
         //   gr[5] = success (1 = inserted, 0 = queue full)
@@ -670,10 +795,8 @@ if (is_magic) {
         entry.target_node = main_addressing_register[0];
         entry.priority = main_addressing_register[1];
         entry.spm_addr = main_addressing_register[2];
-        entry.skip_first = (uint8_t)main_addressing_register[3];
+        entry.flags = (uint8_t)main_addressing_register[3];  // Load all flags at once
         entry.basepairs = main_addressing_register[4];
-        entry.force_calc = 0;
-        entry.first_calc = 0;
 
         // Automatically populate out-neighbors from graph
         GraphNode* node = graphStructure.getNode(entry.target_node);
@@ -694,13 +817,14 @@ if (is_magic) {
 
 #ifdef PROFILE
         if (node) {
-            printf("Magic instruction (payload=%d): Queue insert node=%u len=%u prio=%d spm=%u skip=%u neighbors=%u -> %s\n",
+            printf("Magic instruction (payload=%d): Queue insert node=%u len=%u prio=%d spm=%u flags=0x%02X (skip=%u prev=%u curr=%u) neighbors=%u -> %s\n",
                    magic_payload, entry.target_node, node->length, entry.priority,
-                   entry.spm_addr, entry.skip_first, entry.num_out_neighbors, success ? "OK" : "FULL");
+                   entry.spm_addr, entry.flags, entry.getSkipFirst(), entry.getPrevSliceExists(),
+                   entry.getCurrSliceExists(), entry.num_out_neighbors, success ? "OK" : "FULL");
         } else {
-            printf("Magic instruction (payload=%d): Queue insert node=%u (NOT IN GRAPH) prio=%d spm=%u skip=%u -> %s\n",
+            printf("Magic instruction (payload=%d): Queue insert node=%u (NOT IN GRAPH) prio=%d spm=%u flags=0x%02X -> %s\n",
                    magic_payload, entry.target_node, entry.priority,
-                   entry.spm_addr, entry.skip_first, success ? "OK" : "FULL");
+                   entry.spm_addr, entry.flags, success ? "OK" : "FULL");
         }
 #endif
     }
@@ -722,7 +846,7 @@ if (is_magic) {
         //   gr[0] = target_node
         //   gr[1] = priority
         //   gr[2] = spm_addr
-        //   gr[3] = skip_first
+        //   gr[3] = flags (8-bit packed)
         //   gr[4] = basepairs (32-bit)
         //   gr[5] = valid (1 if queue not empty, 0 if empty)
         //   gr[6] = num_out_neighbors
@@ -731,7 +855,7 @@ if (is_magic) {
             main_addressing_register[0] = top.target_node;
             main_addressing_register[1] = top.priority;
             main_addressing_register[2] = top.spm_addr;
-            main_addressing_register[3] = top.skip_first;
+            main_addressing_register[3] = top.flags;  // Return all flags at once
             main_addressing_register[4] = top.basepairs;
             main_addressing_register[5] = 1;  // valid
             main_addressing_register[6] = top.num_out_neighbors;
@@ -739,12 +863,13 @@ if (is_magic) {
 #ifdef PROFILE
             GraphNode* node = graphStructure.getNode(top.target_node);
             if (node) {
-                printf("Magic instruction (payload=%d): Queue top -> node=%u len=%u prio=%d spm=%u skip=%u neighbors=%u\n",
+                printf("Magic instruction (payload=%d): Queue top -> node=%u len=%u prio=%d spm=%u flags=0x%02X (skip=%u prev=%u curr=%u) neighbors=%u\n",
                        magic_payload, top.target_node, node->length, top.priority,
-                       top.spm_addr, top.skip_first, top.num_out_neighbors);
+                       top.spm_addr, top.flags, top.getSkipFirst(), top.getPrevSliceExists(),
+                       top.getCurrSliceExists(), top.num_out_neighbors);
             } else {
-                printf("Magic instruction (payload=%d): Queue top -> node=%u prio=%d spm=%u skip=%u neighbors=%u\n",
-                       magic_payload, top.target_node, top.priority, top.spm_addr, top.skip_first, top.num_out_neighbors);
+                printf("Magic instruction (payload=%d): Queue top -> node=%u prio=%d spm=%u flags=0x%02X neighbors=%u\n",
+                       magic_payload, top.target_node, top.priority, top.spm_addr, top.flags, top.num_out_neighbors);
             }
 #endif
         } else {
