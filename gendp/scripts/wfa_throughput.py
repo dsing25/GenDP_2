@@ -52,6 +52,10 @@ def run_simulator(idx, pattern, text, sim_path='./sim_o3', verbose=False):
             ('pe_comp_nops',   r'PeCompNops:\s+(\d+)'),
             ('controller_nops',
                 r'ControllerNops:\s+(\d+)'),
+            ('extend_match_iters',
+                r'PeExtendMatchIters:\s+(\d+)'),
+            ('extend_diags',
+                r'PeExtendDiags:\s+(\d+)'),
         ]:
             m = re.search(pat, result.stdout)
             if m:
@@ -137,7 +141,8 @@ def main():
             'lsq_stalls', 'pe_halted', 'fwd_conflicts',
             'sync_spins', 'pe_comp_halted',
             'pe_ctrl_nops', 'pe_comp_nops',
-            'controller_nops']
+            'controller_nops', 'extend_match_iters',
+            'extend_diags']
     totals = {k: [] for k in keys}
     for i, m in enumerate(results):
         vals = {k: m.get(k, 0) for k in keys}
@@ -192,6 +197,8 @@ def main():
         ('pe_ctrl_nops', 'PE ctrl NOPs'),
         ('pe_comp_nops', 'PE comp NOPs'),
         ('controller_nops', 'controller NOPs'),
+        ('extend_match_iters', 'extend-match iters'),
+        ('extend_diags', 'extend diags'),
     ]:
         if totals[k]:
             print(f"Avg {label}: {sum(totals[k])/n:.1f}")

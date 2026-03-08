@@ -47,7 +47,7 @@ TEXT_START = PATTERN_START + SEQ_LEN_ALLOC
 SWIZZLED_PATTERN_START = PATTERN_START << 2 # need to reverse swizzle to hit 226 at the start
 SWIZZLED_TEXT_START = TEXT_START << 2 
 ALIGN_B0_PC = 7 + 6 + PE_BOOT_PAIRS
-ALIGN_B1_PC = 60 + PE_BOOT_PAIRS
+ALIGN_B1_PC = 61 + PE_BOOT_PAIRS
 EXTRA_O_LOAD_ADDR = 7 * MEM_BLOCK_SIZE
 
 
@@ -894,6 +894,8 @@ def pe_instruction(pe_id):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
         f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 1, 2, sub))                      # gr[2] = gr[1] - gr[2]
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
+        f.write(write_magic(8))                                                                       # magic(8) - count extended diags
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
         #early exits: offset < 0
         f.write(data_movement_instruction(0, 0, 0, 0, 9, 0, 1, 0, 1, 0, blt))                        # blt gr[1] gr[0]  9
         f.write(data_movement_instruction(0, 0, 0, 0, 9, 0, 1, 0, 1, 0, blt))                        # blt gr[1] gr[0]  9
@@ -910,7 +912,7 @@ def pe_instruction(pe_id):
         #OPTIMIZATION Should be able to hoist this into the branches. Will give a good deal of perf
         f.write(data_movement_instruction(gr, SPM, 0, 0, 5, 0, 1, 0, 6, 1, mvi2))                    # gr[5] = mvi2(gr[6]+gr[1])
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # No-op
+        f.write(write_magic(7))                                                                       # magic(7) - count extend-match iters
         f.write(data_movement_instruction(gr, gr, 1, 0, 1, 0, 0, 0, 1, 1, addi))                     # gr[1] = gr[1] + 1
         f.write(data_movement_instruction(0, 0, 0, 0, -6, 0, 1, 0, 3, 5, beq))                       # beq gr[3] gr[5] -6
         f.write(data_movement_instruction(0, 0, 0, 0, -6, 0, 1, 0, 3, 5, beq))                       # beq gr[3] gr[5] -6
@@ -920,9 +922,9 @@ def pe_instruction(pe_id):
     #EXTEND STORE (bounds-exit path skips subi, lands here)
         f.write(data_movement_instruction(gr, gr, 1, 0, 9, 0, 0, 0, 1, 9, addi))                     # gr[9] = gr[9] + 1
         f.write(data_movement_instruction(SPM, gr, 0, 0, 4*MEM_BLOCK_SIZE+block_start, 9, 0, 0, 1, 0, mv))       # SPM[gr[9] + 4*MEM_BLOCK_SIZE+block_start]=gr[1]
-        f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 9, 7, blt))                      # blt gr[9] gr[7] -13
-        f.write(data_movement_instruction(0, 0, 0, 0, -13, 0, 1, 0, 9, 7, blt))                      # blt gr[9] gr[7] -13
-        
+        f.write(data_movement_instruction(0, 0, 0, 0, -14, 0, 1, 0, 9, 7, blt))                      # blt gr[9] gr[7] -14
+        f.write(data_movement_instruction(0, 0, 0, 0, -14, 0, 1, 0, 9, 7, blt))                      # blt gr[9] gr[7] -14
+
         f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                       # gr[10] = 1
         f.write(data_movement_instruction(gr, gr, 0, 0, 14, 0, 0, 0, MEM_BLOCK_SIZE, 14, addi))       # gr[14]+= MEM_BLOCK_SIZE
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # halt

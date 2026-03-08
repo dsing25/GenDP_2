@@ -21,6 +21,11 @@ extern PerfCounter peCompHalted;
 extern PerfCounter peCtrlNops;
 extern PerfCounter peCompNops;
 extern PerfCounter controllerNops;
+extern PerfCounter peExtendMatchIters;
+extern PerfCounter peExtendDiags;
+
+extern FILE* diagIdsFile;
+extern int lastDiagScore;
 
 enum EventType {
     SPM_DATA_READY

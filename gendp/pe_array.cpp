@@ -21,6 +21,11 @@ PerfCounter peCompHalted = 0;
 PerfCounter peCtrlNops = 0;
 PerfCounter peCompNops = 0;
 PerfCounter controllerNops = 0;
+PerfCounter peExtendMatchIters = 0;
+PerfCounter peExtendDiags = 0;
+
+FILE* diagIdsFile = nullptr;
+int lastDiagScore = -1;
 
 pe_array::pe_array(int input_size, int output_size) {
 
@@ -42,6 +47,8 @@ pe_array::pe_array(int input_size, int output_size) {
     load_data = 0;
     store_data = 0;
     from_fifo = 0;
+
+    diagIdsFile = fopen("diagIds.txt", "w");
 }
 
 pe_array::~pe_array() {
@@ -53,6 +60,7 @@ pe_array::~pe_array() {
     for (i = 0; i < PE_NUM; i++)
         delete pe_unit[i];
     delete SPM_unit;
+    if (diagIdsFile) fclose(diagIdsFile);
 }
 
 void pe_array::buffer_reset(int* buffer, int num) {
@@ -1509,6 +1517,7 @@ bool pe_array::willStallPair(
 void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_setting) {
     int i, j, flag, old_PC;
     cycle = 0;
+    lastDiagScore = -1;
 
     while (1) {
         cycle++;
@@ -1699,6 +1708,8 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     printf("PeCtrlNops: %d\n", peCtrlNops);
     printf("PeCompNops: %d\n", peCompNops);
     printf("ControllerNops: %d\n", controllerNops);
+    printf("PeExtendMatchIters: %d\n", peExtendMatchIters);
+    printf("PeExtendDiags: %d\n", peExtendDiags);
 
     // fprintf(stderr, "Finish simulation.\n");
 }

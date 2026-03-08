@@ -583,7 +583,29 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
     if (is_magic) {
         //Used to wreak simulator havoc. Put whatever you want here
-        printf("Magic!!!!! payload = %d\n", magic_payload);
+        if (magic_payload == 7){
+            peExtendMatchIters++;
+            peCtrlNops++; //this magic took the place of a noop
+        }
+        else if (magic_payload == 8) {
+            peCtrlNops++; //this  //this magic took the place of a noop
+            peExtendDiags++;
+            int score =
+                addr_regfile_unit->buffer[12] - 1;
+            if (score != lastDiagScore) {
+                fprintf(diagIdsFile,
+                    "Score %d\n", score);
+                lastDiagScore = score;
+            }
+            int diagId =
+                addr_regfile_unit->buffer[9]
+                + addr_regfile_unit->buffer[14]
+                - addr_regfile_unit->buffer[15];
+            fprintf(diagIdsFile, "%d\n", diagId);
+        }
+        else
+            printf("Magic!!!!! payload = %d\n",
+                magic_payload);
         (*PC)++;
     } else if (opcode == 0) {              // add rd rs1 rs2
         rd = reg_imm_0;
