@@ -444,7 +444,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             if (cursor > 0) {
                 int fifo_vd = fifo_unit[0][0].pop();
                 int fifo_k  = fifo_unit[0][1].pop();
-                if (pe0[768] > 0 && (uint32_t)fifo_vd > (uint32_t)pe0[256]) {
+                if (pe0[1152] > 0 && (uint32_t)fifo_vd > (uint32_t)pe0[256]) {
                     int tmp_vd = pe0[256], tmp_k = pe0[257];
                     pe0[256] = fifo_vd; pe0[257] = fifo_k;
                     fifo_vd = tmp_vd; fifo_k = tmp_k;
@@ -465,8 +465,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int *pe0 = SPM_unit->buffer + 0 * SPM_BANK_GROUP_SIZE;
             pe0[256]     = main_addressing_register[3]; // vd
             pe0[256 + 1] = main_addressing_register[4]; // k
-            pe0[768]     = 1; // tb_n = 1
-            pe0[769]     = 0; // ta_n = 0
+            pe0[1152]    = 1; // tb_n = 1
+            pe0[1153]    = 0; // ta_n = 0
+            pe0[1159]    = 0; // n_intv = 0
             gwfa_tile_writeback_one(pe0);
         } else if (magic_id == 10) {
             // GWFA phase 2: cross-node propagation, update n_a in gr[15]
