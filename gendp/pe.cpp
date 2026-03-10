@@ -603,146 +603,84 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     if (is_magic) {
         int magic_id = magic_payload;
         if (magic_id == 8) {
-            int *spm = &SPM_unit->buffer[
-                id * SPM_BANK_GROUP_SIZE];
-            int32_t tile_n = spm[1155];
+            // SPM layout (offsets within this PE's bank-group):
+            //   0:    tile_a     — input diags [vd,k] pairs (128 max)
+            //   128:  node_info  — [seq_off, seq_len] per node (64 max)
+            //   256:  tile_b     — output B diags [vd,k] pairs
+            //   640:  tile_intv  — output interval pairs [vd_lo, vd_hi]
+            //   1024: tile_aout  — output A diags (fully-extended entries)
+            //   1152: tb_n       — count of B entries written
+            //   1153: ta_n       — count of A-out entries written
+            //   1154: n_nodes    — number of distinct nodes in tile
+            //   1155: tile_n     — number of input diags in tile_a
+            //   1159: intv_n     — count of interval entries written
+            int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+            int32_t tile_n = spm[1155]; // input diag count
             if (tile_n > 0) {
-                int32_t n_nodes = spm[1154];
-                int *tile_a = spm;
-                int *tile_b = spm + 256;
-                int *tile_aout = spm + 1024;
-                int *node_info = spm + 128;
-                int *tile_intv = spm + 640;
-                int32_t ql =
-                    addr_regfile_unit->buffer[14];
+                int32_t n_nodes = spm[1154]; // node count
+                int *tile_a = spm;           // offset 0
+                int *tile_b = spm + 256;     // offset 256
+                int *tile_aout = spm + 1024; // offset 1024
+                int *node_info = spm + 128;  // offset 128
+                int *tile_intv = spm + 640;  // offset 640
+                int32_t ql = addr_regfile_unit->buffer[14]; // gr[14] = query length
                 int32_t tb_n = 0, ta_n = 0;
                 int32_t intv_n = 0;
                 int32_t i = 0, node_idx = -1;
                 uint32_t prev_v = UINT32_MAX;
                 while (i < tile_n) {
-                    int32_t v =
-                        (uint32_t)tile_a[2*i] >> 16;
+                    int32_t v = (uint32_t)tile_a[2*i] >> 16;
                     if (v != (int32_t)prev_v) {
                         node_idx++; prev_v = v;
                     }
-                    int32_t ts_off =
-                        node_info[2 * node_idx];
-                    int32_t vl =
-                        node_info[2*node_idx + 1];
+                    int32_t ts_off = node_info[2 * node_idx];
+                    int32_t vl = node_info[2*node_idx + 1];
                     int32_t ppk, pk, k, d;
 
-                    tile_a[2*i+1] = gwf_extend1_pe(
-                        (int32_t)((uint32_t)
-                            tile_a[2*i] & 0xFFFF)
-                            - 0x4000,
-                        tile_a[2*i+1], vl,
-                        SPM_unit->buffer,
-                        ts_off, ql);
-                    emit_b_tile_pe(tile_b, &tb_n,
-                        tile_intv, &intv_n,
-                        (uint32_t)tile_a[2*i] - 1,
-                        tile_a[2*i+1] + 1,
-                        v, vl, ql);
-                    d = (int32_t)((uint32_t)
-                        tile_a[2*i] & 0xFFFF)
-                        - 0x4000;
-                    if (tile_a[2*i+1] == vl - 1
-                        || d + tile_a[2*i+1]
-                            == ql - 1) {
-                        tile_aout[2*ta_n] =
-                            tile_a[2*i];
-                        tile_aout[2*ta_n+1] =
-                            tile_a[2*i+1];
+                    tile_a[2*i+1] = gwf_extend1_pe( (int32_t)((uint32_t) tile_a[2*i] & 0xFFFF) 
+                            - 0x4000, tile_a[2*i+1], vl, SPM_unit->buffer, ts_off, ql);
+                    emit_b_tile_pe(tile_b, &tb_n, tile_intv, &intv_n, (uint32_t)tile_a[2*i] - 1, 
+                            tile_a[2*i+1] + 1, v, vl, ql);
+                    d = (int32_t)((uint32_t) tile_a[2*i] & 0xFFFF) - 0x4000;
+                    if (tile_a[2*i+1] == vl - 1 || d + tile_a[2*i+1] == ql - 1) {
+                        tile_aout[2*ta_n] = tile_a[2*i];
+                        tile_aout[2*ta_n+1] = tile_a[2*i+1];
                         ta_n++;
                     }
                     ppk = tile_a[2*i+1];
                     i++;
 
-                    if (i < tile_n
-                        && (uint32_t)tile_a[2*i]
-                            == (uint32_t)tile_a[
-                                2*(i-1)] + 1) {
-                        tile_a[2*i+1] =
-                            gwf_extend1_pe(
-                            (int32_t)((uint32_t)
-                                tile_a[2*i]
-                                & 0xFFFF)
-                                - 0x4000,
-                            tile_a[2*i+1], vl,
-                            SPM_unit->buffer,
-                            ts_off, ql);
-                        k = (ppk > tile_a[2*i+1]
-                            ? ppk
-                            : tile_a[2*i+1]) + 1;
-                        emit_b_tile_pe(tile_b,
-                            &tb_n, tile_intv,
-                            &intv_n,
-                            (uint32_t)tile_a[
-                                2*(i-1)],
-                            k, v, vl, ql);
-                        d = (int32_t)((uint32_t)
-                            tile_a[2*i] & 0xFFFF)
-                            - 0x4000;
-                        if (tile_a[2*i+1] == vl - 1
-                            || d + tile_a[2*i+1]
-                                == ql - 1) {
-                            tile_aout[2*ta_n] =
-                                tile_a[2*i];
-                            tile_aout[2*ta_n+1] =
-                                tile_a[2*i+1];
+                    if (i < tile_n && (uint32_t)tile_a[2*i] == (uint32_t)tile_a[ 2*(i-1)] + 1) {
+                        tile_a[2*i+1] = gwf_extend1_pe( (int32_t)((uint32_t) tile_a[2*i] & 0xFFFF)
+                                - 0x4000, tile_a[2*i+1], vl, SPM_unit->buffer, ts_off, ql);
+                        k = (ppk > tile_a[2*i+1] ? ppk : tile_a[2*i+1]) + 1;
+                        emit_b_tile_pe(tile_b, &tb_n, tile_intv, &intv_n, (uint32_t)tile_a[ 2*(i-1)],
+                                k, v, vl, ql);
+                        d = (int32_t)((uint32_t) tile_a[2*i] & 0xFFFF) - 0x4000;
+                        if (tile_a[2*i+1] == vl - 1 || d + tile_a[2*i+1] == ql - 1) {
+                            tile_aout[2*ta_n] = tile_a[2*i];
+                            tile_aout[2*ta_n+1] = tile_a[2*i+1];
                             ta_n++;
                         }
                         pk = ppk;
                         ppk = tile_a[2*i+1];
                         i++;
 
-                        while (i < tile_n
-                            && (uint32_t)
-                                tile_a[2*i]
-                                == (uint32_t)
-                                tile_a[2*(i-1)]
-                                + 1) {
-                            tile_a[2*i+1] =
-                                gwf_extend1_pe(
-                                (int32_t)(
-                                    (uint32_t)
-                                    tile_a[2*i]
-                                    & 0xFFFF)
-                                    - 0x4000,
-                                tile_a[2*i+1],
-                                vl, SPM_unit->buffer,
-                                ts_off, ql);
+                        while (i < tile_n && (uint32_t)tile_a[2*i]==(uint32_t)tile_a[2*(i-1)] + 1){
+                            tile_a[2*i+1] = gwf_extend1_pe( (int32_t)( (uint32_t) 
+                                        tile_a[2*i] & 0xFFFF) - 0x4000, tile_a[2*i+1], vl, 
+                                        SPM_unit->buffer, ts_off, ql);
                             k = pk;
                             if (ppk + 1 > k)
                                 k = ppk + 1;
-                            if (tile_a[2*i+1]
-                                + 1 > k)
-                                k = tile_a[
-                                    2*i+1] + 1;
-                            emit_b_tile_pe(
-                                tile_b, &tb_n,
-                                tile_intv,
-                                &intv_n,
-                                (uint32_t)
-                                tile_a[2*(i-1)],
-                                k, v, vl, ql);
-                            d = (int32_t)(
-                                (uint32_t)
-                                tile_a[2*i]
-                                & 0xFFFF)
-                                - 0x4000;
-                            if (tile_a[2*i+1]
-                                == vl - 1
-                                || d + tile_a[
-                                    2*i+1]
-                                    == ql - 1) {
-                                tile_aout[
-                                    2*ta_n] =
-                                    tile_a[2*i];
-                                tile_aout[
-                                    2*ta_n+1] =
-                                    tile_a[
-                                    2*i+1];
+                            if (tile_a[2*i+1] + 1 > k)
+                                k = tile_a[ 2*i+1] + 1;
+                            emit_b_tile_pe( tile_b, &tb_n, tile_intv, &intv_n, (uint32_t) 
+                                    tile_a[2*(i-1)], k, v, vl, ql);
+                            d = (int32_t)( (uint32_t) tile_a[2*i] & 0xFFFF) - 0x4000;
+                            if (tile_a[2*i+1] == vl - 1 || d + tile_a[ 2*i+1] == ql - 1) {
+                                tile_aout[ 2*ta_n] = tile_a[2*i];
+                                tile_aout[ 2*ta_n+1] = tile_a[ 2*i+1];
                                 ta_n++;
                             }
                             pk = ppk;
@@ -750,33 +688,20 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                             i++;
                         }
 
-                        k = pk > ppk + 1
-                            ? pk : ppk + 1;
-                        emit_b_tile_pe(tile_b,
-                            &tb_n, tile_intv,
-                            &intv_n,
-                            (uint32_t)tile_a[
-                                2*(i-1)],
-                            k, v, vl, ql);
+                        k = pk > ppk + 1 ? pk : ppk + 1;
+                        emit_b_tile_pe(tile_b, &tb_n, tile_intv, &intv_n, 
+                                (uint32_t)tile_a[ 2*(i-1)], k, v, vl, ql);
                     } else {
-                        emit_b_tile_pe(tile_b,
-                            &tb_n, tile_intv,
-                            &intv_n,
-                            (uint32_t)tile_a[
-                                2*(i-1)],
-                            ppk + 1, v, vl, ql);
+                        emit_b_tile_pe(tile_b, &tb_n, tile_intv, &intv_n, (uint32_t)tile_a[2*(i-1)],
+                                ppk + 1, v, vl, ql);
                     }
 
-                    emit_b_tile_pe(tile_b, &tb_n,
-                        tile_intv, &intv_n,
-                        (uint32_t)tile_a[
-                            2*(i-1)] + 1,
-                        tile_a[2*(i-1)+1],
-                        v, vl, ql);
+                    emit_b_tile_pe(tile_b, &tb_n, tile_intv, &intv_n, (uint32_t)tile_a[2*(i-1)] + 1,
+                            tile_a[2*(i-1)+1], v, vl, ql);
                 }
-                spm[1152] = tb_n;
-                spm[1153] = ta_n;
-                spm[1159] = intv_n;
+                spm[1152] = tb_n;   // B count
+                spm[1153] = ta_n;   // A-out count
+                spm[1159] = intv_n; // interval count
             }
         } else if (magic_id == 11) {
             // Boundary sort: compare-and-swap last B of this PE with first B of next PE
