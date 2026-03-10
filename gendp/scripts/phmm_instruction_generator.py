@@ -6,19 +6,19 @@ from opcodes import *
 PHMM_COMPUTE_INSTRUCTION_NUM = 15
 
 PE_INIT_CONSTANT_AND_INSTRUCTION = 1
-PE_GROUP = 36+1
-PE_RUN_0 = 62+1
-PE_RUN_1 = 72+1
-PE_RUN_2 = 82+1
-PE_RUN_3 = 92+1
-PE_RUN_4 = 92+11
-PE_RUN_5 = 92+21
-PE_RUN_6 = 92+31
-PE_LAST = 103+36
-PE_END_0 = 108+36
-PE_END_1 = 115+36
-PE_END_2 = 121+36
-PE_END_3 = 125+36
+PE_GROUP = 36+1-14
+PE_RUN_0 = 62+1-14
+PE_RUN_1 = 72+1-14
+PE_RUN_2 = 82+1-14
+PE_RUN_3 = 92+1-14
+PE_RUN_4 = 92+11-14
+PE_RUN_5 = 92+21-14
+PE_RUN_6 = 92+31-14
+PE_LAST = 103+36-14
+PE_END_0 = 108+36-14
+PE_END_1 = 115+36-14
+PE_END_2 = 121+36-14
+PE_END_3 = 125+36-14
 # PE_RUN_LAST = 93+1
 # PE_END_0 = 108+1
 # PE_END_1 = 115+1
@@ -108,9 +108,6 @@ def phmm_main_instruction():
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 10, 0, mv));                          # out = gr[10]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 11, 0, mv));                          # out = gr[11]
-    for i in range(PHMM_COMPUTE_INSTRUCTION_NUM):
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
-        f.write(data_movement_instruction(out_port, comp_ib, 0, 0, 0, 0, 0, 0, i, 0, mv));                  # out = instr[i]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(gr, gr, 1, 0, 6, 0, 1, 0, 2, 3, add))                                 # gr[6] = gr[2] + gr[3]
     for i in range(4):
@@ -389,13 +386,10 @@ def pe_instruction(i):
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 2, 0, mv))                           # out = reg[2]
     f.write(data_movement_instruction(reg, in_port, 0, 0, 22, 0, 0, 0, 0, 0, mv))                           # reg[22] = in
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 8, 0, mv))                           # out = reg[8]
-    f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, 0, 0, 0, 0, 0, 0, mv))                       # ir[0] = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 22, 0, mv))                          # out = reg[22]
-    for j in range(PHMM_COMPUTE_INSTRUCTION_NUM-1):
-        f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, j+1, 0, 0, 0, 0, 0, mv))                 # ir[j+1] = in
-        f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, j, 0, mv))                  # out = ir[j]
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op                 19 + i
-    f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, PHMM_COMPUTE_INSTRUCTION_NUM-1, 0, mv))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     for j in range(2):
         f.write(data_movement_instruction(reg, 0, 0, 0, j+6, 0, 0, 0, 0, 0, si))                            # reg[j+6] = 0
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op

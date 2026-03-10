@@ -162,7 +162,7 @@ void addr_regfile::write(int* write_addr, int* write_data, int n){
     for(int i = 0; i < n; i++){
         if (write_addr[i] != -1){
             if (write_addr[i] >= 0 && write_addr[i] < buffer_size)
-                buffer[write_addr[i]] = write_data[i];
+                st(write_addr[i], write_data[i]);
             else fprintf(stderr, "addr_regfile write addr error. %d outside buffsize %d\n", write_addr[i], buffer_size);
         }
     }

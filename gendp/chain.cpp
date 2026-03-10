@@ -205,6 +205,10 @@ void chain_simulation(char *inputFileName, char *outputFileName, FILE *fp, int s
     for (i = 0; i < CHAIN_COMPUTE_INSTRUCTION_NUM; i++) {
         pe_array_unit->compute_instruction_buffer_write_from_ddr(i, chain_compute_instruction[i]);
     }
+    // Flash compute instructions directly into each PE
+    for (i = 0; i < CHAIN_PE_GROUP_SIZE; i++)
+        pe_array_unit->pe_comp_instruction_buffer_write_from_ddr(
+            CHAIN_COMPUTE_INSTRUCTION_NUM, &chain_compute_instruction[0][0], i);
 
     // Load main & pe instructions into pe_array instruction buffer
     for (i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {

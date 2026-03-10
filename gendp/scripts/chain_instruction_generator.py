@@ -7,8 +7,8 @@ from opcodes import *
 CHAIN_COMPUTE_INSTRUCTION_NUM = 12
 
 PE_INIT_CONSTANT_AND_INSTRUCTION = 1
-PE_INIT = 86
-PE_RUN = 105
+PE_INIT = 75
+PE_RUN = 94
     
 def chain_compute():
     
@@ -69,9 +69,6 @@ def chain_main_instruction():
     for i in range(7):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
         f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 2, mv))                    # PE[0] = input[gr[2]++]
-    for i in range(CHAIN_COMPUTE_INSTRUCTION_NUM):
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
-        f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, i, 0, mv))                  # PE[0] = instr[i]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                                  # bne 1 gr[13] 0
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
@@ -160,13 +157,10 @@ def pe_instruction(i):
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 4, 0, mv))                           # out = reg[4]
     f.write(data_movement_instruction(reg, in_port, 0, 0, 22, 0, 0, 0, 0, 0, mv))                           # reg[22] = in
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 5, 0, mv))                           # out = reg[5]
-    f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, 0, 0, 0, 0, 0, 0, mv))                       # ir[0] = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op (was in_instr)
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 22, 0, mv))                          # out = reg[22]
-    for j in range(CHAIN_COMPUTE_INSTRUCTION_NUM-1):
-        f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, j+1, 0, 0, 0, 0, 0, mv))                 # ir[j+1] = in
-        f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, j, 0, mv))                  # out = ir[j]
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                                  # gr[10] = 1            21 + i
-    f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, CHAIN_COMPUTE_INSTRUCTION_NUM-1, 0, mv))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op (was out_instr)
 
     for j in range(63-i):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op

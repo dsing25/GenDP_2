@@ -95,8 +95,10 @@ class InstructionWriter:
         self.file.seek(0)
         lines = self.file.readlines()
         val = int(lines[write_index].strip(), 16)
-        mask = 0xFFFF << 32
-        val = (val & ~mask) | ((new_imm0 & 0xFFFF) << 32)
+        # imm_0 is at bits [49:34]: reg_0(5)+flag_2(1)+flag_3(1)
+        # +imm_1(16)+reg_1(5)+opcode(6) = 34 bits below
+        mask = 0xFFFF << 34
+        val = (val & ~mask) | ((new_imm0 & 0xFFFF) << 34)
         lines[write_index] = hex(val) + "\n"
         self.file.seek(0)
         self.file.writelines(lines)

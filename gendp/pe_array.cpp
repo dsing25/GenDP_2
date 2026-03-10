@@ -425,7 +425,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     SPM_unit->buffer[apply_address_swizzle(GWFA_GS_START + i)] = (int)sub.graphSeq[i];
                 // Set PE gr[14] = ql
                 for (int pe = 0; pe < 4; pe++)
-                    pe_unit[pe]->addr_regfile_unit->buffer[14] = ql;
+                    pe_unit[pe]->addr_regfile_unit->st(14, ql);
             }
             main_addressing_register[15] = gwfa_get_n_a();
         } else if (magic_id == 2) {
@@ -439,9 +439,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         } else if (magic_id == 4) {
             // GWFA begin step: prep wavefront state for next edit distance
             gwfa_begin_step();
-        } else if (magic_id == 5) {
+        } else if (magic_id == 5 && va_regfile[0] != 0) {
             // GWFA debug: print wavefront trace at distance gr[12]
             gwfa_debug_step(main_addressing_register[12]);
+        } else if (magic_id == 5) {
+            // WFA print final score
+            int score = main_addressing_register[12] - 1;
+            printf("qqq %d qqq\n", score);
         } else if (magic_id == 7) {
             // GWFA tile load diags: load 64 diags per PE from cursor gr[14]
             int32_t cursor = main_addressing_register[14];
@@ -647,10 +651,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
 
             magic_wfs_out << std::endl;
-        } else if (magic_id == 5) {
-            // WFA print final score (NOTE: unreachable — caught by GWFA id==5 above)
-            int score = main_addressing_register[12] - 1;
-            printf("qqq %d qqq\n", score);
         } else {
             fprintf(stderr, "ERROR: PE_ARRAY PC=%d cycle=%d unknown magic id %d (payload %d mask 0x%x).\n",
                     *PC, cycle, magic_id, magic_payload, magic_mask);
@@ -1661,8 +1661,6 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         }
 
         pe_unit[0]->load_data = store_data;
-        pe_unit[0]->load_instruction[0] = PE_instruction[0];
-        pe_unit[0]->load_instruction[1] = PE_instruction[1];
 
         if (setting == PE_4_SETTING) {
             for (i = 0; i < 4; i++) {
@@ -1674,11 +1672,9 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                 printf("PE[%d]\t", i);
 #endif
                 pe_unit[i]->run(simd);
-                //zkn pass through systolic connections
+                // Systolic data forwarding
                 if (i < 3) {
                     pe_unit[i+1]->load_data = pe_unit[i]->store_data;
-                    pe_unit[i+1]->load_instruction[0] = pe_unit[i]->store_instruction[0];
-                    pe_unit[i+1]->load_instruction[1] = pe_unit[i]->store_instruction[1];
                 } else if (i == 3) {
                     load_data = pe_unit[3]->store_data;
                 }
@@ -1689,8 +1685,6 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                 if (j > 0) {
                     if (from_fifo) pe_unit[j*4]->load_data = store_data;
                     else pe_unit[j*4]->load_data = pe_unit[j*4-1]->store_data;
-                    pe_unit[j*4]->load_instruction[0] = pe_unit[j*4-1]->store_instruction[0];
-                    pe_unit[j*4]->load_instruction[1] = pe_unit[j*4-1]->store_instruction[1];
                 }
 
                 for (i = 0; i < 4; i++) {
@@ -1700,8 +1694,6 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                     pe_unit[j*4+i]->run(simd);
                     if (i < 3) {
                         pe_unit[j*4+i+1]->load_data = pe_unit[j*4+i]->store_data;
-                        pe_unit[j*4+i+1]->load_instruction[0] = pe_unit[j*4+i]->store_instruction[0];
-                        pe_unit[j*4+i+1]->load_instruction[1] = pe_unit[j*4+i]->store_instruction[1];
                     } else if (j*4+i == 63) {
                         load_data = pe_unit[63]->store_data;
                     }

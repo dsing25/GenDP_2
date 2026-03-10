@@ -6,13 +6,13 @@ from opcodes import *
 BSW_COMPUTE_INSTRUCTION_NUM = 32
 
 PE_INIT_CONSTANT_AND_INSTRUCTION = 1
-PE_GROUP = 47+4
-PE_GROUP_1 = 76+4
-PE_INIT = 109+4
-PE_RUN = 113+4
-PE_GSCORE = 121+4
-PE_EARLY_BERAK = 124+4
-PE_END = 130+4
+PE_GROUP = 47+4-31
+PE_GROUP_1 = 76+4-31
+PE_INIT = 109+4-31
+PE_RUN = 113+4-31
+PE_GSCORE = 121+4-31
+PE_EARLY_BERAK = 124+4-31
+PE_END = 130+4-31
 
 
 
@@ -121,9 +121,6 @@ def bsw_main_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, PE_INIT_CONSTANT_AND_INSTRUCTION, 0, 0, 0, 0, 0, set_PC)) # PE_PC = consts&instr
     for i in range (8):
         f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 2, mv));                   # out = input[gr[2]++]
-    for i in range(BSW_COMPUTE_INSTRUCTION_NUM):
-        f.write(data_movement_instruction(out_port, comp_ib, 0, 0, 0, 0, 0, 0, i, 0, mv));                  # out = instr[i]
-        
     f.write(data_movement_instruction(gr, 0, 0, 0, 8, 0, 1, 0, 2, 3, add))                                   # gr[8] = gr[2] + gr[3]              
     f.write(data_movement_instruction(gr, 0, 0, 0, 9, 0, 1, 0, 8, 3, add))                                   # gr[9] = gr[8] + gr[3]              
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 1, 0, 9, 4, add))                                  # gr[10] = gr[9] + gr[4]              
@@ -247,13 +244,10 @@ def pe_0_instruction():
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 4, 0, mv))                           # out = reg[4]
     f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                             # gr[1] = in
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 5, 0, mv))                           # out = reg[5]
-    f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, 0, 0, 0, 0, 0, 0, mv))                       # ir[0] = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 5, 0, mv))                            # out = gr[1]
-    for i in range(BSW_COMPUTE_INSTRUCTION_NUM-1):
-        f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, i+1, 0, 0, 0, 0, 0, mv))                 # ir[i+1] = in
-        f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, i, 0, mv))                  # out = ir[i]
     f.write(data_movement_instruction(reg, reg, 0, 0, 26, 0, 0, 0, 4, 0, mv))                               # reg[26] = reg[4]
-    f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, 28, 0, mv))                     # out = ir[28]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(reg, reg, 0, 0, 27, 0, 0, 0, 4, 0, mv))                               # reg[27] = reg[4]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(reg, reg, 0, 0, 28, 0, 0, 0, 4, 0, mv))                               # reg[28] = reg[4]
@@ -451,13 +445,10 @@ def pe_1_instruction():
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 4, 0, mv))                           # out = reg[4]
     f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                             # gr[1] = in
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 5, 0, mv))                           # out = reg[5]
-    f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, 0, 0, 0, 0, 0, 0, mv))                       # ir[0] = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 5, 0, mv))                            # out = gr[1]
-    for i in range(BSW_COMPUTE_INSTRUCTION_NUM-1):
-        f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, i+1, 0, 0, 0, 0, 0, mv))                 # ir[i+1] = in
-        f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, i, 0, mv))                  # out = ir[i]
     f.write(data_movement_instruction(reg, reg, 0, 0, 26, 0, 0, 0, 4, 0, mv))                               # reg[26] = reg[4]
-    f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, 28, 0, mv))                     # out = ir[28]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(reg, reg, 0, 0, 27, 0, 0, 0, 4, 0, mv))                               # reg[27] = reg[4]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(reg, reg, 0, 0, 28, 0, 0, 0, 4, 0, mv))                               # reg[28] = reg[4]
@@ -660,13 +651,10 @@ def pe_2_instruction():
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 4, 0, mv))                           # out = reg[4]
     f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                             # gr[1] = in
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 5, 0, mv))                           # out = reg[5]
-    f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, 0, 0, 0, 0, 0, 0, mv))                       # ir[0] = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 5, 0, mv))                            # out = gr[1]
-    for i in range(BSW_COMPUTE_INSTRUCTION_NUM-1):
-        f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, i+1, 0, 0, 0, 0, 0, mv))                 # ir[i+1] = in
-        f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, i, 0, mv))                  # out = ir[i]
     f.write(data_movement_instruction(reg, reg, 0, 0, 26, 0, 0, 0, 4, 0, mv))                               # reg[26] = reg[4]
-    f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, 28, 0, mv))                     # out = ir[28]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(reg, reg, 0, 0, 27, 0, 0, 0, 4, 0, mv))                               # reg[27] = reg[4]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(reg, reg, 0, 0, 28, 0, 0, 0, 4, 0, mv))                               # reg[28] = reg[4]
@@ -840,13 +828,10 @@ def pe_3_instruction():
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 4, 0, mv))                           # out = reg[4]
     f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                             # gr[1] = in
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 5, 0, mv))                           # out = reg[5]
-    f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, 0, 0, 0, 0, 0, 0, mv))                       # ir[0] = in
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 5, 0, mv))                            # out = gr[1]
-    for i in range(BSW_COMPUTE_INSTRUCTION_NUM-1):
-        f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, i+1, 0, 0, 0, 0, 0, mv))                 # ir[i+1] = in
-        f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, i, 0, mv))                  # out = ir[i]
     f.write(data_movement_instruction(reg, reg, 0, 0, 26, 0, 0, 0, 4, 0, mv))                               # reg[26] = reg[4]
-    f.write(data_movement_instruction(out_instr, comp_ib, 0, 0, 0, 0, 0, 0, 28, 0, mv))                     # out = ir[28]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(reg, reg, 0, 0, 27, 0, 0, 0, 4, 0, mv))                               # reg[27] = reg[4]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(reg, reg, 0, 0, 28, 0, 0, 0, 4, 0, mv))                               # reg[28] = reg[4]

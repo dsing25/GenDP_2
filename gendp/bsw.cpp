@@ -343,6 +343,10 @@ void bsw_simulation(char *inputFileName, char *outputFileName, FILE *fp, int sho
     for (int i = 0; i < n_comp_instructions; i++) {
         pe_array_unit->compute_instruction_buffer_write_from_ddr(i, compute_instruction[i]);
     }
+    // Flash compute instructions directly into each PE
+    for (int i = 0; i < pe_group_size; i++)
+        pe_array_unit->pe_comp_instruction_buffer_write_from_ddr(
+            n_comp_instructions, &compute_instruction[0][0], i);
 
     // Load main & pe instructions into pe_array instruction buffer
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {

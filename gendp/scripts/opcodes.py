@@ -8,9 +8,9 @@ ctrl_ib = 4
 in_buf = 5
 out_buf = 6
 in_port = 7
-in_instr = 8
+gr_lo = 8   # lower 16-bit subregister of gr
 out_port = 9
-out_instr = 10
+gr_hi = 10  # upper 16-bit subregister of gr
 S2 = 15
 fifo = [11, 12, 13, 14]
 

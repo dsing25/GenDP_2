@@ -65,7 +65,6 @@ class pe {
 
         // ld/st data
         int load_data, store_data;
-        unsigned long store_instruction[COMP_INSTR_BUFFER_GROUP_SIZE], load_instruction[COMP_INSTR_BUFFER_GROUP_SIZE];
 
         // public for magic instruction initialization
         addr_regfile *addr_regfile_unit = new addr_regfile(ADDR_REGISTER_NUM);
@@ -75,7 +74,7 @@ class pe {
 
     private:
         //helper
-        int* get_output_dest(int dest, int rd);
+        void set_output_dest(int dest, int rd, int value);
 
         unsigned long instruction[2];
         // ld/st control signal

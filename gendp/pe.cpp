@@ -58,8 +58,6 @@ pe::pe(int _id, SPM* spm) {
     comp_instr_load = 0, comp_instr_store = 0,
     comp_reg_load_addr = 0, comp_reg_store_addr = 0, addr_reg_load_addr = 0, addr_reg_store_addr = 0, SPM_load_addr = 0, SPM_store_addr = 0,
     comp_instr_load_addr = 0, comp_instr_store_addr = 0,
-    store_instruction[0] = 0; store_instruction[1] = 0;
-    load_instruction[0] = 0; load_instruction[1] = 0;
     instruction[0] = 0; instruction[1] = 0;
     comp_PC = COMP_INSTR_BUFFER_GROUP_NUM - 1;
     PC[0] = 0;
@@ -81,8 +79,6 @@ void pe::reset() {
     comp_instr_load = 0, comp_instr_store = 0,
     comp_reg_load_addr = 0, comp_reg_store_addr = 0, addr_reg_load_addr = 0, addr_reg_store_addr = 0, SPM_load_addr = 0, SPM_store_addr = 0,
     comp_instr_load_addr = 0, comp_instr_store_addr = 0,
-    store_instruction[0] = 0; store_instruction[1] = 0;
-    load_instruction[0] = 0; load_instruction[1] = 0;
     instruction[0] = 0; instruction[1] = 0;
     comp_PC = COMP_INSTR_BUFFER_GROUP_NUM - 1;
     PC[0] = 0;
@@ -130,6 +126,8 @@ void pe::recieve_spm_data(int data[LINE_SIZE]){
             }
             break;
         case CTRL_GR:
+        case CTRL_GR_LO:
+        case CTRL_GR_HI:
             {
             int val =
                 data[outstanding_req.spm_addr & 1];
@@ -137,8 +135,9 @@ void pe::recieve_spm_data(int data[LINE_SIZE]){
                 val = (val >> outstanding_req.bp_shift)
                     & 0x3;
             }
-            addr_regfile_unit->buffer[
-                outstanding_req.addr] = val;
+            addr_regfile_unit->st(
+                outstanding_req.addr, val,
+                outstanding_req.dst);
             }
 #ifdef PROFILE
             printf("gr[%d] = %d\n",
@@ -311,9 +310,8 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
     data.data[0] = 0;
     int source_addr = 0;
     
-    if (reg_immBar_flag) source_addr = addr_regfile_unit->buffer[rs1] + addr_regfile_unit->buffer[rs2];
-    else source_addr = rs1 + addr_regfile_unit->buffer[rs2];
-    
+    if (reg_immBar_flag) source_addr = addr_regfile_unit->at(rs1) + addr_regfile_unit->at(rs2);
+    else source_addr = rs1 + addr_regfile_unit->at(rs2);
 
 #ifdef DEBUG
     printf("src: %d reg_immBar_flag: %d reg_imm_1: %d reg_1: %d src_addr: %d\n", source_pos, reg_immBar_flag, rs1, rs2, source_addr);
@@ -339,12 +337,15 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
 #ifdef PROFILE
         printf(" to ");
 #endif
-    } else if (source_pos == CTRL_GR) {
+    } else if (source_pos == CTRL_GR
+            || source_pos == CTRL_GR_LO
+            || source_pos == CTRL_GR_HI) {
         int n_loads = single_data ? 1 : LINE_SIZE;
         for (int i = 0; i < n_loads; i++) {
             int addr = source_addr + i;
             if (addr >= 0 && addr < ADDR_REGISTER_NUM) {
-                data.data[i] = addr_regfile_unit->buffer[addr];
+                data.data[i] = addr_regfile_unit->at(
+                    addr, source_pos);
             } else {
                 fprintf(stderr, "PE[%d] load gr addr %d error.\n", id, addr);
                 exit(-1);
@@ -403,12 +404,6 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
     else
         printf("%d from input data port to ", data.data[0]);
 #endif
-    } else if (source_pos == CTRL_IN_INSTR) {
-        instruction[0] = load_instruction[0];
-        instruction[1] = load_instruction[1];
-#ifdef PROFILE
-        printf("%lx %lx from input comp instruction port to ", instruction[0], instruction[1]);
-#endif
     } else {
         fprintf(stderr, "source_pos error. source_pos=%d\n",source_pos);
         exit(-1);
@@ -420,8 +415,8 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
 
     int dest_addr = 0;
 
-    if (reg_immBar_flag) dest_addr = addr_regfile_unit->buffer[rs1] + addr_regfile_unit->buffer[rs2];
-    else dest_addr = rs1 + addr_regfile_unit->buffer[rs2];
+    if (reg_immBar_flag) dest_addr = addr_regfile_unit->at(rs1) + addr_regfile_unit->at(rs2);
+    else dest_addr = rs1 + addr_regfile_unit->at(rs2);
 
 #ifdef DEBUG
     printf("dest: %d reg_immBar_flag: %d reg_imm_1: %d reg_1: %d src_addr: %d\n", dest_pos, reg_immBar_flag, rs1, rs2, dest_addr);
@@ -429,6 +424,7 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
     if (src_pos == CTRL_SPM) {
         //in this case we need to wait a cycle, so we put it into outstanding
         if (dest_pos != CTRL_REG && dest_pos != CTRL_GR
+            && dest_pos != CTRL_GR_LO && dest_pos != CTRL_GR_HI
             && dest_pos != CTRL_OUT_PORT) {
             fprintf(stderr,
                 "Error: unsupported dest %d for SPM source"
@@ -465,11 +461,18 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
 #ifdef PROFILE
             printf("reg[%d].\t", dest_addr);
 #endif
-        } else if (dest_pos == CTRL_GR) {
+        } else if (dest_pos == CTRL_GR
+                || dest_pos == CTRL_GR_LO
+                || dest_pos == CTRL_GR_HI) {
             if (dest_addr >= 0 && dest_addr < ADDR_REGISTER_NUM) {
-                *ctrl_write_datum = data.data[0];
-                *ctrl_write_addr = dest_addr;
-
+                if (dest_pos == CTRL_GR) {
+                    *ctrl_write_datum = data.data[0];
+                    *ctrl_write_addr = dest_addr;
+                } else {
+                    // Subregister: write directly, bypass ctrl_write
+                    addr_regfile_unit->st(
+                        dest_addr, data.data[0], dest_pos);
+                }
 #ifdef PROFILE
                 printf("gr[%d].\t", dest_addr);
 #endif
@@ -517,13 +520,7 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
 #ifdef PROFILE
             printf("out port.\t");
 #endif
-        } else if (dest_pos == 10) {
-            store_instruction[0] = instruction[0];
-            store_instruction[1] = instruction[1];
-#ifdef PROFILE
-            printf("output comp instruction port.\t");
-#endif
-        } else { 
+        } else {
             fprintf(stderr, "dest_addr error.\t");
             exit(-1);
         }
@@ -623,7 +620,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 int *tile_aout = spm + 1024; // offset 1024
                 int *node_info = spm + 128;  // offset 128
                 int *tile_intv = spm + 640;  // offset 640
-                int32_t ql = addr_regfile_unit->buffer[14]; // gr[14] = query length
+                int32_t ql = addr_regfile_unit->at(14); // gr[14] = query length
                 int32_t tb_n = 0, ta_n = 0;
                 int32_t intv_n = 0;
                 int32_t i = 0, node_idx = -1;
@@ -740,10 +737,10 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         rd = reg_imm_0;
         rs1 = reg_imm_1;
         rs2 = reg_1;
-        add_a = addr_regfile_unit->buffer[rs1];
-        add_b = addr_regfile_unit->buffer[rs2];
+        add_a = addr_regfile_unit->at(rs1);
+        add_b = addr_regfile_unit->at(rs2);
         sum = add_a + add_b;
-        *get_output_dest(dest, rd) = sum;
+        set_output_dest(dest, rd, sum);
 #ifdef PROFILE
         printf("add gr[%d] gr[%d] gr[%d] (%d %d %d)\t", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -752,10 +749,10 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         rd = reg_imm_0;
         rs1 = reg_imm_1;
         rs2 = reg_1;
-        add_a = addr_regfile_unit->buffer[rs1];
-        add_b = addr_regfile_unit->buffer[rs2];
+        add_a = addr_regfile_unit->at(rs1);
+        add_b = addr_regfile_unit->at(rs2);
         sum = add_a - add_b;
-        *get_output_dest(dest, rd) = sum;
+        set_output_dest(dest, rd, sum);
 #ifdef PROFILE
         printf("sub gr[%d] gr[%d] gr[%d] (%d %d %d)\t", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -765,9 +762,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         imm = sext_imm_1;
         rs2 = reg_1;
         add_a = imm;
-        add_b = addr_regfile_unit->buffer[rs2];
+        add_b = addr_regfile_unit->at(rs2);
         sum = add_a + add_b;
-        *get_output_dest(dest, rd) = sum;
+        set_output_dest(dest, rd, sum);
 #ifdef PROFILE
         printf("addi gr[%d] %d gr[%d] (%d %d %d)\t", rd, imm, rs2, sum, add_a, add_b);
 #endif
@@ -796,7 +793,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         immediate_data.data[0] = sext_imm_1;
         store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, immediate_data, simd, ctrl_write_addr, ctrl_write_datum);
         if (reg_auto_increasement_flag_0)
-            addr_regfile_unit->buffer[reg_0]++;
+            addr_regfile_unit->st(reg_0, addr_regfile_unit->at(reg_0) + 1);
         (*PC)++;
     } else if (opcode == 5) {       // mv dest src imm/reg(reg(++)) imm/reg(reg(++))
 #ifdef PROFILE
@@ -812,9 +809,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         }
 
         if (reg_auto_increasement_flag_0)
-            addr_regfile_unit->buffer[reg_0]++;
+            addr_regfile_unit->st(reg_0, addr_regfile_unit->at(reg_0) + 1);
         if (reg_auto_increasement_flag_1)
-            addr_regfile_unit->buffer[reg_1]++;
+            addr_regfile_unit->st(reg_1, addr_regfile_unit->at(reg_1) + 1);
         (*PC)++;
     } else if (opcode == 8) {       // bne rs1 rs2 offset
         rs1 = sext_imm_1;
@@ -822,9 +819,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 #ifdef PROFILE
         printf("bne %d %d %d", rs1, rs2, sext_imm_0);
 #endif
-        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->buffer[rs1];
+        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->at(rs1);
         else comp_0 = sext_imm_1;
-        comp_1 = addr_regfile_unit->buffer[rs2];
+        comp_1 = addr_regfile_unit->at(rs2);
 #ifdef PROFILE
         printf(" (%d %d)", comp_0, comp_1);
 #endif
@@ -845,9 +842,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 #ifdef PROFILE
         printf("beq %d %d %d", rs1, rs2, sext_imm_0);
 #endif
-        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->buffer[rs1];
+        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->at(rs1);
         else comp_0 = sext_imm_1;
-        comp_1 = addr_regfile_unit->buffer[rs2];
+        comp_1 = addr_regfile_unit->at(rs2);
 #ifdef PROFILE
         printf(" (%d %d)", comp_0, comp_1);
 #endif
@@ -868,9 +865,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 #ifdef PROFILE
         printf("bge %d %d %d", rs1, rs2, sext_imm_0);
 #endif
-        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->buffer[rs1];
+        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->at(rs1);
         else comp_0 = sext_imm_1;
-        comp_1 = addr_regfile_unit->buffer[rs2];
+        comp_1 = addr_regfile_unit->at(rs2);
 #ifdef PROFILE
         printf(" (%d %d)", comp_0, comp_1);
 #endif
@@ -891,9 +888,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 #ifdef PROFILE
         printf("blt %d %d %d", rs1, rs2, sext_imm_0);
 #endif
-        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->buffer[rs1];
+        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->at(rs1);
         else comp_0 = sext_imm_1;
-        comp_1 = addr_regfile_unit->buffer[rs2];
+        comp_1 = addr_regfile_unit->at(rs2);
 #ifdef PROFILE
         printf(" (%d %d)", comp_0, comp_1);
 #endif
@@ -932,12 +929,12 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
-        int operand1 = addr_regfile_unit->buffer[rs2];
+        int operand1 = addr_regfile_unit->at(rs2);
         //we want arithmetic shift right as below, but this is compiler dependent. Not in c++ std
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
         int shift_result = operand1 / (1<<reg_imm_1);
-        *get_output_dest(dest,rd) = shift_result;
+        set_output_dest(dest, rd, shift_result);
         (*PC)++;
 #ifdef PROFILE
         printf("rShift gr[%d] = gr[%d] >> %d (%d) \n", rd, rs2, reg_imm_1, operand1);
@@ -946,12 +943,12 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
-        int operand1 = addr_regfile_unit->buffer[rs2];
+        int operand1 = addr_regfile_unit->at(rs2);
         //we want arithmetic shift right as below, but this is compiler dependent. Not in c++ std
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
         int shift_result = operand1 <<reg_imm_1;
-        *get_output_dest(dest,rd) = shift_result;
+        set_output_dest(dest, rd, shift_result);
         (*PC)++;
 #ifdef PROFILE
         printf("lShift gr[%d] = gr[%d] << %d (%d) \n", rd, rs2, reg_imm_1, operand1);
@@ -959,9 +956,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     } else if (opcode == CTRL_ANDI) {      // AND
         rd = reg_imm_0;
         rs2 = reg_1;
-        int operand1 = addr_regfile_unit->buffer[rs2];
+        int operand1 = addr_regfile_unit->at(rs2);
         int and_result = operand1 & reg_imm_1;
-        *get_output_dest(dest,rd) = and_result;
+        set_output_dest(dest, rd, and_result);
         (*PC)++;
 #ifdef PROFILE
         printf("andi gr[%d] = gr[%d] & %d (%d) \n", rd, rs2, reg_imm_1, operand1);
@@ -970,10 +967,10 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         rd = reg_imm_0;
         imm = sext_imm_1;
         rs2 = reg_1;
-        add_a = addr_regfile_unit->buffer[rs2];
+        add_a = addr_regfile_unit->at(rs2);
         add_b = imm;
         sum = add_a - add_b;
-        *get_output_dest(dest, rd) = sum;
+        set_output_dest(dest, rd, sum);
 #ifdef PROFILE
         printf("subi gr[%d] gr[%d] %d (%d %d %d)\t", rd, rs2, imm, sum, add_a, add_b);
 #endif
@@ -994,9 +991,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         }
 
         if (reg_auto_increasement_flag_0)
-            addr_regfile_unit->buffer[reg_0]++;
+            addr_regfile_unit->st(reg_0, addr_regfile_unit->at(reg_0) + 1);
         if (reg_auto_increasement_flag_1)
-            addr_regfile_unit->buffer[reg_1]++;
+            addr_regfile_unit->st(reg_1, addr_regfile_unit->at(reg_1) + 1);
         (*PC)++;
     } else if (opcode == CTRL_MVDQ) {
         fprintf(stderr, "not implemented yet\n");
@@ -1020,9 +1017,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         }
 
         if (reg_auto_increasement_flag_0)
-            addr_regfile_unit->buffer[reg_0]++;
+            addr_regfile_unit->st(reg_0, addr_regfile_unit->at(reg_0) + 1);
         if (reg_auto_increasement_flag_1)
-            addr_regfile_unit->buffer[reg_1]++;
+            addr_regfile_unit->st(reg_1, addr_regfile_unit->at(reg_1) + 1);
         (*PC)++;
     } else if (opcode == CTRL_MVI2) {
 #ifdef PROFILE
@@ -1033,11 +1030,11 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         int bp_addr;
         if (reg_immBar_flag_1)
             bp_addr =
-                addr_regfile_unit->buffer[sext_imm_1]
-                + addr_regfile_unit->buffer[reg_1];
+                addr_regfile_unit->at(sext_imm_1)
+                + addr_regfile_unit->at(reg_1);
         else
             bp_addr = sext_imm_1
-                + addr_regfile_unit->buffer[reg_1];
+                + addr_regfile_unit->at(reg_1);
         int bp_offset = bp_addr & 0xF;
         int word_addr = bp_addr >> 4;
 
@@ -1056,11 +1053,11 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         int dest_addr;
         if (reg_immBar_flag_0)
             dest_addr =
-                addr_regfile_unit->buffer[sext_imm_0]
-                + addr_regfile_unit->buffer[reg_0];
+                addr_regfile_unit->at(sext_imm_0)
+                + addr_regfile_unit->at(reg_0);
         else
             dest_addr = sext_imm_0
-                + addr_regfile_unit->buffer[reg_0];
+                + addr_regfile_unit->at(reg_0);
         assert(!outstanding_req.valid);
         outstanding_req.valid = true;
         outstanding_req.single_load = true;
@@ -1071,9 +1068,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         outstanding_req.two_bit_extract = true;
 
         if (reg_auto_increasement_flag_0)
-            addr_regfile_unit->buffer[reg_0]++;
+            addr_regfile_unit->st(reg_0, addr_regfile_unit->at(reg_0) + 1);
         if (reg_auto_increasement_flag_1)
-            addr_regfile_unit->buffer[reg_1]++;
+            addr_regfile_unit->st(reg_1, addr_regfile_unit->at(reg_1) + 1);
         (*PC)++;
     } else if (opcode == CTRL_CALL) {
         ras = *PC + 1;
@@ -1093,21 +1090,22 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     return 0;
 }
 
-int* pe::get_output_dest(int dest, int rd){
-    // write out only supported for GR or out buffer
-    if (dest == CTRL_GR){
-        return &(addr_regfile_unit->buffer[rd]);
-    } else if (dest == CTRL_OUT_PORT){
-        return &store_data;
+void pe::set_output_dest(int dest, int rd, int value) {
+    if (dest == CTRL_GR || dest == CTRL_GR_LO
+            || dest == CTRL_GR_HI) {
+        addr_regfile_unit->st(rd, value, dest);
+    } else if (dest == CTRL_OUT_PORT) {
+        store_data = value;
     } else {
-        fprintf(stderr, 
-                "Only dest CTRL_GR and CTRL_OUT_BUF are supported for pe, non MV CTRL instr. dest = %d; PC = %d; cycle = %d\n", dest, *PC, cycle);
+        fprintf(stderr,
+                "Unsupported dest %d for pe arithmetic."
+                " PC=%d cycle=%d\n", dest, *PC, cycle);
         exit(-1);
     }
 }
 
 int pe::get_gr_10() {
-    return addr_regfile_unit->buffer[10];
+    return addr_regfile_unit->at(10);
 }
 
 void pe::show_comp_reg() {

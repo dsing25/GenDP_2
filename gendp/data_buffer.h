@@ -2,6 +2,7 @@
 #define DATA_BUFFER_H
 #include "sys_def.h"
 #include "simulator.h"
+#include <cassert>
 #include <deque>
 #include <vector>
 
@@ -103,6 +104,46 @@ class addr_regfile {
         void show_data(int addr);
 
         void write(int* write_addr, int* write_data, int n);
+
+        // Subregister read. pos: CTRL_GR=full,
+        // CTRL_GR_LO=lo16, CTRL_GR_HI=hi16
+        int at(int idx, int pos = CTRL_GR) const {
+            assert(idx >= 0 && idx < buffer_size);
+            if (pos == CTRL_GR) return buffer[idx];
+            if (pos == CTRL_GR_LO)
+                return (int32_t)(int16_t)(
+                    buffer[idx] & 0xFFFF);
+            if (pos == CTRL_GR_HI)
+                return (int32_t)(int16_t)(
+                    (uint32_t)buffer[idx] >> 16);
+            fprintf(stderr,
+                "addr_regfile::at invalid pos %d\n", pos);
+            exit(-1);
+        }
+
+        // Subregister write. pos: CTRL_GR=full,
+        // CTRL_GR_LO=lo16, CTRL_GR_HI=hi16
+        void st(int idx, int val, int pos = CTRL_GR) {
+            assert(idx >= 0 && idx < buffer_size);
+            if (pos == CTRL_GR) {
+                buffer[idx] = val; return;
+            }
+            if (pos == CTRL_GR_LO) {
+                uint16_t v = (uint16_t)(int16_t)val;
+                buffer[idx] = (buffer[idx] & (int)0xFFFF0000)
+                    | v;
+                return;
+            }
+            if (pos == CTRL_GR_HI) {
+                uint16_t v = (uint16_t)(int16_t)val;
+                buffer[idx] = (buffer[idx] & 0xFFFF)
+                    | ((uint32_t)v << 16);
+                return;
+            }
+            fprintf(stderr,
+                "addr_regfile::st invalid pos %d\n", pos);
+            exit(-1);
+        }
 
         int *buffer;
         int buffer_size;
