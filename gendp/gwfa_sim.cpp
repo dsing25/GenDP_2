@@ -329,6 +329,14 @@ void gwfa_simulation(
         memset(pa->va_regfile, 0,
             sizeof(pa->va_regfile));
 
+        // Reset PE state (SPM, registers, PCs)
+        for (int pe = 0; pe < 4; pe++)
+            pa->pe_unit[pe]->reset();
+        // Clear FIFOs
+        for (int fi = 0; fi < FIFO_GROUP_NUM; fi++)
+            for (int fj = 0; fj < FIFO_GROUP_SIZE; fj++)
+                pa->fifo_unit[fi][fj].clear();
+
         // Populate va_regfile with graph pointers
         // [0]=graphSeq [1]=seq_off [2]=seq_len
         // [3]=arc [4]=idx [5]=q

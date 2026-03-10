@@ -168,4 +168,22 @@ inline int get_base_opcode(int opcode) {
 #define PATTERN_START 512
 #define TEXT_START 1160
 
+// GWFA interleaved SPM regions (pre-swizzle addresses)
+#define GWFA_Q_START  24064  // 94KB
+#define GWFA_GS_START 25088  // 98KB
+
+// Apply address swizzling for mvi instruction
+// Keeps bit[0] as line offset, moves bits[2:1] to top
+inline int apply_address_swizzle(int addr) {
+    if (addr < 0 || addr > SPM_ADDR_NUM) {
+        fprintf(stderr, "Error: address %d out of bound for swizzling\n", addr);
+        exit(-1);
+    }
+    int addr_masked = addr & ((1u << ADDR_LEN) - 1);
+    int line_off  = addr_masked & 1;
+    int bank_bits = (addr_masked >> 1) & ((1u << N_SWIZZLE_BITS) - 1);
+    int rest      = addr_masked >> (N_SWIZZLE_BITS + 1);
+    return line_off | (rest << 1) | (bank_bits << (ADDR_LEN - N_SWIZZLE_BITS));
+}
+
 #endif

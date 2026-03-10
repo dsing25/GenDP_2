@@ -4,26 +4,40 @@
 #include <cassert>
 #include "simulator.h"
 #include <iostream>
-extern "C" {
-#include "kernel/Gwfa/gwfa.h"
+// TEMPORARY: magic-8 reads seq data from interleaved SPM.
+// Will be replaced once extend runs in the PE pipeline.
+static inline int get_2bit_spm(const int *spm_buf, int pre_swizzle_base, int char_idx) {
+    int phys = apply_address_swizzle(pre_swizzle_base + (char_idx >> 4));
+    return ((uint32_t)spm_buf[phys] >> ((char_idx & 0xF) << 1)) & 0x3;
 }
 
-// Apply address swizzling for mvi instruction
-// Keeps bit[0] as line offset, moves bits[2:1] to top
-inline int apply_address_swizzle(int addr) {
-    if (addr < 0 || addr > SPM_ADDR_NUM) {
-        fprintf(stderr, "Error: address %d out of bound for swizzling\n", addr);
-        exit(-1);
+static inline int32_t gwf_extend1_pe(
+    int32_t d, int32_t k, int32_t vl, const int *spm_buf, int32_t ts_off, int32_t ql) {
+    int32_t max_k = (ql - d < vl ? ql - d : vl) - 1;
+    while (k < max_k
+        && get_2bit_spm(spm_buf, GWFA_GS_START, ts_off + k + 1)
+           == get_2bit_spm(spm_buf, GWFA_Q_START, d + k + 1))
+        ++k;
+    return k;
+}
+
+static inline void emit_b_tile_pe(
+    int *B_a, int32_t *B_n,
+    int *t_intv, int32_t *t_intv_n,
+    uint32_t vd, int32_t k,
+    int32_t v, int32_t vl, int32_t ql) {
+    int32_t d = (int32_t)(vd & 0xFFFF) - 0x4000;
+    if (d + k < ql && k < vl) {
+        int idx = (*B_n)++;
+        B_a[2*idx] = (int)vd;
+        B_a[2*idx+1] = k;
+    } else if (k == vl) {
+        uint32_t vd0 = ((uint32_t)v << 16)
+            | (0x4000 + d);
+        t_intv[2*(*t_intv_n)] = (int)vd0;
+        t_intv[2*(*t_intv_n)+1] = (int)(vd0 + 1);
+        (*t_intv_n)++;
     }
-    int addr_masked = addr & ((1u << ADDR_LEN) - 1);
-    int line_off  = addr_masked & 1;
-    int bank_bits = (addr_masked >> 1)
-        & ((1u << N_SWIZZLE_BITS) - 1);
-    int rest      = addr_masked >> (N_SWIZZLE_BITS + 1);
-    int new_addr  = line_off
-        | (rest << 1)
-        | (bank_bits << (ADDR_LEN - N_SWIZZLE_BITS));
-    return new_addr;
 }
 
 bool check_legal_mv(int src, int dest) {
@@ -589,31 +603,209 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     if (is_magic) {
         int magic_id = magic_payload;
         if (magic_id == 8) {
-            gwfa_tile_compute(&SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE]);
+            int *spm = &SPM_unit->buffer[
+                id * SPM_BANK_GROUP_SIZE];
+            int32_t tile_n = spm[1155];
+            if (tile_n > 0) {
+                int32_t n_nodes = spm[1154];
+                int *tile_a = spm;
+                int *tile_b = spm + 256;
+                int *tile_aout = spm + 1024;
+                int *node_info = spm + 128;
+                int *tile_intv = spm + 640;
+                int32_t ql =
+                    addr_regfile_unit->buffer[14];
+                int32_t tb_n = 0, ta_n = 0;
+                int32_t intv_n = 0;
+                int32_t i = 0, node_idx = -1;
+                uint32_t prev_v = UINT32_MAX;
+                while (i < tile_n) {
+                    int32_t v =
+                        (uint32_t)tile_a[2*i] >> 16;
+                    if (v != (int32_t)prev_v) {
+                        node_idx++; prev_v = v;
+                    }
+                    int32_t ts_off =
+                        node_info[2 * node_idx];
+                    int32_t vl =
+                        node_info[2*node_idx + 1];
+                    int32_t ppk, pk, k, d;
+
+                    tile_a[2*i+1] = gwf_extend1_pe(
+                        (int32_t)((uint32_t)
+                            tile_a[2*i] & 0xFFFF)
+                            - 0x4000,
+                        tile_a[2*i+1], vl,
+                        SPM_unit->buffer,
+                        ts_off, ql);
+                    emit_b_tile_pe(tile_b, &tb_n,
+                        tile_intv, &intv_n,
+                        (uint32_t)tile_a[2*i] - 1,
+                        tile_a[2*i+1] + 1,
+                        v, vl, ql);
+                    d = (int32_t)((uint32_t)
+                        tile_a[2*i] & 0xFFFF)
+                        - 0x4000;
+                    if (tile_a[2*i+1] == vl - 1
+                        || d + tile_a[2*i+1]
+                            == ql - 1) {
+                        tile_aout[2*ta_n] =
+                            tile_a[2*i];
+                        tile_aout[2*ta_n+1] =
+                            tile_a[2*i+1];
+                        ta_n++;
+                    }
+                    ppk = tile_a[2*i+1];
+                    i++;
+
+                    if (i < tile_n
+                        && (uint32_t)tile_a[2*i]
+                            == (uint32_t)tile_a[
+                                2*(i-1)] + 1) {
+                        tile_a[2*i+1] =
+                            gwf_extend1_pe(
+                            (int32_t)((uint32_t)
+                                tile_a[2*i]
+                                & 0xFFFF)
+                                - 0x4000,
+                            tile_a[2*i+1], vl,
+                            SPM_unit->buffer,
+                            ts_off, ql);
+                        k = (ppk > tile_a[2*i+1]
+                            ? ppk
+                            : tile_a[2*i+1]) + 1;
+                        emit_b_tile_pe(tile_b,
+                            &tb_n, tile_intv,
+                            &intv_n,
+                            (uint32_t)tile_a[
+                                2*(i-1)],
+                            k, v, vl, ql);
+                        d = (int32_t)((uint32_t)
+                            tile_a[2*i] & 0xFFFF)
+                            - 0x4000;
+                        if (tile_a[2*i+1] == vl - 1
+                            || d + tile_a[2*i+1]
+                                == ql - 1) {
+                            tile_aout[2*ta_n] =
+                                tile_a[2*i];
+                            tile_aout[2*ta_n+1] =
+                                tile_a[2*i+1];
+                            ta_n++;
+                        }
+                        pk = ppk;
+                        ppk = tile_a[2*i+1];
+                        i++;
+
+                        while (i < tile_n
+                            && (uint32_t)
+                                tile_a[2*i]
+                                == (uint32_t)
+                                tile_a[2*(i-1)]
+                                + 1) {
+                            tile_a[2*i+1] =
+                                gwf_extend1_pe(
+                                (int32_t)(
+                                    (uint32_t)
+                                    tile_a[2*i]
+                                    & 0xFFFF)
+                                    - 0x4000,
+                                tile_a[2*i+1],
+                                vl, SPM_unit->buffer,
+                                ts_off, ql);
+                            k = pk;
+                            if (ppk + 1 > k)
+                                k = ppk + 1;
+                            if (tile_a[2*i+1]
+                                + 1 > k)
+                                k = tile_a[
+                                    2*i+1] + 1;
+                            emit_b_tile_pe(
+                                tile_b, &tb_n,
+                                tile_intv,
+                                &intv_n,
+                                (uint32_t)
+                                tile_a[2*(i-1)],
+                                k, v, vl, ql);
+                            d = (int32_t)(
+                                (uint32_t)
+                                tile_a[2*i]
+                                & 0xFFFF)
+                                - 0x4000;
+                            if (tile_a[2*i+1]
+                                == vl - 1
+                                || d + tile_a[
+                                    2*i+1]
+                                    == ql - 1) {
+                                tile_aout[
+                                    2*ta_n] =
+                                    tile_a[2*i];
+                                tile_aout[
+                                    2*ta_n+1] =
+                                    tile_a[
+                                    2*i+1];
+                                ta_n++;
+                            }
+                            pk = ppk;
+                            ppk = tile_a[2*i+1];
+                            i++;
+                        }
+
+                        k = pk > ppk + 1
+                            ? pk : ppk + 1;
+                        emit_b_tile_pe(tile_b,
+                            &tb_n, tile_intv,
+                            &intv_n,
+                            (uint32_t)tile_a[
+                                2*(i-1)],
+                            k, v, vl, ql);
+                    } else {
+                        emit_b_tile_pe(tile_b,
+                            &tb_n, tile_intv,
+                            &intv_n,
+                            (uint32_t)tile_a[
+                                2*(i-1)],
+                            ppk + 1, v, vl, ql);
+                    }
+
+                    emit_b_tile_pe(tile_b, &tb_n,
+                        tile_intv, &intv_n,
+                        (uint32_t)tile_a[
+                            2*(i-1)] + 1,
+                        tile_a[2*(i-1)+1],
+                        v, vl, ql);
+                }
+                spm[1152] = tb_n;
+                spm[1153] = ta_n;
+                spm[1159] = intv_n;
+            }
         } else if (magic_id == 11) {
             // Boundary sort: compare-and-swap last B of this PE with first B of next PE
             int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
             int tb_n = spm[1152]; // META_OFF
             if (id < 3) {
-                int *next = &SPM_unit->buffer[(id + 1) * SPM_BANK_GROUP_SIZE];
+                int *next = &SPM_unit->buffer[
+                    (id + 1) * SPM_BANK_GROUP_SIZE];
                 int next_tb_n = next[1152];
                 if (tb_n > 0 && next_tb_n > 0) {
                     int my_off = 256 + 2 * (tb_n - 1);
                     int nx_off = 256;
-                    if ((uint32_t)spm[my_off] > (uint32_t)next[nx_off]) {
-                        int tmp_vd = spm[my_off], tmp_k = spm[my_off + 1];
+                    if ((uint32_t)spm[my_off]
+                        > (uint32_t)next[nx_off]) {
+                        int tmp_vd = spm[my_off];
+                        int tmp_k = spm[my_off + 1];
                         spm[my_off] = next[nx_off];
-                        spm[my_off + 1] = next[nx_off + 1];
+                        spm[my_off + 1] =
+                            next[nx_off + 1];
                         next[nx_off] = tmp_vd;
                         next[nx_off + 1] = tmp_k;
                     }
                 }
             } else {
-                // PE 3: push last B entry to FIFO, decrement count
+                // PE 3: push last B to FIFO, decrement count
                 if (tb_n > 0) {
                     int off = 256 + 2 * (tb_n - 1);
-                    fifo_out[0]->push(spm[off]);     // vd
-                    fifo_out[1]->push(spm[off + 1]); // k
+                    fifo_out[0]->push(spm[off]);
+                    fifo_out[1]->push(spm[off + 1]);
                     spm[1152] = tb_n - 1;
                 }
             }

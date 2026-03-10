@@ -407,6 +407,25 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 sub.n_arc = main_addressing_register[18];
                 const uint32_t *q = (const uint32_t*)(uintptr_t)va_regfile[5];
                 gwfa_init(main_addressing_register[16], q, &sub, GWFA_DBG_DEFAULT);
+                // Load query (2-bit packed) into interleaved SPM
+                int32_t ql = main_addressing_register[16];
+                int q_words = (ql + 15) / 16;
+                for (int i = 0; i < q_words; i++)
+                    SPM_unit->buffer[apply_address_swizzle(GWFA_Q_START + i)] = (int)q[i];
+                // Load graphSeq (2-bit packed) into interleaved SPM.
+                // Vertex order in seq_off doesn't match offset order in graphSeq,
+                // so scan all vertices for max extent.
+                int gs_total = 0;
+                for (int v = 0; v < (int)sub.n_vtx; v++) {
+                    int end = (int)sub.seq_off[v] + sub.seq_len[v];
+                    if (end > gs_total) gs_total = end;
+                }
+                int gs_words = (gs_total + 15) / 16;
+                for (int i = 0; i < gs_words; i++)
+                    SPM_unit->buffer[apply_address_swizzle(GWFA_GS_START + i)] = (int)sub.graphSeq[i];
+                // Set PE gr[14] = ql
+                for (int pe = 0; pe < 4; pe++)
+                    pe_unit[pe]->addr_regfile_unit->buffer[14] = ql;
             }
             main_addressing_register[15] = gwfa_get_n_a();
         } else if (magic_id == 2) {
@@ -441,16 +460,20 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int *pe0 = SPM_unit->buffer + 0 * SPM_BANK_GROUP_SIZE;
             int32_t cursor = main_addressing_register[14];
             // 1. Pop FIFO from previous tile, compare-swap with PE0's first B
-            if (cursor > 0) {
+            if (cursor > 0 && fifo_unit[0][0].size() > 0) {
                 int fifo_vd = fifo_unit[0][0].pop();
                 int fifo_k  = fifo_unit[0][1].pop();
-                if (pe0[1152] > 0 && (uint32_t)fifo_vd > (uint32_t)pe0[256]) {
+                if (pe0[1152] > 0
+                    && (uint32_t)fifo_vd > (uint32_t)pe0[256]) {
                     int tmp_vd = pe0[256], tmp_k = pe0[257];
                     pe0[256] = fifo_vd; pe0[257] = fifo_k;
                     fifo_vd = tmp_vd; fifo_k = tmp_k;
                 }
                 gwfa_B_push((uint32_t)fifo_vd, fifo_k);
             }
+            // Signal whether FIFO has entry to flush (for beq guard)
+            main_addressing_register[2] =
+                fifo_unit[0][0].size() > 0 ? 1 : 0;
             // 2. Writeback all PEs
             for (int pe = 0; pe < 4; pe++) {
                 int *pe_spm = SPM_unit->buffer + pe * SPM_BANK_GROUP_SIZE;
