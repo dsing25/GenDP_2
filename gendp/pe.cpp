@@ -4,41 +4,6 @@
 #include <cassert>
 #include "simulator.h"
 #include <iostream>
-// TEMPORARY: magic-8 reads seq data from interleaved SPM.
-// Will be replaced once extend runs in the PE pipeline.
-static inline int get_2bit_spm(const int *spm_buf, int pre_swizzle_base, int char_idx) {
-    int phys = apply_address_swizzle(pre_swizzle_base + (char_idx >> 4));
-    return ((uint32_t)spm_buf[phys] >> ((char_idx & 0xF) << 1)) & 0x3;
-}
-
-static inline int32_t gwf_extend1_pe(
-    int32_t d, int32_t k, int32_t vl, const int *spm_buf, int32_t ts_off, int32_t ql) {
-    int32_t max_k = (ql - d < vl ? ql - d : vl) - 1;
-    while (k < max_k
-        && get_2bit_spm(spm_buf, GWFA_GS_START, ts_off + k + 1)
-           == get_2bit_spm(spm_buf, GWFA_Q_START, d + k + 1))
-        ++k;
-    return k;
-}
-
-static inline void emit_b_tile_pe(
-    int *B_a, int32_t *B_n,
-    int *t_intv, int32_t *t_intv_n,
-    uint32_t vd, int32_t k,
-    int32_t v, int32_t vl, int32_t ql) {
-    int32_t d = (int32_t)(vd & 0xFFFF) - 0x4000;
-    if (d + k < ql && k < vl) {
-        int idx = (*B_n)++;
-        B_a[2*idx] = (int)vd;
-        B_a[2*idx+1] = k;
-    } else if (k == vl) {
-        uint32_t vd0 = ((uint32_t)v << 16)
-            | (0x4000 + d);
-        t_intv[2*(*t_intv_n)] = (int)vd0;
-        t_intv[2*(*t_intv_n)+1] = (int)(vd0 + 1);
-        (*t_intv_n)++;
-    }
-}
 
 bool check_legal_mv(int src, int dest) {
     //TODO come back and add this. Right now some traces (cough cough poa) are illegal
@@ -600,106 +565,318 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     if (is_magic) {
         int magic_id = magic_payload;
         if (magic_id == 8) {
-            // SPM layout (offsets within this PE's bank-group):
-            //   0:    tile_a     — input diags [vd,k] pairs (128 max)
-            //   128:  node_info  — [seq_off, seq_len] per node (64 max)
-            //   256:  tile_b     — output B diags [vd,k] pairs
-            //   640:  tile_intv  — output interval pairs [vd_lo, vd_hi]
-            //   1024: tile_aout  — output A diags (fully-extended entries)
-            //   1152: tb_n       — count of B entries written
-            //   1153: ta_n       — count of A-out entries written
-            //   1154: n_nodes    — number of distinct nodes in tile
-            //   1155: tile_n     — number of input diags in tile_a
-            //   1159: intv_n     — count of interval entries written
-            int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
-            int32_t tile_n = spm[1155]; // input diag count
-            if (tile_n > 0) {
-                int32_t n_nodes = spm[1154]; // node count
-                int *tile_a = spm;           // offset 0
-                int *tile_b = spm + 256;     // offset 256
-                int *tile_aout = spm + 1024; // offset 1024
-                int *node_info = spm + 128;  // offset 128
-                int *tile_intv = spm + 640;  // offset 640
-                int32_t ql = addr_regfile_unit->at(14); // gr[14] = query length
-                int32_t tb_n = 0, ta_n = 0;
-                int32_t intv_n = 0;
-                int32_t i = 0, node_idx = -1;
-                uint32_t prev_v = UINT32_MAX;
-                while (i < tile_n) {
-                    int32_t v = (uint32_t)tile_a[2*i] >> 16;
-                    if (v != (int32_t)prev_v) {
-                        node_idx++; prev_v = v;
-                    }
-                    int32_t ts_off = node_info[2 * node_idx];
-                    int32_t vl = node_info[2*node_idx + 1];
-                    int32_t ppk, pk, k, d;
+            // Register-mapped magic 8: gwfa extend+emit per tile.
+            // All values in gr[]/reg[]/SPM, each op = one ISA instruction.
+            //
+            // gr[]  | name             | notes
+            // ------|------------------|-------------------------------
+            //  0    | (zero)           | hardwired 0
+            //  1 lo | i                | loop index
+            //  1 hi | tile_n           | input diagonal count
+            //  2    | scratch          | was ql; now tmp (d, 2*i, etc.)
+            //  3 lo | tb_n             | B-tile emit count
+            //  3 hi | ta_n             | A-out emit count
+            //  4    | emit_vd / scratch| scratch in extend, emit_vd
+            //  5 lo | intv_n           | interval count
+            //  6 lo | node_idx         | current node index
+            //  6 hi | prev_v           | previous vertex
+            //  7    | scratch          | clobbered by emit_b/check_aout
+            //  8 lo | d + 0x4000       | biased diagonal (in vd)
+            //  8 hi | v                | vertex index   (in vd)
+            //  9    | k                | wavefront offset
+            // 10    | (sync)           | sync flag only
+            // 11    | ts_off           | text-seq offset for node
+            // 12 lo | vl               | vertex length
+            // 13    | emit_k           | emit_b k argument
+            // 14    | ql               | query length (read-only)
+            // 15    | tmp1             | scratch
+            //
+            // reg[] | name    | notes
+            // ------|---------|------------------------------------
+            //  0    | (zero)  | hardwired 0
+            //  1    | pk      | prev-prev k (seq run only)
+            //  2    | ppk     | previous k
+            //  6    | gs_char | graph-seq 2-bit char (extend)
+            //  7    | q_char  | query 2-bit char    (extend)
+            //  8    | max_k   | extend loop bound
+            //  9    | prev_vd | previous tile_a vd
+            // 10    | gs_base | GWFA_GS_START * 16
+            // 11    | q_base  | GWFA_Q_START  * 16
+            constexpr int TILE_A_OFF    = 0;
+            constexpr int NODE_INFO_OFF = 128;
+            constexpr int TILE_B_OFF    = 256;
+            constexpr int TILE_INTV_OFF = 640;
+            constexpr int TILE_AOUT_OFF = 1024;
+            constexpr int META_TB_N     = 1152;
+            constexpr int META_TA_N     = 1153;
+            constexpr int META_TILE_N   = 1155;
+            constexpr int META_INTV_N   = 1159;
 
-                    tile_a[2*i+1] = gwf_extend1_pe( (int32_t)((uint32_t) tile_a[2*i] & 0xFFFF) 
-                            - 0x4000, tile_a[2*i+1], vl, SPM_unit->buffer, ts_off, ql);
-                    emit_b_tile_pe(tile_b, &tb_n, tile_intv, &intv_n, (uint32_t)tile_a[2*i] - 1, 
-                            tile_a[2*i+1] + 1, v, vl, ql);
-                    d = (int32_t)((uint32_t) tile_a[2*i] & 0xFFFF) - 0x4000;
-                    if (tile_a[2*i+1] == vl - 1 || d + tile_a[2*i+1] == ql - 1) {
-                        tile_aout[2*ta_n] = tile_a[2*i];
-                        tile_aout[2*ta_n+1] = tile_a[2*i+1];
-                        ta_n++;
-                    }
-                    ppk = tile_a[2*i+1];
-                    i++;
+            auto &gr  = *addr_regfile_unit;
+            int *reg  = regfile_unit->register_file;
+            int *spm  = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
 
-                    if (i < tile_n && (uint32_t)tile_a[2*i] == (uint32_t)tile_a[ 2*(i-1)] + 1) {
-                        tile_a[2*i+1] = gwf_extend1_pe( (int32_t)((uint32_t) tile_a[2*i] & 0xFFFF)
-                                - 0x4000, tile_a[2*i+1], vl, SPM_unit->buffer, ts_off, ql);
-                        k = (ppk > tile_a[2*i+1] ? ppk : tile_a[2*i+1]) + 1;
-                        emit_b_tile_pe(tile_b, &tb_n, tile_intv, &intv_n, (uint32_t)tile_a[ 2*(i-1)],
-                                k, v, vl, ql);
-                        d = (int32_t)((uint32_t) tile_a[2*i] & 0xFFFF) - 0x4000;
-                        if (tile_a[2*i+1] == vl - 1 || d + tile_a[2*i+1] == ql - 1) {
-                            tile_aout[2*ta_n] = tile_a[2*i];
-                            tile_aout[2*ta_n+1] = tile_a[2*i+1];
-                            ta_n++;
-                        }
-                        pk = ppk;
-                        ppk = tile_a[2*i+1];
-                        i++;
+            // mvi2-style 2-bit extract from interleaved SPM
+            auto mvi2_ld = [&](int base_reg, int off_gr) -> int {
+                int bp = reg[base_reg] + gr.at(off_gr);
+                int phys = apply_address_swizzle(bp >> 4);
+                return (int)(((uint32_t)SPM_unit->buffer[phys]
+                    >> ((bp & 0xF) << 1)) & 0x3);
+            };
 
-                        while (i < tile_n && (uint32_t)tile_a[2*i]==(uint32_t)tile_a[2*(i-1)] + 1){
-                            tile_a[2*i+1] = gwf_extend1_pe( (int32_t)( (uint32_t) 
-                                        tile_a[2*i] & 0xFFFF) - 0x4000, tile_a[2*i+1], vl, 
-                                        SPM_unit->buffer, ts_off, ql);
-                            k = pk;
-                            if (ppk + 1 > k)
-                                k = ppk + 1;
-                            if (tile_a[2*i+1] + 1 > k)
-                                k = tile_a[ 2*i+1] + 1;
-                            emit_b_tile_pe( tile_b, &tb_n, tile_intv, &intv_n, (uint32_t) 
-                                    tile_a[2*(i-1)], k, v, vl, ql);
-                            d = (int32_t)( (uint32_t) tile_a[2*i] & 0xFFFF) - 0x4000;
-                            if (tile_a[2*i+1] == vl - 1 || d + tile_a[ 2*i+1] == ql - 1) {
-                                tile_aout[ 2*ta_n] = tile_a[2*i];
-                                tile_aout[ 2*ta_n+1] = tile_a[ 2*i+1];
-                                ta_n++;
-                            }
-                            pk = ppk;
-                            ppk = tile_a[2*i+1];
-                            i++;
-                        }
-
-                        k = pk > ppk + 1 ? pk : ppk + 1;
-                        emit_b_tile_pe(tile_b, &tb_n, tile_intv, &intv_n, 
-                                (uint32_t)tile_a[ 2*(i-1)], k, v, vl, ql);
-                    } else {
-                        emit_b_tile_pe(tile_b, &tb_n, tile_intv, &intv_n, (uint32_t)tile_a[2*(i-1)],
-                                ppk + 1, v, vl, ql);
-                    }
-
-                    emit_b_tile_pe(tile_b, &tb_n, tile_intv, &intv_n, (uint32_t)tile_a[2*(i-1)] + 1,
-                            tile_a[2*(i-1)+1], v, vl, ql);
+            // --- EMIT_B subroutine ---
+            // In: gr[4]=emit_vd(packed), gr[13]=emit_k
+            // Uses: gr_lo[12]=vl, gr[14]=ql, gr_lo[3]=tb_n,
+            //       gr_lo[5]=intv_n
+            // Clobbers: gr[2], gr[7], gr[15]
+            auto emit_b = [&]() {
+                // d_emit = lo(emit_vd) - 0x4000
+                gr.st(2, gr.at(4, CTRL_GR_LO) - 16384);
+                // emit_k == vl → interval
+                if (gr.at(13) == gr.at(12, CTRL_GR_LO))
+                    goto m8_do_intv;
+                // d_emit + emit_k >= ql → done
+                gr.st(15, gr.at(2) + gr.at(13));
+                if (gr.at(15) >= gr.at(14))
+                    goto m8_emit_done;
+                // emit_k >= vl → done
+                if (gr.at(13) >= gr.at(12, CTRL_GR_LO))
+                    goto m8_emit_done;
+                {   // B emit
+                    gr.st(7, gr.at(3, CTRL_GR_LO) + gr.at(3, CTRL_GR_LO));     // 2*tb_n
+                    spm[TILE_B_OFF + gr.at(7)] = gr.at(4);
+                    spm[TILE_B_OFF + gr.at(7) + 1] = gr.at(13);
+                    gr.st(3, gr.at(15) + 1, CTRL_GR_LO); // tb_n++
+                    return;
                 }
-                spm[1152] = tb_n;   // B count
-                spm[1153] = ta_n;   // A-out count
-                spm[1159] = intv_n; // interval count
+            m8_do_intv:
+                {   // Compose vd0 via subregisters (no shifts)
+                    gr.st(2, gr.at(4, CTRL_GR_LO), CTRL_GR_LO);
+                    gr.st(2, gr.at(4, CTRL_GR_HI), CTRL_GR_HI);
+                    // gr[2] = (v << 16) | d_biased = vd0
+                    gr.st(15, gr.at(5, CTRL_GR_LO));    // intv_n
+                    gr.st(7, gr.at(15) + gr.at(15));     // 2*intv_n
+                    spm[TILE_INTV_OFF + gr.at(7)] = gr.at(2);
+                    gr.st(2, gr.at(2) + 1);              // vd0+1
+                    spm[TILE_INTV_OFF + gr.at(7) + 1] = gr.at(2);
+                    gr.st(5, gr.at(15) + 1, CTRL_GR_LO); // intv_n++
+                    return;
+                }
+            m8_emit_done:
+                return;
+            };
+
+            // --- EXTEND subroutine ---
+            // In: gr[2]=d, gr[9]=k, gr[11]=ts_off
+            // Uses: gr[14]=ql, gr_lo[12]=vl, reg[10]=gs_base,
+            //       reg[11]=q_base
+            // Out: gr[9]=extended k
+            // Clobbers: gr[4], gr[15], reg[6], reg[7], reg[8]
+            auto extend = [&]() {
+                // max_k = min(ql - d, vl) - 1
+                gr.st(15, gr.at(14) - gr.at(2));
+                if (gr.at(15) <= gr.at(12, CTRL_GR_LO))
+                    reg[8] = gr.at(15);
+                else
+                    reg[8] = gr.at(12, CTRL_GR_LO);
+                reg[8] -= 1;                             // max_k
+                while (gr.at(9) < reg[8]) {
+                    gr.st(4, gr.at(11) + gr.at(9));      // ts_off+k
+                    gr.st(4, gr.at(4) + 1);              // +1
+                    reg[6] = mvi2_ld(10, 4);             // gs char
+                    gr.st(4, gr.at(2) + gr.at(9));       // d+k
+                    gr.st(4, gr.at(4) + 1);              // +1
+                    reg[7] = mvi2_ld(11, 4);             // q char
+                    if (reg[6] != reg[7]) break;
+                    gr.st(9, gr.at(9) + 1);              // k++
+                }
+            };
+
+            // --- CHECK_AOUT subroutine ---
+            // Recomputes d from gr[8] (clobbered by emit_b).
+            // In: gr[8]=vd, gr[9]=k
+            // Uses: gr_lo[12]=vl, gr[14]=ql, gr_hi[3]=ta_n
+            // Clobbers: gr[2], gr[7], gr[15]
+            auto check_aout = [&]() {
+                // d = lo(vd) - 0x4000
+                gr.st(2, gr.at(8, CTRL_GR_LO) - 16384);
+                // k == vl-1?
+                gr.st(15, gr.at(12, CTRL_GR_LO) - 1);
+                if (gr.at(9) == gr.at(15))
+                    goto m8_ca_do;
+                // d+k == ql-1?
+                gr.st(15, gr.at(2) + gr.at(9));
+                gr.st(7, gr.at(14) - 1);
+                if (gr.at(15) != gr.at(7)) return;
+            m8_ca_do:
+                gr.st(15, gr.at(3, CTRL_GR_HI));        // ta_n
+                gr.st(7, gr.at(15) + gr.at(15));         // 2*ta_n
+                spm[TILE_AOUT_OFF + gr.at(7)] = gr.at(8);
+                spm[TILE_AOUT_OFF + gr.at(7) + 1] = gr.at(9);
+                gr.st(3, gr.at(15) + 1, CTRL_GR_HI);    // ta_n++
+            };
+
+            // === INIT ===
+            gr.st(1, spm[META_TILE_N], CTRL_GR_HI);     // tile_n
+            if (gr.at(1, CTRL_GR_HI) <= 0)
+                goto m8_done;
+            gr.st(1, 0, CTRL_GR_LO);                     // i = 0
+            gr.st(3, 0, CTRL_GR_LO);                     // tb_n = 0
+            gr.st(3, 0, CTRL_GR_HI);                     // ta_n = 0
+            gr.st(5, 0, CTRL_GR_LO);                     // intv_n = 0
+            gr.st(6, -1, CTRL_GR_LO);                    // node_idx = -1
+            gr.st(6, -1, CTRL_GR_HI);                    // prev_v = -1
+            reg[10] = GWFA_GS_START * 16;                 // gs_base (char space)
+            reg[11] = GWFA_Q_START * 16;                  // q_base (char space)
+
+            // === OUTER_LOOP ===
+        m8_outer_loop:
+            if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
+                goto m8_writeback;                        // i >= tile_n
+            gr.st(2, gr.at(1, CTRL_GR_LO)
+                + gr.at(1, CTRL_GR_LO));                  // 2*i
+            gr.st(8, spm[TILE_A_OFF + gr.at(2)]);        // vd
+            gr.st(9, spm[TILE_A_OFF + gr.at(2) + 1]);    // k
+            // v == prev_v → skip node setup
+            if (gr.at(8, CTRL_GR_HI) == gr.at(6, CTRL_GR_HI))
+                goto m8_skip_node;
+            // node_idx++
+            gr.st(6, gr.at(6, CTRL_GR_LO) + 1, CTRL_GR_LO);
+            // prev_v = v
+            gr.st(6, gr.at(8, CTRL_GR_HI), CTRL_GR_HI);
+            // 2*node_idx
+            gr.st(15, gr.at(6, CTRL_GR_LO)
+                + gr.at(6, CTRL_GR_LO));
+            gr.st(11, spm[NODE_INFO_OFF + gr.at(15)]);   // ts_off
+            gr.st(12, spm[NODE_INFO_OFF + gr.at(15) + 1],
+                CTRL_GR_LO);                              // vl
+
+        m8_skip_node:
+            // d = lo(vd) - 0x4000
+            gr.st(2, gr.at(8, CTRL_GR_LO) - 16384);
+            extend();
+            // store k back
+            gr.st(15, gr.at(1, CTRL_GR_LO)
+                + gr.at(1, CTRL_GR_LO));                  // 2*i
+            spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
+            // emit_b(vd-1, k+1)
+            gr.st(4, gr.at(8) - 1);                      // emit_vd
+            gr.st(13, gr.at(9) + 1);                     // emit_k
+            emit_b();
+            check_aout();
+            // ppk = k, prev_vd = vd, i++
+            reg[2] = gr.at(9);
+            reg[9] = gr.at(8);
+            gr.st(1, gr.at(1, CTRL_GR_LO) + 1,
+                CTRL_GR_LO);
+
+            // === SEQUENTIAL CHECK ===
+            if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
+                goto m8_last_emits;                       // i >= tile_n
+            gr.st(2, gr.at(1, CTRL_GR_LO)
+                + gr.at(1, CTRL_GR_LO));                  // 2*i
+            gr.st(8, spm[TILE_A_OFF + gr.at(2)]);        // next vd
+            gr.st(9, spm[TILE_A_OFF + gr.at(2) + 1]);    // next k
+            gr.st(15, reg[9] + 1);                        // prev_vd+1
+            if (gr.at(8) != gr.at(15))
+                goto m8_non_seq;
+
+            // === SEQ_FIRST (2nd diagonal in run) ===
+            {
+                gr.st(2, gr.at(8, CTRL_GR_LO) - 16384);  // d
+                extend();
+                gr.st(15, gr.at(1, CTRL_GR_LO)
+                    + gr.at(1, CTRL_GR_LO));              // 2*i
+                spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
+                // emit_k = max(ppk, k) + 1
+                gr.st(13, reg[2]);                        // ppk
+                if (gr.at(9) > gr.at(13))
+                    gr.st(13, gr.at(9));
+                gr.st(13, gr.at(13) + 1);
+                gr.st(4, reg[9]);                         // emit_vd=prev_vd
+                emit_b();
+                check_aout();
+                reg[1] = reg[2];                          // pk = ppk
+                reg[2] = gr.at(9);                        // ppk = k
+                reg[9] = gr.at(8);                        // prev_vd = vd
+                gr.st(1, gr.at(1, CTRL_GR_LO) + 1,
+                    CTRL_GR_LO);                          // i++
             }
+
+            // === SEQ_WHILE (3rd+ diagonals) ===
+        m8_seq_while:
+            if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
+                goto m8_seq_last;
+            gr.st(2, gr.at(1, CTRL_GR_LO)
+                + gr.at(1, CTRL_GR_LO));
+            gr.st(8, spm[TILE_A_OFF + gr.at(2)]);
+            gr.st(9, spm[TILE_A_OFF + gr.at(2) + 1]);
+            gr.st(15, reg[9] + 1);
+            if (gr.at(8) != gr.at(15))
+                goto m8_seq_last;
+            {
+                gr.st(2, gr.at(8, CTRL_GR_LO) - 16384);  // d
+                extend();
+                gr.st(15, gr.at(1, CTRL_GR_LO)
+                    + gr.at(1, CTRL_GR_LO));
+                spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
+                // emit_k = max(pk, ppk+1, k+1)
+                gr.st(13, reg[1]);                        // pk
+                gr.st(15, reg[2] + 1);                    // ppk+1
+                if (gr.at(15) > gr.at(13))
+                    gr.st(13, gr.at(15));
+                gr.st(15, gr.at(9) + 1);                  // k+1
+                if (gr.at(15) > gr.at(13))
+                    gr.st(13, gr.at(15));
+                gr.st(4, reg[9]);                          // prev_vd
+                emit_b();
+                check_aout();
+                reg[1] = reg[2];
+                reg[2] = gr.at(9);
+                reg[9] = gr.at(8);
+                gr.st(1, gr.at(1, CTRL_GR_LO) + 1,
+                    CTRL_GR_LO);
+            }
+            goto m8_seq_while;
+
+            // === SEQ_LAST ===
+        m8_seq_last:
+            gr.st(13, reg[1]);                            // pk
+            gr.st(15, reg[2] + 1);                        // ppk+1
+            if (gr.at(15) > gr.at(13))
+                gr.st(13, gr.at(15));
+            gr.st(4, reg[9]);                              // prev_vd
+            emit_b();
+            goto m8_trail_emit;
+
+            // === NON_SEQ ===
+        m8_non_seq:
+            gr.st(4, reg[9]);                              // prev_vd
+            gr.st(13, reg[2] + 1);                        // ppk+1
+            emit_b();
+
+            // === TRAIL_EMIT ===
+        m8_trail_emit:
+            gr.st(4, reg[9] + 1);                         // prev_vd+1
+            gr.st(13, reg[2]);                             // ppk
+            emit_b();
+            goto m8_outer_loop;
+
+            // === LAST_EMITS ===
+        m8_last_emits:
+            gr.st(4, reg[9]);
+            gr.st(13, reg[2] + 1);
+            emit_b();
+            gr.st(4, reg[9] + 1);
+            gr.st(13, reg[2]);
+            emit_b();
+
+            // === WRITEBACK ===
+        m8_writeback:
+            spm[META_TB_N]   = gr.at(3, CTRL_GR_LO);    // tb_n
+            spm[META_TA_N]   = gr.at(3, CTRL_GR_HI);    // ta_n
+            spm[META_INTV_N] = gr.at(5, CTRL_GR_LO);    // intv_n
+        m8_done: ;
         } else if (magic_id == 11) {
             // Boundary sort: compare-and-swap last B of this PE with first B of next PE
             int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
