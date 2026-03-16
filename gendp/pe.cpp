@@ -577,7 +577,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //  3 lo | tb_n             | B-tile emit count
             //  3 hi | ta_n             | A-out emit count
             //  4    | emit_vd / scratch| scratch in extend, emit_vd
-            //  5 lo | intv_n           | interval count
+            //  5    | emit_k           | emit_b k argument
             //  6 lo | node_idx         | current node index
             //  6 hi | prev_v           | previous vertex
             //  7    | scratch          | clobbered by emit_b/check_aout
@@ -587,7 +587,8 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // 10    | (sync)           | sync flag only
             // 11    | ts_off           | text-seq offset for node
             // 12 lo | vl               | vertex length
-            // 13    | emit_k           | emit_b k argument
+            // 12 hi | intv_n           | interval count
+            // 13    | (free)           | unused
             // 14    | ql               | query length (read-only)
             // 15    | tmp1             | scratch
             //
@@ -602,6 +603,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //  9    | prev_vd | previous tile_a vd
             // 10    | gs_base | GWFA_GS_START * 16
             // 11    | q_base  | GWFA_Q_START  * 16
+            constexpr int DIAG_BIAS     = 16384; // 0x4000
             constexpr int TILE_A_OFF    = 0;
             constexpr int NODE_INFO_OFF = 128;
             constexpr int TILE_B_OFF    = 256;
@@ -625,41 +627,45 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             };
 
             // --- EMIT_B subroutine ---
-            // In: gr[4]=emit_vd(packed), gr[13]=emit_k
+            // In: gr[4]=emit_vd(packed), gr[5]=emit_k (adjacent for mvd)
             // Uses: gr_lo[12]=vl, gr[14]=ql, gr_lo[3]=tb_n,
-            //       gr_lo[5]=intv_n
-            // Clobbers: gr[2], gr[7], gr[15]
+            //       gr_hi[12]=intv_n
+            // Clobbers: gr[2], gr[5](intv only), gr[7], gr[15]
             auto emit_b = [&]() {
                 // d_emit = lo(emit_vd) - 0x4000
-                gr.st(2, gr.at(4, CTRL_GR_LO) - 16384);
+                gr.st(2, gr.at(4, CTRL_GR_LO) - DIAG_BIAS);
+                gr.st(15, gr.at(14) - gr.at(5));          // ql - emit_k
+
                 // emit_k == vl → interval
-                if (gr.at(13) == gr.at(12, CTRL_GR_LO))
+                if (gr.at(5) == gr.at(12, CTRL_GR_LO))
                     goto m8_do_intv;
-                // d_emit + emit_k >= ql → done
-                gr.st(15, gr.at(2) + gr.at(13));
-                if (gr.at(15) >= gr.at(14))
+
+                // d_emit >= ql - emit_k → done
+                if (gr.at(2) >= gr.at(15))
                     goto m8_emit_done;
+
                 // emit_k >= vl → done
-                if (gr.at(13) >= gr.at(12, CTRL_GR_LO))
+                if (gr.at(5) >= gr.at(12, CTRL_GR_LO))
                     goto m8_emit_done;
-                {   // B emit
-                    gr.st(7, gr.at(3, CTRL_GR_LO) + gr.at(3, CTRL_GR_LO));     // 2*tb_n
-                    spm[TILE_B_OFF + gr.at(7)] = gr.at(4);
-                    spm[TILE_B_OFF + gr.at(7) + 1] = gr.at(13);
-                    gr.st(3, gr.at(15) + 1, CTRL_GR_LO); // tb_n++
+
+                {   // B emit: gr[4]=emit_vd, gr[5]=emit_k (mvd)
+                    gr.st(7, gr.at(3, CTRL_GR_LO) + gr.at(3, CTRL_GR_LO));          // 2*tb_n
+                    gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);                       // tb_n++
+
+                    spm[TILE_B_OFF + gr.at(7)] = gr.at(4); spm[TILE_B_OFF + gr.at(7) + 1] = gr.at(5);
+                    //NOP
+
                     return;
                 }
+
             m8_do_intv:
-                {   // Compose vd0 via subregisters (no shifts)
-                    gr.st(2, gr.at(4, CTRL_GR_LO), CTRL_GR_LO);
-                    gr.st(2, gr.at(4, CTRL_GR_HI), CTRL_GR_HI);
-                    // gr[2] = (v << 16) | d_biased = vd0
-                    gr.st(15, gr.at(5, CTRL_GR_LO));    // intv_n
-                    gr.st(7, gr.at(15) + gr.at(15));     // 2*intv_n
-                    spm[TILE_INTV_OFF + gr.at(7)] = gr.at(2);
-                    gr.st(2, gr.at(2) + 1);              // vd0+1
-                    spm[TILE_INTV_OFF + gr.at(7) + 1] = gr.at(2);
-                    gr.st(5, gr.at(15) + 1, CTRL_GR_LO); // intv_n++
+                {   // gr[4]=vd0, gr[5]=vd0+1 (mvd)
+                    gr.st(5, gr.at(4) + 1);                // vd0+1
+                    gr.st(7, gr.at(12, CTRL_GR_HI) << 1);          // 2*intv_n
+                                                                   //
+                    spm[TILE_INTV_OFF + gr.at(7)] = gr.at(4); spm[TILE_INTV_OFF + gr.at(7) + 1] = gr.at(5);
+                    gr.st(12, gr.at(12, CTRL_GR_HI) + 1, CTRL_GR_HI);         // intv_n++
+
                     return;
                 }
             m8_emit_done:
@@ -671,61 +677,83 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // Uses: gr[14]=ql, gr_lo[12]=vl, reg[10]=gs_base,
             //       reg[11]=q_base
             // Out: gr[9]=extended k
-            // Clobbers: gr[4], gr[15], reg[6], reg[7], reg[8]
+            // Clobbers: gr[4], gr[7], gr[15], reg[6], reg[7], reg[8]
             auto extend = [&]() {
                 // max_k = min(ql - d, vl) - 1
-                gr.st(15, gr.at(14) - gr.at(2));
-                if (gr.at(15) <= gr.at(12, CTRL_GR_LO))
-                    reg[8] = gr.at(15);
-                else
+                reg[8] = gr.at(14) - gr.at(2);
+                //NOP
+
+                if (reg[8] > gr.at(12, CTRL_GR_LO)){
+
                     reg[8] = gr.at(12, CTRL_GR_LO);
-                reg[8] -= 1;                             // max_k
-                while (gr.at(9) < reg[8]) {
-                    gr.st(4, gr.at(11) + gr.at(9));      // ts_off+k
-                    gr.st(4, gr.at(4) + 1);              // +1
-                    reg[6] = mvi2_ld(10, 4);             // gs char
-                    gr.st(4, gr.at(2) + gr.at(9));       // d+k
-                    gr.st(4, gr.at(4) + 1);              // +1
-                    reg[7] = mvi2_ld(11, 4);             // q char
-                    if (reg[6] != reg[7]) break;
-                    gr.st(9, gr.at(9) + 1);              // k++
+                    //NOP
                 }
+
+                // precompute char-space offsets (+1 for 1-based)
+                gr.st(4, gr.at(11) + gr.at(9) + 1);     // ts_off+k+1
+                gr.st(7, gr.at(2) + gr.at(9) + 1);      // d+k+1
+
+                while (true){
+                    reg[6] = mvi2_ld(10, 4); gr.st(4, gr.at(4) + 1); //load gs char and cursor++
+                    //NOP
+
+                    reg[7] = mvi2_ld(11, 7); gr.st(7, gr.at(7) + 1); //load q char and cursor++
+                    gr.st(9, gr.at(9) + 1);              // k++
+
+                    if (gr.at(9) >= reg[8]) break;
+
+                    if (reg[6] != reg[7]) break;
+                }
+
+                gr.st(9, gr.at(9) - 1);              // k++
+                //NOP
             };
 
             // --- CHECK_AOUT subroutine ---
-            // Recomputes d from gr[8] (clobbered by emit_b).
+            // Emit (vd, k) to tile_aout if the wavefront reached the
+            // end of the vertex (k==vl-1) or the end of the query
+            // (d+k==ql-1). These boundary-hitting entries propagate
+            // to the next GWFA expansion step.
             // In: gr[8]=vd, gr[9]=k
             // Uses: gr_lo[12]=vl, gr[14]=ql, gr_hi[3]=ta_n
             // Clobbers: gr[2], gr[7], gr[15]
             auto check_aout = [&]() {
-                // d = lo(vd) - 0x4000
-                gr.st(2, gr.at(8, CTRL_GR_LO) - 16384);
-                // k == vl-1?
+                // extract d from vd
+                gr.st(2, gr.at(8, CTRL_GR_LO) - DIAG_BIAS);
+                // reached end of vertex?
                 gr.st(15, gr.at(12, CTRL_GR_LO) - 1);
+
                 if (gr.at(9) == gr.at(15))
                     goto m8_ca_do;
-                // d+k == ql-1?
+
+                // reached end of query?
                 gr.st(15, gr.at(2) + gr.at(9));
                 gr.st(7, gr.at(14) - 1);
+
                 if (gr.at(15) != gr.at(7)) return;
+
             m8_ca_do:
-                gr.st(15, gr.at(3, CTRL_GR_HI));        // ta_n
-                gr.st(7, gr.at(15) + gr.at(15));         // 2*ta_n
-                spm[TILE_AOUT_OFF + gr.at(7)] = gr.at(8);
-                spm[TILE_AOUT_OFF + gr.at(7) + 1] = gr.at(9);
-                gr.st(3, gr.at(15) + 1, CTRL_GR_HI);    // ta_n++
+                // append (vd, k) to tile_aout[2*ta_n]
+                gr.st(7, gr.at(3, CTRL_GR_HI) << 1);       // 2*ta_n
+                gr.st(3, gr.at(3, CTRL_GR_HI) + 1, CTRL_GR_HI);    // ta_n++
+
+                spm[TILE_AOUT_OFF + gr.at(7)] = gr.at(8); spm[TILE_AOUT_OFF + gr.at(7) + 1] = gr.at(9);
+                //NOP
             };
 
             // === INIT ===
             gr.st(1, spm[META_TILE_N], CTRL_GR_HI);     // tile_n
+            gr.st(12, 0, CTRL_GR_HI);                    // intv_n = 0
+                                                         //
+            gr.st(1, 0, CTRL_GR_LO);                     // i = 0
+            gr.st(3, 0);                                 // tb_n, ta_n = 0
+
             if (gr.at(1, CTRL_GR_HI) <= 0)
                 goto m8_done;
-            gr.st(1, 0, CTRL_GR_LO);                     // i = 0
-            gr.st(3, 0, CTRL_GR_LO);                     // tb_n = 0
-            gr.st(3, 0, CTRL_GR_HI);                     // ta_n = 0
-            gr.st(5, 0, CTRL_GR_LO);                     // intv_n = 0
-            gr.st(6, -1, CTRL_GR_LO);                    // node_idx = -1
-            gr.st(6, -1, CTRL_GR_HI);                    // prev_v = -1
+
+            gr.st(6, -1);                    // node_idx, prev_v = -1
+            //NOP
+
             reg[10] = GWFA_GS_START * 16;                 // gs_base (char space)
             reg[11] = GWFA_Q_START * 16;                  // q_base (char space)
 
@@ -733,8 +761,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         m8_outer_loop:
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
                 goto m8_writeback;                        // i >= tile_n
-            gr.st(2, gr.at(1, CTRL_GR_LO)
-                + gr.at(1, CTRL_GR_LO));                  // 2*i
+            gr.st(2, gr.at(1, CTRL_GR_LO) + gr.at(1, CTRL_GR_LO));                  // 2*i
             gr.st(8, spm[TILE_A_OFF + gr.at(2)]);        // vd
             gr.st(9, spm[TILE_A_OFF + gr.at(2) + 1]);    // k
             // v == prev_v → skip node setup
@@ -753,7 +780,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
         m8_skip_node:
             // d = lo(vd) - 0x4000
-            gr.st(2, gr.at(8, CTRL_GR_LO) - 16384);
+            gr.st(2, gr.at(8, CTRL_GR_LO) - DIAG_BIAS);
             extend();
             // store k back
             gr.st(15, gr.at(1, CTRL_GR_LO)
@@ -761,7 +788,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
             // emit_b(vd-1, k+1)
             gr.st(4, gr.at(8) - 1);                      // emit_vd
-            gr.st(13, gr.at(9) + 1);                     // emit_k
+            gr.st(5, gr.at(9) + 1);                     // emit_k
             emit_b();
             check_aout();
             // ppk = k, prev_vd = vd, i++
@@ -783,16 +810,16 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
             // === SEQ_FIRST (2nd diagonal in run) ===
             {
-                gr.st(2, gr.at(8, CTRL_GR_LO) - 16384);  // d
+                gr.st(2, gr.at(8, CTRL_GR_LO) - DIAG_BIAS);  // d
                 extend();
                 gr.st(15, gr.at(1, CTRL_GR_LO)
                     + gr.at(1, CTRL_GR_LO));              // 2*i
                 spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
                 // emit_k = max(ppk, k) + 1
-                gr.st(13, reg[2]);                        // ppk
-                if (gr.at(9) > gr.at(13))
-                    gr.st(13, gr.at(9));
-                gr.st(13, gr.at(13) + 1);
+                gr.st(5, reg[2]);                        // ppk
+                if (gr.at(9) > gr.at(5))
+                    gr.st(5, gr.at(9));
+                gr.st(5, gr.at(5) + 1);
                 gr.st(4, reg[9]);                         // emit_vd=prev_vd
                 emit_b();
                 check_aout();
@@ -815,19 +842,19 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             if (gr.at(8) != gr.at(15))
                 goto m8_seq_last;
             {
-                gr.st(2, gr.at(8, CTRL_GR_LO) - 16384);  // d
+                gr.st(2, gr.at(8, CTRL_GR_LO) - DIAG_BIAS);  // d
                 extend();
                 gr.st(15, gr.at(1, CTRL_GR_LO)
                     + gr.at(1, CTRL_GR_LO));
                 spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
                 // emit_k = max(pk, ppk+1, k+1)
-                gr.st(13, reg[1]);                        // pk
+                gr.st(5, reg[1]);                        // pk
                 gr.st(15, reg[2] + 1);                    // ppk+1
-                if (gr.at(15) > gr.at(13))
-                    gr.st(13, gr.at(15));
+                if (gr.at(15) > gr.at(5))
+                    gr.st(5, gr.at(15));
                 gr.st(15, gr.at(9) + 1);                  // k+1
-                if (gr.at(15) > gr.at(13))
-                    gr.st(13, gr.at(15));
+                if (gr.at(15) > gr.at(5))
+                    gr.st(5, gr.at(15));
                 gr.st(4, reg[9]);                          // prev_vd
                 emit_b();
                 check_aout();
@@ -841,10 +868,10 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
             // === SEQ_LAST ===
         m8_seq_last:
-            gr.st(13, reg[1]);                            // pk
+            gr.st(5, reg[1]);                            // pk
             gr.st(15, reg[2] + 1);                        // ppk+1
-            if (gr.at(15) > gr.at(13))
-                gr.st(13, gr.at(15));
+            if (gr.at(15) > gr.at(5))
+                gr.st(5, gr.at(15));
             gr.st(4, reg[9]);                              // prev_vd
             emit_b();
             goto m8_trail_emit;
@@ -852,30 +879,30 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // === NON_SEQ ===
         m8_non_seq:
             gr.st(4, reg[9]);                              // prev_vd
-            gr.st(13, reg[2] + 1);                        // ppk+1
+            gr.st(5, reg[2] + 1);                        // ppk+1
             emit_b();
 
             // === TRAIL_EMIT ===
         m8_trail_emit:
             gr.st(4, reg[9] + 1);                         // prev_vd+1
-            gr.st(13, reg[2]);                             // ppk
+            gr.st(5, reg[2]);                             // ppk
             emit_b();
             goto m8_outer_loop;
 
             // === LAST_EMITS ===
         m8_last_emits:
             gr.st(4, reg[9]);
-            gr.st(13, reg[2] + 1);
+            gr.st(5, reg[2] + 1);
             emit_b();
             gr.st(4, reg[9] + 1);
-            gr.st(13, reg[2]);
+            gr.st(5, reg[2]);
             emit_b();
 
             // === WRITEBACK ===
         m8_writeback:
             spm[META_TB_N]   = gr.at(3, CTRL_GR_LO);    // tb_n
             spm[META_TA_N]   = gr.at(3, CTRL_GR_HI);    // ta_n
-            spm[META_INTV_N] = gr.at(5, CTRL_GR_LO);    // intv_n
+            spm[META_INTV_N] = gr.at(12, CTRL_GR_HI);   // intv_n
         m8_done: ;
         } else if (magic_id == 11) {
             // Boundary sort: compare-and-swap last B of this PE with first B of next PE
