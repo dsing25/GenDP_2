@@ -367,7 +367,7 @@ def gbv_compute_v3():
     f.close()
 
 def gbv_main_instruction():
-     # dest, src, flag_0, flag_1, imm/reg_0, reg_0(++), 
+     # dest, src, flag_0, flag_1, imm/reg_0, reg_0(++),
      # flag_2, flag_3, imm/reg_1, reg_1(++), opcode
 
     # mergeTwoSlices 2 Input Data Movement
@@ -379,27 +379,128 @@ def gbv_main_instruction():
 
     f = InstructionWriter("instructions/gbv/main_instruction.txt");
 
-    f.write(write_magic(1)) 
+    f.write(write_magic(1))
 
-    # f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 0, 0, si)) # gr[1] = 0 counter for input data buffer
+    # ============================================================
+    # Step 1: Pop Node from Queue (Controller)
+    # ============================================================
+    # magic(5) = peek top of queue
+    # After magic(5) (gr[0] is NEVER written - stays 0):
+    #   gr[0] = 0 (ALWAYS - not written by magic)
+    #   gr[1] = target_node (node ID)
+    #   gr[2] = spm_addr
+    #   gr[3] = flags (bit0=skipFirst, bit1=prevSliceExists, bit2=currSliceExists, bit3=valid)
+    #   gr[4] = basepairs (32-bit, 16 bases encoded)
+    #   gr[5] = (unused - available)
+    #   gr[6] = num_out_neighbors
+    #   gr[7] = num_chunks
+    #   gr[10] = num_in_neighbors (decremented during neighbor iteration)
+    # Valid check: (gr[3] >> 3) & 1 == 1 means queue has entry
+    f.write(write_magic(5))  # peek top of queue
 
-    f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 1, mv)) # out = input[gr[1]++]
+    # Check if queue is valid (gr[5] should be 1 if valid entry exists)
+    # If gr[5] == 0, queue is empty - jump to halt (skip processing)
+    # TODO: Add branch to handle empty queue case (beq 0 gr[5] <halt_offset>)
 
-    f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 1, mv)) # out = input[gr[1]++]
+    # magic(4) = pop from queue (removes the peeked entry)
+    f.write(write_magic(4))  # pop from queue
 
-    f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 1, mv)) # out = input[gr[1]++]
+    # ============================================================
+    # Step 2: Controller Setup and Basepair Loop
+    # ============================================================
+    # After magic(5), gr[3] contains packed flags:
+    #   bit0=skipFirst, bit1=prevSliceExists, bit2=currSliceExists, bit3=valid
+    # Check valid: if (gr[3] >> 3) & 1 == 0, queue is empty
 
-    f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 1, mv)) # out = input[gr[1]++]
+    # 2.2: Initialize Controller Loop Variables
+    # gr[8] = 0: BP index within current chunk (0-15)
+    # gr[11] = node_length from queue (total basepairs to process)
+    # gr[14] = 0: BP sent counter
+    # gr[4] = basepairs chunk (shifted in place, no working copy needed)
+    f.write(data_movement_instruction(gr, 0, 0, 0, 8, 0, 0, 0, 0, 0, si))   # gr[8] = 0 (BP index in chunk)
+    f.write(data_movement_instruction(gr, 0, 0, 0, 14, 0, 0, 0, 0, 0, si))  # gr[14] = 0 (BP sent counter)
+    # Note: gr[11] comes directly from magic(5) as node_length - no computation needed
 
-    f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 1, mv)) # out = input[gr[1]++]
+    # 2.4: Send Initial Data to PE (PC 5-8)
+    # PE receives at same PC (no latency): Controller PC 5 -> PE PC 5
+    # Send node_id (gr[1]), spm_addr (gr[2]), num_in_neighbors (gr[10]), flags (gr[3])
+    # All slice data comes from SPM via spm_addr pointer, not input buffer
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 1, 0, mv))   # PC 5: out = gr[1] (node_id)
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 2, 0, mv))   # PC 6: out = gr[2] (spm_addr)
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 10, 0, mv))  # PC 7: out = gr[10] (num_in_neighbors)
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 3, 0, mv))   # PC 8: out = gr[3] (flags)
 
-    f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 1, mv)) # out = input[gr[1]++]
+    # ============================================================
+    # 2.5: Controller Basepair Loop
+    # ============================================================
+    # Controller PC layout:
+    #   PC 0-2:   magic(1), magic(5), magic(4)
+    #   PC 3-4:   gr[8]=0, gr[14]=0
+    #   PC 5-8:   Send initial data to PE (node_id, spm_addr, num_in_neighbors, flags)
+    #   PC 9:     LOOP_START - check if done (bge gr[14] gr[11] -> DONE)
+    #   PC 10:    Extract and send BP (out = gr[4] & 3)
+    #   PC 11:    Wait for PE (spin on gr[13] == 0)
+    #   PC 12:    Restart PE at basepair processing PC
+    #   PC 13:    Shift gr[4] right by 2 (shift in place)
+    #   PC 14:    Increment gr[14] (BP sent counter)
+    #   PC 15:    Increment gr[8] (BP index in chunk)
+    #   PC 16:    Check chunk exhausted (bne 16 gr[8] -> LOOP_START)
+    #   PC 17:    Fetch next chunk via magic(9)
+    #   PC 18:    gr[8] = 0 (reset chunk index)
+    #   PC 19:    Jump to LOOP_START
+    #   PC 20:    DONE - continue to halt or next phase
 
-    f.write(data_movement_instruction(out_port, in_buf, 0, 0, 0, 0, 0, 1, 0, 1, mv)) # out = input[gr[1]++]
+    # Jump offsets (relative: offset = target_PC - current_PC)
+    BP_LOOP_START_PC = 9
+    BP_DONE_PC = 20
+    PE_BP_START_PC = 10  # PE PC where basepair processing starts (after initial setup)
 
-    # f.write(data_movement_instruction(0, 0, 0, 0, PE_COMPUTE_START, 0, 0, 0, 0, 0, set_PC))
+    # PC 9: LOOP_START - Check if all basepairs processed
+    # bge: if gr[14] >= gr[11], jump to DONE
+    # bge with reg_immBar_1=1: compare gr[imm_1] with gr[reg_1]
+    DONE_OFFSET = BP_DONE_PC - BP_LOOP_START_PC  # = 11
+    f.write(data_movement_instruction(gr, gr, 0, 0, DONE_OFFSET, 0, 1, 0, 14, 11, bge))  # if gr[14] >= gr[11], goto DONE
 
+    # PC 10: Extract basepair (2 bits) and send to PE
+    # ANDI: dest = gr[rs2] & imm  (imm_0=rd, imm_1=mask, reg_1=rs2)
+    f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 3, 4, ANDI))  # out = gr[4] & 3
 
+    # PC 11: Wait for PE to complete (spin while gr[13] == 0)
+    # beq with imm_1=0, reg_1=13: if 0 == gr[13], jump back (spin)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 0, 13, beq))  # spin while gr[13] == 0
+
+    # PC 12: Restart PE at basepair processing PC
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_BP_START_PC, 0, 0, 0, 0, 0, set_PC))  # set_PC for PE
+
+    # PC 13: Shift gr[4] right by 2 bits (shift basepairs in place)
+    # shifti_r: gr[rd] = gr[rs2] >> imm  (imm_0=rd, imm_1=shift_amt, reg_1=rs2)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 4, 0, 0, 0, 2, 4, shifti_r))  # gr[4] = gr[4] >> 2
+
+    # PC 14: Increment BP sent counter
+    f.write(data_movement_instruction(gr, gr, 0, 0, 14, 0, 0, 0, 1, 14, addi))  # gr[14]++
+
+    # PC 15: Increment BP index within chunk
+    f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, 1, 8, addi))  # gr[8]++
+
+    # PC 16: Check if chunk exhausted (16 BPs processed from this chunk)
+    # bne: if 16 != gr[8], jump back to LOOP_START
+    LOOP_BACK_OFFSET = BP_LOOP_START_PC - 16  # = -7
+    f.write(data_movement_instruction(gr, gr, 0, 0, LOOP_BACK_OFFSET & 0xFFFF, 0, 0, 0, 16, 8, bne))  # if gr[8] != 16, goto LOOP_START
+
+    # PC 17: Chunk exhausted - fetch next chunk via magic(9)
+    # magic(9) gets next 16 basepairs into gr[4]
+    f.write(write_magic(9))  # get next chunk -> gr[4]
+
+    # PC 18: Reset BP index within chunk
+    f.write(data_movement_instruction(gr, 0, 0, 0, 8, 0, 0, 0, 0, 0, si))  # gr[8] = 0
+
+    # PC 19: Jump back to LOOP_START
+    JUMP_BACK_OFFSET = BP_LOOP_START_PC - 19  # = -10
+    f.write(data_movement_instruction(gr, gr, 0, 0, JUMP_BACK_OFFSET & 0xFFFF, 0, 0, 0, 0, 0, beq))  # unconditional jump (beq 0 0)
+
+    # PC 20: DONE - all basepairs processed
+    # TODO: Add successor push logic here (Step 14)
+    # For now, just halt
     for i in range(1500):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
@@ -439,35 +540,50 @@ def pe_instruction(pe_id):
 
     f = InstructionWriter("instructions/gbv/pe_{}_instruction.txt".format(pe_id))
 
-     # dest, src, flag_0, flag_1, imm/reg_0, reg_0(++), 
-     # flag_2, flag_3, imm/reg_1, reg_1(++), opcode
+    # dest, src, flag_0, flag_1, imm/reg_0, reg_0(++),
+    # flag_2, flag_3, imm/reg_1, reg_1(++), opcode
     # VLIW is backwards, 2nd instruction in stream runs first
+    #
+    # ============================================================
+    # PE/Controller Timing Alignment
+    # ============================================================
+    # Controller timeline:
+    #   PC 0: magic(1)
+    #   PC 1: magic(5) - peek queue
+    #   PC 2: magic(4) - pop queue
+    #   PC 3: gr[8] = 0
+    #   PC 4: gr[14] = 0
+    #   PC 5: out = gr[1] (node_id)      ← First send
+    #   PC 6: out = gr[2] (spm_addr)
+    #   PC 7: out = gr[10] (num_in_neighbors)
+    #   PC 8: out = gr[3] (flags)
+    #
+    # PE must wait until controller PC 5 to start receiving.
+    # PE PC 0-4: NOPs to wait for controller setup
+    # PE PC 5+: Receive data from controller
+    # ============================================================
 
-    # f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                          
-    # f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt)) 
+    # PC 0-4: Wait for controller to finish setup and start sending
+    for i in range(5):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) # this is instruction 2 (runs second in VLIW)                         
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)) # this is instruction 1 (runs first)                                
-
-    f.write(data_movement_instruction(reg, in_port, 0, 0, 12, 0, 0, 0, 0, 0, mv)) # reg[12] = in
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       
-
-    f.write(data_movement_instruction(reg, in_port, 0, 0, 13, 0, 0, 0, 0, 0, mv)) # reg[13] = in
+    # PC 5: Receive node_id from controller → PE gr[1]
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))  # gr[1] = in (node_id)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(reg, in_port, 0, 0, 15, 0, 0, 0, 0, 0, mv)) # reg[15] = in
+    # PC 6: Receive spm_addr from controller → PE gr[2]
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 2, 0, 0, 0, 0, 0, mv))  # gr[2] = in (spm_addr)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(reg, in_port, 0, 0, 16, 0, 0, 0, 0, 0, mv)) # reg[16] = in
+    # PC 7: Receive num_in_neighbors from controller → PE gr[10]
+    # Note: PE will decrement this during neighbor iteration
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 10, 0, 0, 0, 0, 0, mv))  # gr[10] = in (num_in_neighbors)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(reg, in_port, 0, 0, 17, 0, 0, 0, 0, 0, mv)) # reg[17] = in
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
-
-    f.write(data_movement_instruction(reg, in_port, 0, 0, 19, 0, 0, 0, 0, 0, mv)) # reg[19] = in
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
-
-    f.write(data_movement_instruction(gr, in_port, 0, 0, 6, 0, 0, 0, 0, 0, mv))  # gr[6] = in
+    # PC 8: Receive flags from controller → PE gr[3]
+    # flags: bit0=skipFirst, bit1=prevSliceExists, bit2=currSliceExists, bit3=valid
+    f.write(data_movement_instruction(gr, in_port, 0, 0, 3, 0, 0, 0, 0, 0, mv))  # gr[3] = in (flags)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, set_PC))
@@ -591,11 +707,11 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(gr, gr, 0, 0, 3, 0, 0, 0, 1, 3, addi)) # gr[3] = gr[3] + 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(gr, reg, 0, 0, 7, 0, 0, 0, 26, 0, mv)) # gr[7] = reg[26]
+    f.write(data_movement_instruction(gr, reg, 0, 0, 4, 0, 0, 0, 26, 0, mv)) # gr[4] = reg[26] (reusing gr[4] after reg22 no longer needed)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPD, 0, 1, 0, 0, 7, beq)) # beq 0 gr[7] jump D (PC 50 → 89, +39)
-    f.write(data_movement_instruction(gr, gr, 0, 0, JMPD, 0, 1, 0, 0, 7, beq)) # beq 0 gr[7] jump D (PC 50 → 89, +39)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPD, 0, 1, 0, 0, 4, beq)) # beq 0 gr[4] jump D (PC 50 → 89, +39)
+    f.write(data_movement_instruction(gr, gr, 0, 0, JMPD, 0, 1, 0, 0, 4, beq)) # beq 0 gr[4] jump D (PC 50 → 89, +39)
 
     f.write(data_movement_instruction(gr, reg, 0, 0, 5, 0, 0, 0, 27, 0, mv)) # gr[5] = reg[27]
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -907,35 +1023,38 @@ def pe_instruction(pe_id):
 
 
 
-def pe_1_instruction():
-    f = InstructionWriter("instructions/gbv/pe_1_instruction.txt")
+def pe_idle_instruction(pe_id):
+    """
+    Generate instructions for idle PEs (1, 2, 3).
+    These PEs set GR10=1 (done signal) and loop infinitely.
+    Only PE0 should be doing actual work.
+    """
+    f = InstructionWriter("instructions/gbv/pe_{}_instruction.txt".format(pe_id))
 
-    # Just halt - do nothing
-    for i in range(1500):
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
+    # PC 0: Set gr[10] = 1 (signal done to controller)
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))  # gr[10] = 1
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))  # nop (slot 2)
+
+    # PC 1: Loop back to PC 1 infinitely (unconditional branch: beq 0 0 offset=0)
+    # This keeps the PE spinning while signaling done via gr[10]=1
+    f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 0, 0, beq))  # beq 0 0, offset=0 (loop to self)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 0, 0, beq))  # beq 0 0, offset=0 (loop to self)
+
+    # Fill rest with nops (shouldn't be reached due to infinite loop above)
+    for i in range(100):
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.close()
+
+def pe_1_instruction():
+    pe_idle_instruction(1)
 
 def pe_2_instruction():
-    f = InstructionWriter("instructions/gbv/pe_2_instruction.txt")
-
-    # Just halt - do nothing
-    for i in range(1500):
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
-
-    f.close()
+    pe_idle_instruction(2)
 
 def pe_3_instruction():
-    f = InstructionWriter("instructions/gbv/pe_3_instruction.txt")
-
-    # Just halt - do nothing
-    for i in range(1500):
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
-
-    f.close()
+    pe_idle_instruction(3)
 
 if not os.path.exists("instructions/gbv"):
     os.makedirs("instructions/gbv")

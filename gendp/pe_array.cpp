@@ -206,27 +206,6 @@ struct Graph {
 
         printf("Hardcoded verification graph initialized: 5 nodes (69816, 69819, 69820, 69830, 69831)\n");
         printf("  Sequences stored in both ASCII and 2-bit packed format\n");
-
-        // Initialize queue with seed node 69830
-        graphAlignQueue.clear();
-        sliceNodeCAM.clear();
-
-        QueueEntry seedEntry;
-        seedEntry.target_node = 69830;
-        seedEntry.priority = 0;
-        seedEntry.spm_addr = sliceNodeCAM.allocateNode(69830);  // Allocate SPM address via CAM
-        seedEntry.flags = 0;
-        seedEntry.setSkipFirst(1);           // Seed node starts from extraSlice
-        seedEntry.setPrevSliceExists(0);     // No previous slice
-        seedEntry.setCurrSliceExists(1);     // Current slice exists
-        seedEntry.basepairs = nodes[3].sequence_packed[0];  // First 16bp: 0x0FFEEE2F
-        seedEntry.out_neighbors[0] = 69831;
-        seedEntry.num_out_neighbors = 1;
-        seedEntry.num_chunks = (nodes[3].length + 15) / 16;  // Node 69830 length=64 -> 4 chunks
-        graphAlignQueue.insert(seedEntry);
-
-        printf("Queue initialized with seed node 69830: SPM addr %u, chunks=%u, flags=0x%02X\n",
-               seedEntry.spm_addr, seedEntry.num_chunks, seedEntry.flags);
     }
 };
 
@@ -255,11 +234,12 @@ inline char decodeDNABase(uint8_t encoded) {
 #define MAX_QUEUE_SIZE 20
 #define MAX_QUEUE_NEIGHBORS 10
 
-// Flag bit positions for QueueEntry.flags
+// Flag bit positions for QueueEntry.flags (and controller gr[3])
 #define FLAG_SKIP_FIRST           0  // Bit 0: skip_first (1 = from previous slice, 0 = from neighbor)
 #define FLAG_PREV_SLICE_EXISTS    1  // Bit 1: previousSliceExists
 #define FLAG_CURR_SLICE_EXISTS    2  // Bit 2: currentSliceExists
-// Bits 3-7: Reserved for future use
+#define FLAG_VALID                3  // Bit 3: valid (1 = queue has entry, 0 = queue empty) - set by magic(5)
+// Bits 4-7: Reserved for future use
 
 struct QueueEntry {
     uint32_t target_node;        // Node ID to process (lookup in graphStructure)
@@ -282,11 +262,18 @@ struct QueueEntry {
     uint32_t out_neighbors[MAX_QUEUE_NEIGHBORS];
     uint8_t  num_out_neighbors;  // Number of valid out-neighbors (0 to MAX_QUEUE_NEIGHBORS)
 
+    // Number of in-neighbors (incoming edges) for this node
+    // Used in Step 1.5 to determine if we need to merge incoming slices
+    uint8_t  num_in_neighbors;   // Number of incoming edges (from graph structure)
+
     // Number of chunks to process for this node (node_length / 16, rounded up)
     uint8_t  num_chunks;         // ceil(node_length / 16)
 
+    // Total number of basepairs for this node (from graph structure)
+    uint16_t node_length;        // Total basepairs to process
+
     QueueEntry() : target_node(0), priority(0), spm_addr(0),
-                   flags(0), basepairs(0), num_out_neighbors(0), num_chunks(0) {
+                   flags(0), basepairs(0), num_out_neighbors(0), num_in_neighbors(0), num_chunks(0), node_length(0) {
         memset(out_neighbors, 0, sizeof(out_neighbors));
     }
 
@@ -539,6 +526,28 @@ pe_array::pe_array(int input_size, int output_size) {
 
     // Initialize hardcoded verification graph
     graphStructure.initHardcodedGraph();
+
+    // Initialize queue with seed node 69830 (must be after QueueEntry/graphAlignQueue/sliceNodeCAM are defined)
+    graphAlignQueue.clear();
+    sliceNodeCAM.clear();
+
+    QueueEntry seedEntry;
+    seedEntry.target_node = 69830;
+    seedEntry.priority = 0;
+    seedEntry.spm_addr = sliceNodeCAM.allocateNode(69830);  // Allocate SPM address via CAM
+    seedEntry.flags = 0;
+    seedEntry.setSkipFirst(1);           // Seed node starts from extraSlice
+    seedEntry.setPrevSliceExists(0);     // No previous slice
+    seedEntry.setCurrSliceExists(1);     // Current slice exists
+    seedEntry.basepairs = graphStructure.nodes[3].sequence_packed[0];  // First 16bp: 0x0FFEEE2F
+    seedEntry.out_neighbors[0] = 69831;
+    seedEntry.num_out_neighbors = 1;
+    seedEntry.num_in_neighbors = graphStructure.nodes[3].num_in_neighbors;  // Step 1.5: incoming edges
+    seedEntry.num_chunks = (graphStructure.nodes[3].length + 15) / 16;  // Node 69830 length=64 -> 4 chunks
+    graphAlignQueue.insert(seedEntry);
+
+    printf("Queue initialized with seed node 69830: SPM addr %u, chunks=%u, flags=0x%02X, in_neighbors=%u\n",
+           seedEntry.spm_addr, seedEntry.num_chunks, seedEntry.flags, seedEntry.num_in_neighbors);
 }
 
 pe_array::~pe_array() {
@@ -938,7 +947,7 @@ if (is_magic) {
         entry.flags = (uint8_t)main_addressing_register[3];  // Load all flags at once
         entry.basepairs = main_addressing_register[4];
 
-        // Automatically populate out-neighbors and num_chunks from graph
+        // Automatically populate neighbors and num_chunks from graph
         GraphNode* node = graphStructure.getNode(entry.target_node);
         if (node) {
             entry.num_out_neighbors = (node->num_out_neighbors < MAX_QUEUE_NEIGHBORS)
@@ -947,10 +956,16 @@ if (is_magic) {
             for (int i = 0; i < entry.num_out_neighbors; i++) {
                 entry.out_neighbors[i] = node->out_neighbors[i];
             }
+            // Populate num_in_neighbors from graph (for Step 1.5 incoming edge check)
+            entry.num_in_neighbors = node->num_in_neighbors;
+            // Store node_length directly (total basepairs for this node)
+            entry.node_length = node->length;
             // Calculate num_chunks: ceil(node_length / 16)
             entry.num_chunks = (node->length + 15) / 16;
         } else {
             entry.num_out_neighbors = 0;
+            entry.num_in_neighbors = 0;
+            entry.node_length = 0;
             entry.num_chunks = 0;
         }
 
@@ -974,57 +989,68 @@ if (is_magic) {
     }
     else if (magic_payload == 4) {
         // Magic payload 4: Pop from priority queue
-        bool success = graphAlignQueue.pop();
-
-        // Store result in gr[4]: 1 = success, 0 = queue empty
-        main_addressing_register[4] = success ? 1 : 0;
+        // NOTE: Does NOT write to any register - validity already checked via magic(5) gr[3] bit3
+        // Previously wrote success to gr[4], but that destroyed basepairs from magic(5)
+        graphAlignQueue.pop();
 
 #ifdef PROFILE
-        printf("Magic instruction (payload=%d): Queue pop -> %s\n",
-               magic_payload, success ? "OK" : "EMPTY");
+        printf("Magic instruction (payload=%d): Queue pop\n", magic_payload);
 #endif
     }
     else if (magic_payload == 5) {
         // Magic payload 5: Get top element (peek without removing)
         // Output to addressing registers:
-        //   gr[0] = target_node
-        //   gr[1] = priority
+        //   gr[0] = ALWAYS 0 (never written - preserved as zero constant)
+        //   gr[1] = target_node (node ID)
         //   gr[2] = spm_addr
-        //   gr[3] = flags (8-bit packed)
+        //   gr[3] = flags (bit0=skipFirst, bit1=prevSliceExists, bit2=currSliceExists, bit3=valid)
         //   gr[4] = basepairs (32-bit)
-        //   gr[5] = valid (1 if queue not empty, 0 if empty)
+        //   gr[5] = (unused - available)
         //   gr[6] = num_out_neighbors
         //   gr[7] = num_chunks
+        //   gr[10] = num_in_neighbors (for Step 1.5 incoming edge check)
+        //   gr[11] = node_length (total basepairs for this node)
+        // NOTE: Priority is NOT output (not needed in controller)
+        // NOTE: Valid flag is packed into gr[3] bit3, NOT separate gr[5]
         if (!graphAlignQueue.empty()) {
             QueueEntry top = graphAlignQueue.top();
-            main_addressing_register[0] = top.target_node;
-            main_addressing_register[1] = top.priority;
+            // gr[0] intentionally NOT written - must stay 0
+            main_addressing_register[1] = top.target_node;  // node_id in gr[1]
             main_addressing_register[2] = top.spm_addr;
-            main_addressing_register[3] = top.flags;  // Return all flags at once
+            // Pack valid=1 into bit3 of flags
+            main_addressing_register[3] = top.flags | (1 << 3);  // flags with bit3=valid=1
             main_addressing_register[4] = top.basepairs;
-            main_addressing_register[5] = 1;  // valid
+            // gr[5] intentionally NOT written - available for other use
             main_addressing_register[6] = top.num_out_neighbors;
             main_addressing_register[7] = top.num_chunks;
+            main_addressing_register[10] = top.num_in_neighbors;  // Step 1.5: incoming edges
+            main_addressing_register[11] = top.node_length;       // Total basepairs for loop termination
 
 #ifdef PROFILE
             GraphNode* node = graphStructure.getNode(top.target_node);
+            uint8_t packed_flags = top.flags | (1 << 3);  // with valid bit
             if (node) {
-                printf("Magic instruction (payload=%d): Queue top -> node=%u len=%u chunks=%u prio=%d spm=%u flags=0x%02X (skip=%u prev=%u curr=%u) neighbors=%u\n",
-                       magic_payload, top.target_node, node->length, top.num_chunks, top.priority,
-                       top.spm_addr, top.flags, top.getSkipFirst(), top.getPrevSliceExists(),
-                       top.getCurrSliceExists(), top.num_out_neighbors);
+                printf("Magic instruction (payload=%d): Queue top -> node=%u len=%u chunks=%u spm=%u flags=0x%02X (skip=%u prev=%u curr=%u valid=1) out_neighbors=%u in_neighbors=%u\n",
+                       magic_payload, top.target_node, node->length, top.num_chunks,
+                       top.spm_addr, packed_flags, top.getSkipFirst(), top.getPrevSliceExists(),
+                       top.getCurrSliceExists(), top.num_out_neighbors, top.num_in_neighbors);
             } else {
-                printf("Magic instruction (payload=%d): Queue top -> node=%u chunks=%u prio=%d spm=%u flags=0x%02X neighbors=%u\n",
-                       magic_payload, top.target_node, top.num_chunks, top.priority, top.spm_addr, top.flags, top.num_out_neighbors);
+                printf("Magic instruction (payload=%d): Queue top -> node=%u chunks=%u spm=%u flags=0x%02X out_neighbors=%u in_neighbors=%u\n",
+                       magic_payload, top.target_node, top.num_chunks, top.spm_addr, packed_flags, top.num_out_neighbors, top.num_in_neighbors);
             }
 #endif
         } else {
-            main_addressing_register[5] = 0;  // invalid (queue empty)
+            // gr[0] intentionally NOT written - must stay 0
+            // Queue empty: set flags with valid=0 (bit3=0)
+            main_addressing_register[3] = 0;  // all flags cleared including valid bit
+            // gr[5] intentionally NOT written
             main_addressing_register[6] = 0;
             main_addressing_register[7] = 0;
+            main_addressing_register[10] = 0;
+            main_addressing_register[11] = 0;  // node_length = 0 when empty
 
 #ifdef PROFILE
-            printf("Magic instruction (payload=%d): Queue top -> EMPTY\n", magic_payload);
+            printf("Magic instruction (payload=%d): Queue top -> EMPTY (flags=0x00, valid=0)\n", magic_payload);
 #endif
         }
     }

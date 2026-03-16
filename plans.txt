@@ -25,3 +25,382 @@ do another merge then push nodes into the queue
 
 restart entire program with new node being popped 
 
+
+claude plans 
+
+# GBV Instruction Generator ISA Trace Modification Plan
+
+## Context
+
+The goal is to modify `/data3/dsinghan/GenDP_Dev/gendpdev/gendp/scripts/gbv_instruction_generator.py` to support a complete graph alignment algorithm flow. The current implementation handles merge operations but lacks queue-driven node processing, basepair-by-basepair iteration, and proper flag handling.
+
+**Problem**: The existing trace doesn't support:
+- Popping nodes from the priority queue
+- Processing basepairs iteratively (16 per chunk, multiple chunks per node)
+- Conditional logic based on flags (skipFirst, prevSliceExists, currSliceExists)
+- Merging with extraSlice based on score comparisons
+- Pushing successor nodes back to the queue
+
+**Outcome**: A complete ISA trace that processes graph nodes from a queue, performs bitvector alignment with getNextSlice, and pushes successors to continue traversal.
+
+---
+
+## Critical Files
+
+| File | Purpose |
+|------|---------|
+| `scripts/gbv_instruction_generator.py` | Main file to modify - generates compute and data movement traces |
+| `pe_array.cpp` | Reference for magic instruction payloads (2-13) and queue/CAM interfaces |
+| `scripts/opcodes.py` | Opcode constants |
+| `scripts/utils.py` | Instruction encoding functions |
+
+---
+
+## Register Mappings
+
+### Compute Registers (reg[0..31])
+| Register | Usage |
+|----------|-------|
+| reg[0] | **ALWAYS 0** - Never modify, used as zero constant |
+| reg[1] | Eq (equality vector, loaded from SPM[0-3]) |
+| reg[2-3] | VN, VP (current slice) |
+| reg[4-5] | hinN, hinP |
+| reg[10] | forceEq (0xFFFFFFFFFFFFFFFE or AllOnes) |
+| reg[11] | scoreEnd |
+| reg[12-15] | Left slice (VN, VP, unused, scoreEnd) |
+| reg[16-19] | Right slice (VN, VP, unused, scoreEnd) |
+| reg[20-31] | Temporaries |
+
+### PE Addressing Registers (gr[0..15])
+| Register | Usage |
+|----------|-------|
+| gr[0] | **ALWAYS 0** - Never modify, used as zero constant |
+| gr[1] | Node ID |
+| gr[2] | SPM indexer (address pointer) |
+| gr[3] | For loop counter |
+| gr[4] | reg22 / reg26 (reused) |
+| gr[5] | reg27 |
+| gr[6] | Basepair (2 bits: 0-3, received from controller) |
+| gr[7] | **Empty** |
+| gr[8] | reg29 |
+| gr[9] | reg30 |
+| gr[10] | Sync value (PE done signal) |
+| gr[11-15] | **Empty** |
+
+### PE Controller Addressing Registers (gr[0..15])
+| Register | Source | Usage |
+|----------|--------|-------|
+| gr[0] | **ALWAYS 0** | Reserved - never modify, never written by magic instructions |
+| gr[1] | magic(5) | Node ID (target_node from queue) |
+| gr[2] | magic(5) | SPM address (where this node's slice data is stored) |
+| gr[3] | magic(5) | Flags (bit0=skipFirst, bit1=prevSliceExists, bit2=currSliceExists, **bit3=valid**) |
+| gr[4] | magic(5)/magic(9) | Current basepair chunk (32-bit, 16 bases encoded as 2 bits each) |
+| gr[5] | scratch | Available (was: valid flag, now packed in gr[3] bit3) |
+| gr[6] | magic(5) | Num out-neighbors (from queue) |
+| gr[7] | magic(5) | Num chunks (ceil(node_length/16), from queue) |
+| gr[8] | init to 0 | BP index within current chunk (0-15, reset after each chunk) |
+| gr[9] | scratch | Available |
+| gr[10] | magic(5) | **Num in-neighbors** (decremented until 0 during neighbor iteration) |
+| gr[11] | magic(5) | **Node length** (total basepairs from queue - NOT computed) |
+| gr[12] | scratch | Available |
+| gr[13] | hardware | Sync signal (AND of all PE gr[10], set by hardware) |
+| gr[14] | init to 0 | **BP sent counter** (incremented each BP sent) |
+| gr[15] | scratch | Available |
+
+**Controller BP loop condition**: `gr[14] >= gr[11]` means DONE (all BPs sent)
+**Chunk exhausted condition**: `gr[8] == 16` (need to fetch next chunk, then reset gr[8]=0)
+**gr[4] shifted in place**: After each BP extraction, `gr[4] >>= 2`
+**Incoming edge check**: `gr[10] > 0` means more in-neighbors to process
+**Valid check**: `(gr[3] >> 3) & 1` extracts valid bit from packed flags
+
+### SPM Layout
+| Address | Content |
+|---------|---------|
+| 0-3 | Eq vectors (A=0, C=1, G=2, T=3) |
+| 4-9 | Temp variables (6 slots) |
+| 10 | VN (reg[2]) |
+| 11 | VP (reg[3]) |
+| 12 | scoreEnd (reg[11]) |
+| 13 | Ph (reg[8]) |
+| 14 | Mh (reg[9]) |
+| 15 | extraSlice VP |
+| 16 | extraSlice VN |
+| 17 | extraSlice scoreEnd |
+| 18+ | Dynamic memory (per-node slice data, etc.) |
+
+---
+
+## Implementation Steps
+
+### Step 1: Pop Node from Queue (Controller)
+- Use magic(5) to peek top of queue
+- Check validity via gr[3] bit3 (valid flag)
+- Use magic(4) to pop
+- After magic(5):
+  - gr[1]=node_id, gr[2]=spm_addr, gr[3]=flags (with valid in bit3), gr[4]=basepairs_chunk
+  - gr[6]=num_out_neighbors, gr[7]=num_chunks
+  - gr[10]=num_in_neighbors, **gr[11]=node_length** (total basepairs)
+- **gr[0] = 0 ALWAYS**: magic(5) does NOT write to gr[0]
+- **gr[11]**: node_length comes directly from queue (NOT computed from num_chunks)
+
+### Step 1.5: Check Incoming Edges (Controller)
+- **num_in_neighbors** indicates how many incoming edges this node has
+- **If num_in_neighbors > 0**:
+  - Need to iterate over incoming edges, each has its own slice + skipFirst flag
+  - Merge all incoming slices before processing basepairs
+- **If num_in_neighbors == 0**:
+  - This is a source node (seed start), use extraSlice or initialize to default
+- Send num_in_neighbors to PE as part of initial data
+
+### Step 2: Controller Setup and Basepair Loop (Controller)
+
+**2.1: Store Queue Data in Controller Registers**
+After magic(5) peek, the controller has:
+| Register | Value | Description |
+|----------|-------|-------------|
+| gr[0] | **0** | **ALWAYS 0 - magic(5) does NOT write here** |
+| gr[1] | target_node | Node ID to process |
+| gr[2] | spm_addr | SPM address where this node's slice data is stored |
+| gr[3] | flags | Packed flags (bit0=skipFirst, bit1=prevSliceExists, bit2=currSliceExists, **bit3=valid**) |
+| gr[4] | basepairs | Current chunk of 16 basepairs (32-bit, 2 bits each) |
+| gr[5] | (unused) | Available - valid flag now packed in gr[3] bit3 |
+| gr[6] | num_out_neighbors | Number of outgoing edges |
+| gr[7] | num_chunks | Total chunks for this node (ceil(node_length/16)) |
+| gr[10] | num_in_neighbors | Number of incoming edges (**decremented during iteration**) |
+
+**Note**: Priority is NOT output by magic(5) - not needed in controller.
+**pe_array.cpp modification required**: magic(5) must output node_id to gr[1], pack valid into gr[3] bit3.
+**Valid check**: `(gr[3] >> 3) & 1` - if 0, queue is empty.
+
+**2.2: Initialize Controller Loop Variables**
+```
+gr[8]  = 0           # BP index within current chunk (0-15)
+gr[11] = gr[7] * 16  # Total basepairs to process (or use actual node length)
+gr[14] = 0           # BP sent counter (total basepairs sent so far)
+```
+Note: Chunks processed counter (gr[9]) removed - not needed.
+Note: Neighbor loop counter (gr[12]) removed - decrement gr[10] directly instead.
+
+**2.3: Get In-Neighbor Node IDs (while gr[10] > 0)**
+While `gr[10] > 0` (in-neighbors remaining):
+- Use magic(7) with gr[1]=node_id, gr[5]=index to get in_neighbor into gr[2]
+- Use magic(12) to query CAM for in-neighbor's SPM address
+- Process the in-neighbor
+- **Decrement gr[10]** (`gr[10] = gr[10] - 1`)
+- Loop back if gr[10] > 0
+
+**2.4: Send Initial Data to PE**
+Send via out_port to PE (PE receives into its registers):
+1. Node ID (gr[0]) → PE gr[1]
+2. SPM address (gr[2]) → PE gr[2]
+3. Num in-neighbors (gr[10]) → PE receives and stores
+4. Flags (gr[3]) → PE receives for skipFirst/prevSliceExists checks
+
+**2.5: Controller Basepair Loop (IMPLEMENTED)**
+
+Controller PC layout:
+```
+PC 0-2:   magic(1), magic(5), magic(4)
+PC 3-4:   gr[8]=0, gr[14]=0
+PC 5-8:   Send initial data to PE (node_id, spm_addr, num_in_neighbors, flags)
+PC 9:     LOOP_START - bge gr[14] gr[11] -> DONE
+PC 10:    out = gr[4] & 3 (extract and send BP)
+PC 11:    spin while gr[13] == 0 (wait for PE)
+PC 12:    set_PC for PE (restart PE)
+PC 13:    gr[4] >>= 2 (shift basepairs in place)
+PC 14:    gr[14]++ (BP sent counter)
+PC 15:    gr[8]++ (BP index in chunk)
+PC 16:    bne 16 gr[8] -> LOOP_START (if chunk not exhausted)
+PC 17:    magic(9) (fetch next chunk into gr[4])
+PC 18:    gr[8] = 0 (reset chunk index)
+PC 19:    beq 0 0 -> LOOP_START (unconditional jump)
+PC 20:    DONE - halt or next phase
+```
+
+**Implementation Notes:**
+- gr[11] = node_length from queue directly (NOT computed from num_chunks)
+- gr[4] is shifted in place (`gr[4] >>= 2`), no working copy needed
+- Extraction: `out = gr[4] & 3` (lowest 2 bits = current BP)
+- Chunk exhausted when gr[8] == 16, fetch next chunk via magic(9)
+- shifti_l/shifti_r support multi-bit shifts via imm_1 field
+
+**2.6: Key Points**
+- Controller drives timing - PE waits for each basepair
+- gr[14] increments every BP sent
+- Loop exits when gr[14] >= gr[11] (all basepairs for this node processed)
+- When gr[8] hits 16, fetch next chunk and continue (unless gr[14] == gr[11])
+- gr[4] shifted right by 2 at end of each cycle
+
+### Step 3: PE Receives Initial Data
+- Receive via in_port: gr[1]=node_id, gr[2]=spm_addr, num_in_neighbors (store in temp reg)
+- Initialize gr[3] = 0 (loop counter)
+
+### Step 3.5: Check Incoming Edges (PE)
+- **If num_in_neighbors > 0**:
+  - For each incoming edge:
+    1. Get incoming edge's SPM memory location (where its slice data is stored)
+    2. Load incoming slice from SPM into left slice registers (reg[12,13,15] = VN, VP, scoreEnd)
+    3. Receive current basepair for this new node from controller
+    4. **Call getNextSlice** using incoming edge's slice data with current basepair
+       - This produces a new slice (newVN, newVP, newScoreEnd) in reg[2,3,11]
+    5. This node now has a "previous wordslice" from the incoming edge
+  - Proceed to Step 3.6 (merge with extraSlice)
+- **If num_in_neighbors == 0**:
+  - This is a source node, proceed with skipFirst flag check (Step 4)
+
+### Step 3.6: Merge Incoming Slice with ExtraSlice (PE)
+- **Condition**: Node has incoming edge AND getNextSlice was performed in Step 3.5
+- The incoming slice (after getNextSlice) is now in reg[2,3,11]
+- Load extraSlice from SPM[15-17] into right slice registers (reg[16,17,19])
+- Move current slice (reg[2,3,11]) to left slice registers (reg[12,13,15])
+- **Call mergeTwoSlices** to merge incoming slice with extraSlice
+- Result becomes the initial `ws` for basepair processing
+- Proceed to Step 5 (skip Step 4 since we've handled initialization)
+
+### Step 4: Handle skipFirst Flag (Always runs)
+- **Runs after Step 3.5/3.6** regardless of incoming neighbors
+- **If skipFirst == TRUE**: Load extraSlice from SPM[15-17] into reg[12,13,15] and reg[16,17,19]
+  - SPM[15] (VP) → reg[13], reg[17]
+  - SPM[16] (VN) → reg[12], reg[16]
+  - SPM[17] (scoreEnd) → reg[15], reg[19]
+- **If skipFirst == FALSE**:
+  - Set reg[12,13,15] = 0, 0, -1 (VN=0, VP=0, scoreEnd=-1)
+  - **Write to SPM[15-17]**: Store 0 → SPM[15], 0 → SPM[16], -1 → SPM[17]
+  - Copy to reg[16,17,19] for merge operation
+  - Proceed with merge operation (Step 5) using these default values
+- Requires conditional branch with ~14 instruction offset
+
+### Step 5: Initial Merge Operation
+- Reuse existing mergeTwoSlices 2-input code
+- Result in reg[2,3,11] as WS
+
+### Step 6: Save WS (Merge Output) to SPM
+- Store reg[2] (VN) to SPM[10]
+- Store reg[3] (VP) to SPM[11]
+- Store reg[11] (scoreEnd) to SPM[12]
+- 3 stores with 2-cycle latency each = 12 cycles
+- **Note**: Ph and Mh are saved in Step 9 after getNextSlice
+
+### Step 7: Set forceEq Based on prevSliceExists
+- **If prevSliceExists**: forceEq = AllOnes
+- **If !prevSliceExists**: forceEq = AllOnes XOR 1 = 0xFFFFFFFFFFFFFFFE
+- Store in reg[10]
+
+### Step 8: Main Basepair Loop Setup (PE)
+- gr[3] = 0 (loop counter, already initialized in Step 3)
+- Loop driven by controller sending basepairs
+
+### Step 9: Receive and Process Each Basepair (PE)
+**Loop Start:**
+1. Receive basepair from controller: gr[6] = in_port (value 0-3)
+2. Load Eq vector: `reg[1] = SPM[gr[6]]` (2-cycle latency, gr[6] is 0-3)
+3. Apply forceEq: `reg[1] &= reg[10]`
+4. Call getNextSlice (existing compute code, ~16 cycles)
+5. **Save Ph and Mh to SPM**:
+   - Store reg[8] (Ph) to SPM[13]
+   - Store reg[9] (Mh) to SPM[14]
+   - 2 stores with 2-cycle latency each = 8 cycles
+6. Increment loop counter: gr[3]++
+7. (After all processing for this BP) **Signal controller**: gr[10] = 1, then halt
+8. Controller restarts PE for next basepair
+
+### Step 10: Handle forceMask (First BP Only)
+- **Condition**: gr[3] == 0 (first BP, loop counter is 0)
+- Additional check for !prevSliceExists (use flag in reg or from initial setup)
+- **If condition met**: `VP &= (AllOnes XOR 1)`, `VN |= 1`
+
+### Step 11: ExtraSlice Merge Check
+- Load extraSlice scoreEnd from SPM[17] into temp reg
+- **If scoreEnd != -1**:
+  - Move current slice to left (reg[12-15])
+  - Load extraSlice from SPM[15-17] to right (reg[16-19]): VP from SPM[15], VN from SPM[16], scoreEnd from SPM[17]
+  - Call mergeTwoSlices
+  - Set hinP/hinN from score comparison: hinP = (mergeScore > wsScore), hinN = (mergeScore < wsScore)
+- **If scoreEnd == -1**:
+  - hinP = Ph >> 31, hinN = Mh >> 31 (32-bit words, from getNextSlice outputs reg[5], reg[4])
+  - Use RSHIFT_WORD opcode which shifts by WordSize (32 bits)
+
+### Step 12: Update Loop Counter (PE)
+- Loop counter gr[3] already incremented in Step 9
+- Loop continuation controlled by controller (sends next BP or signals done)
+
+### Step 13: Controller Sends Basepairs (Controller Side) - SYNCHRONIZED
+- Initialize: gr[5] = 0 (BP sent counter), gr[6] = num_chunks * 16 (total BP count)
+- Initialize: gr[8] = 0 (BP index within chunk), gr[9] = 0 (chunk index)
+- **Loop while gr[5] < gr[6]:**
+  1. Extract 2 bits from gr[4]: `bp = (gr[4] >> (gr[8] * 2)) & 3`
+  2. Send bp to PE via out_port (PE receives into gr[6])
+  3. Increment: gr[5]++ (BP sent counter), gr[8]++ (BP index in chunk)
+  4. **Wait for PE acknowledgment**: spin on gr[13] until PE signals gr[10]=1
+  5. Restart PE at loop start PC
+  6. If gr[8] == 16: load next chunk into gr[4], gr[8] = 0, gr[9]++
+- **Exit loop when gr[5] >= gr[6]** (all basepairs sent)
+
+### Step 14: Final Merge and Push Successors (Controller)
+- Wait for PE completion (gr[13] sync from all PEs)
+- Loop over out-neighbors (count from queue entry):
+  - Get neighbor node ID via magic instruction
+  - Set up queue entry in controller gr registers for magic(3) insert
+  - **Note**: Controller gr[0] can be used (only PE gr[0] must stay 0)
+
+### Step 15: Restart Main Loop
+- Jump back to Step 1 (queue pop)
+- Exit when queue empty (gr[5] == 0 after magic(5))
+
+---
+
+## New Compute Instructions Needed
+
+```python
+# Eq &= forceEq
+f.write(compute_instruction(BWISE_AND, INVALID, COPY, 1, 10, 0, 0, 0, 0, 1))
+
+# forceEq = AllOnes XOR 1 (requires reg[20] = 1)
+f.write(compute_instruction(BWISE_XOR, INVALID, COPY, 10, 20, 0, 0, 0, 0, 10))
+
+# forceMask: VP &= forceEq, VN |= 1
+f.write(compute_instruction(BWISE_AND, INVALID, COPY, 3, 10, 0, 0, 0, 0, 3))
+f.write(compute_instruction(BWISE_OR, INVALID, COPY, 2, 20, 0, 0, 0, 0, 2))
+```
+
+---
+
+## Constraints
+
+1. **ALL gr[0] = 0 and reg[0] = 0**: Always zero in ALL register files (PE, Controller, Compute). Never write to gr[0] or reg[0] anywhere. Magic instructions must be modified to skip gr[0].
+2. **PE gr[3]**: Loop counter (incremented each BP)
+3. **PE gr[6]**: Basepair received from controller (0-3)
+4. **Controller gr[5]**: BP sent counter, **gr[6]**: Total BP count
+5. **Controller gr[10]**: Num in-neighbors (incoming edges)
+6. **SPM[13-14]**: Must store Ph (reg[8]) and Mh (reg[9]) after getNextSlice
+7. **SPM[15-17]**: ExtraSlice storage (VP, VN, scoreEnd)
+8. **SPM Latency**: 2 NOP cycles after each SPM access
+9. **VLIW Pairing**: No RAW hazards, no two SPM ops, no same-dest writes
+10. **Magic Instructions**: Only in controller, not in PE
+11. **Jump Offsets**: Calculate carefully, consider two-pass approach
+12. **Basepair Flow**: Controller sends one BP (0-3), PE receives into gr[6], PE signals gr[10]=1 when done
+13. **Incoming Edges**: If num_in_neighbors > 0, merge all incoming slices before processing basepairs
+
+---
+
+## Verification
+
+1. Build: `make ADDRESS_SANITIZER=0`
+2. Run: `bash scripts/gbv_throughput.sh`
+3. Check: Compare output with expected graph alignment scores
+4. Debug: Add printf in pe_array.cpp for queue/register values
+
+---
+
+## Implementation Order
+
+1. Modify `gbv_main_instruction()` for queue ops and initial PE dispatch
+2. Add controller basepair send loop (extracts 2 bits at a time, sends via out_port)
+3. Modify `pe_instruction()` for flag handling (keep packed in gr[3])
+4. Add PE main loop: receive basepair → load Eq → getNextSlice → merge check
+5. Add extraSlice merge logic and hinP/hinN computation
+6. Add successor push logic (controller side)
+7. Test and calibrate jump offsets
+
+**Key simplification**: Since basepairs are sent one at a time, the PE has a single loop (not nested). The controller drives the timing by sending basepairs sequentially.
+
