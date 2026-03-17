@@ -564,6 +564,60 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
     if (is_magic) {
         int magic_id = magic_payload;
+
+        // Shared PE register aliases and subroutines for GWFA magic
+        constexpr int DIAG_BIAS = 16384; // 0x4000
+        auto &gr  = *addr_regfile_unit;
+        int *reg  = regfile_unit->register_file;
+
+        // mvi2-style 2-bit extract from interleaved SPM
+        auto mvi2_ld = [&](int base_reg, int off_gr) -> int {
+            int bp = reg[base_reg] + gr.at(off_gr);
+            int phys = apply_address_swizzle(bp >> 4);
+            return (int)(((uint32_t)SPM_unit->buffer[phys]
+                >> ((bp & 0xF) << 1)) & 0x3);
+        };
+
+        // EXTEND subroutine: extend wavefront along diagonal.
+        // In: gr[8]=vd(packed), gr[9]=k, gr[11]=ts_off
+        // Uses: gr[14]=ql, gr_lo[12]=vl, reg[10]=gs_base,
+        //       reg[11]=q_base
+        // Out: gr[9]=extended k, gr[2]=d
+        // Clobbers: gr[2], gr[4], gr[7], gr[15], reg[6], reg[7],
+        //           reg[8]
+        auto extend = [&]() {
+            // d = lo(vd) - 0x4000
+            gr.st(2, gr.at(8, CTRL_GR_LO) - DIAG_BIAS);
+            // max_k = min(ql - d, vl)
+            reg[8] = gr.at(14) - gr.at(2);
+            //NOP
+
+            if (reg[8] > gr.at(12, CTRL_GR_LO)){
+
+                reg[8] = gr.at(12, CTRL_GR_LO);
+                //NOP
+            }
+
+            // precompute char-space offsets (+1 for 1-based)
+            gr.st(4, gr.at(11) + gr.at(9) + 1);     // ts_off+k+1
+            gr.st(7, gr.at(2) + gr.at(9) + 1);      // d+k+1
+
+            while (true){
+                reg[6] = mvi2_ld(10, 4); gr.st(4, gr.at(4) + 1); //load gs char and cursor++
+                //NOP
+
+                reg[7] = mvi2_ld(11, 7); gr.st(7, gr.at(7) + 1); //load q char and cursor++
+                gr.st(9, gr.at(9) + 1);              // k++
+
+                if (gr.at(9) >= reg[8]) break;
+
+                if (reg[6] != reg[7]) break;
+            }
+
+            gr.st(9, gr.at(9) - 1);
+            //NOP
+        };
+
         if (magic_id == 8) {
             // Register-mapped magic 8: gwfa extend+emit per tile.
             // All values in gr[]/reg[]/SPM, each op = one ISA instruction.
@@ -603,7 +657,6 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //  9    | prev_vd | previous tile_a vd
             // 10    | gs_base | GWFA_GS_START * 16
             // 11    | q_base  | GWFA_Q_START  * 16
-            constexpr int DIAG_BIAS     = 16384; // 0x4000
             constexpr int TILE_A_OFF    = 0;
             constexpr int NODE_INFO_OFF = 128;
             constexpr int TILE_B_OFF    = 256;
@@ -614,17 +667,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             constexpr int META_TILE_N   = 1155;
             constexpr int META_INTV_N   = 1159;
 
-            auto &gr  = *addr_regfile_unit;
-            int *reg  = regfile_unit->register_file;
             int *spm  = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
-
-            // mvi2-style 2-bit extract from interleaved SPM
-            auto mvi2_ld = [&](int base_reg, int off_gr) -> int {
-                int bp = reg[base_reg] + gr.at(off_gr);
-                int phys = apply_address_swizzle(bp >> 4);
-                return (int)(((uint32_t)SPM_unit->buffer[phys]
-                    >> ((bp & 0xF) << 1)) & 0x3);
-            };
 
             // --- EMIT_B subroutine ---
             // In: gr[4]=emit_vd(packed), gr[5]=emit_k (adjacent for mvd)
@@ -670,46 +713,6 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 }
             m8_emit_done:
                 return;
-            };
-
-            // --- EXTEND subroutine ---
-            // In: gr[8]=vd(packed), gr[9]=k, gr[11]=ts_off
-            // Uses: gr[14]=ql, gr_lo[12]=vl, reg[10]=gs_base,
-            //       reg[11]=q_base
-            // Out: gr[9]=extended k
-            // Clobbers: gr[2], gr[4], gr[7], gr[15], reg[6], reg[7],
-            //           reg[8]
-            auto extend = [&]() {
-                // d = lo(vd) - 0x4000
-                gr.st(2, gr.at(8, CTRL_GR_LO) - DIAG_BIAS);
-                // max_k = min(ql - d, vl) - 1
-                reg[8] = gr.at(14) - gr.at(2);
-                //NOP
-
-                if (reg[8] > gr.at(12, CTRL_GR_LO)){
-
-                    reg[8] = gr.at(12, CTRL_GR_LO);
-                    //NOP
-                }
-
-                // precompute char-space offsets (+1 for 1-based)
-                gr.st(4, gr.at(11) + gr.at(9) + 1);     // ts_off+k+1
-                gr.st(7, gr.at(2) + gr.at(9) + 1);      // d+k+1
-
-                while (true){
-                    reg[6] = mvi2_ld(10, 4); gr.st(4, gr.at(4) + 1); //load gs char and cursor++
-                    //NOP
-
-                    reg[7] = mvi2_ld(11, 7); gr.st(7, gr.at(7) + 1); //load q char and cursor++
-                    gr.st(9, gr.at(9) + 1);              // k++
-
-                    if (gr.at(9) >= reg[8]) break;
-
-                    if (reg[6] != reg[7]) break;
-                }
-
-                gr.st(9, gr.at(9) - 1);              // k++
-                //NOP
             };
 
             // --- CHECK_AOUT subroutine ---
@@ -990,6 +993,201 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                     spm[1152] = tb_n - 1;
                 }
             }
+        } else if (magic_id == 13) {
+            // Phase 2 extend+classify: process diags from A queue.
+            // Uses shared extend/mvi2_ld subroutines defined above.
+            //
+            // gr[]  | name        | notes
+            // ------|-------------|-------------------------------
+            //  1 lo | i           | loop index
+            //  1 hi | tile_n      | input diag count
+            //  2    | d           | set by extend
+            //  3    | emit_vd     | contiguous with gr[4] for mvd
+            //  4    | emit_k/scr  | i_val before branch tree; emit_k after
+            //  5 lo | n_pushed    | pushed diag count
+            //  5 hi | n_intv      | interval count
+            //  6 lo | n_fin0      | finished endQ=0 count
+            //  6 hi | n_fin1      | finished endQ=1 count
+            //  7    | scratch     | SPM offsets
+            //  8    | vd          | current diag (packed v|d_biased)
+            //  9    | k           | wavefront offset
+            // 11    | ts_off      | seq offset for current diag
+            // 12 lo | vl          | vertex length
+            // 14    | ql          | query length (read-only)
+            // 15    | scratch     |
+            constexpr int P2_INPUT_OFF  = 0;
+            constexpr int P2_PUSHED_OFF = 256;
+            constexpr int P2_INTV_OFF   = 640;
+            constexpr int P2_FIN0_OFF   = 768;
+            constexpr int P2_FIN1_OFF   = 896;
+            constexpr int P2_META_OFF   = 1024;
+            constexpr int P2_M_PUSHED   = 0;
+            constexpr int P2_M_INTV     = 1;
+            constexpr int P2_M_FIN0     = 2;
+            constexpr int P2_M_FIN1     = 3;
+            constexpr int P2_M_TILE_N   = 4;
+
+            int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+
+            // === INIT ===
+            gr.st(1, spm[P2_META_OFF + P2_M_TILE_N], CTRL_GR_HI); // tile_n
+            gr.st(1, 0, CTRL_GR_LO);                               // i = 0
+
+            gr.st(5, 0);                                            // n_pushed=0, n_intv=0
+            gr.st(6, 0);                                            // n_fin0=0, n_fin1=0
+
+            if (gr.at(1, CTRL_GR_HI) <= 0)
+                goto m13_wb; // still write zero metadata
+
+            reg[10] = GWFA_GS_START * 16;  // gs_base
+            reg[11] = GWFA_Q_START * 16;   // q_base
+
+            // === LOOP ===
+        m13_loop:
+            if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
+                goto m13_wb;
+
+            // 4*i for input indexing
+            gr.st(7, gr.at(1, CTRL_GR_LO) << 2); // 4*i
+            //NOP
+
+            // load vd, k
+            gr.st(8, spm[P2_INPUT_OFF + gr.at(7)]); gr.st(9, spm[P2_INPUT_OFF + gr.at(7) + 1]);
+            //NOP
+            // load ts_off, vl
+            gr.st(11, spm[P2_INPUT_OFF + gr.at(7) + 2]); gr.st(12, spm[P2_INPUT_OFF + gr.at(7) + 3]);
+            //NOP
+
+            extend(); // sets gr[2]=d, updates gr[9]=k
+
+            gr.st(4, gr.at(2) + gr.at(9)); // i_val = d + k
+            // === BRANCH TREE ===
+            gr.st(15, gr.at(9) + 1); // k+1
+
+            if (gr.at(15) >= gr.at(12, CTRL_GR_LO))
+                goto m13_not_mid_v;
+
+            // k+1 < vl: check i_val+1 vs ql
+            gr.st(15, gr.at(4) + 1);
+            //NOP
+
+            if (gr.at(15) >= gr.at(14))
+                goto m13_only_del;
+
+            // --- MID_V_MID_Q: push 3 diags (gr[3,4] = contiguous mvd pair) ---
+            {
+                gr.st(7, gr.at(5, CTRL_GR_LO) << 1);  // 2*n_pushed
+                gr.st(3, gr.at(8) - 1);                // emit_vd = vd-1
+                gr.st(4, gr.at(9) + 1);                // emit_k  = k+1
+                //NOP
+
+                // push (vd-1, k+1) — mvd gr[3]
+                spm[P2_PUSHED_OFF + gr.at(7)] = gr.at(3); spm[P2_PUSHED_OFF + gr.at(7) + 1] = gr.at(4);
+                gr.st(7, gr.at(7) + 2);
+
+                // push (vd, k+1) — mvd gr[3] (k+1 still in gr[4])
+                gr.st(3, gr.at(8));
+                //NOP
+                
+                spm[P2_PUSHED_OFF + gr.at(7)] = gr.at(3); spm[P2_PUSHED_OFF + gr.at(7) + 1] = gr.at(4); gr.st(7, gr.at(7) + 2); //auto increment
+                gr.st(3, gr.at(8) + 1); // push (vd+1, k) — mvd gr[3]
+
+                gr.st(4, gr.at(9));
+                gr.st(5, gr.at(5, CTRL_GR_LO) + 3, CTRL_GR_LO); // n_pushed+=3
+
+                spm[P2_PUSHED_OFF + gr.at(7)] = gr.at(3); spm[P2_PUSHED_OFF + gr.at(7) + 1] = gr.at(4);
+                gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO); // i++
+
+                goto m13_loop;
+            }
+
+            // --- NOT_MID_V (k+1 >= vl) ---
+        m13_not_mid_v:
+            gr.st(15, gr.at(4) + 1); // i_val+1
+            //NOP
+            
+            if (gr.at(15) >= gr.at(14))
+                goto m13_end_both;
+
+            // --- END_V_MID_Q: intv + finished endQ=0 ---
+            {
+                // intv: (vd, vd+1) — mvd gr[3] (gr[3,4] contiguous)
+                gr.st(7, gr.at(5, CTRL_GR_HI) << 1); // 2*n_intv
+                gr.st(3, gr.at(8));                    // vd
+
+                gr.st(4, gr.at(8) + 1);               // vd+1
+                //NOP
+
+                spm[P2_INTV_OFF + gr.at(7)] = gr.at(3); spm[P2_INTV_OFF + gr.at(7) + 1] = gr.at(4);
+                gr.st(5, gr.at(5, CTRL_GR_HI) + 1, CTRL_GR_HI); // n_intv++
+
+                // finished endQ=0: (vd, k) — mvd gr[8] (gr[8,9] contiguous)
+                gr.st(7, gr.at(6, CTRL_GR_LO) << 1); // 2*n_fin0
+                gr.st(6, gr.at(6, CTRL_GR_LO) + 1, CTRL_GR_LO); // n_fin0++
+                                                                //
+                spm[P2_FIN0_OFF + gr.at(7)] = gr.at(8); spm[P2_FIN0_OFF + gr.at(7) + 1] = gr.at(9);
+                gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO); // i++
+
+                goto m13_loop;
+            }
+
+            // --- END_BOTH_OR_TERM ---
+        m13_end_both:
+            // check termination: v==GWFA_END_V(2) && k+1==vl
+            if (gr.at(8, CTRL_GR_HI) != 2)
+                goto m13_end_both_emit;
+
+            gr.st(15, gr.at(9) + 1);
+            //NOP
+            
+            if (gr.at(15) == gr.at(12, CTRL_GR_LO))
+                goto m13_terminate;
+
+        m13_end_both_emit:
+            // finished endQ=1: (vd, k)
+            {
+                //make sure the latter does not overwrite the input of former
+                gr.st(7, gr.at(6, CTRL_GR_HI) << 1); // 2*n_fin1
+                gr.st(6, gr.at(6, CTRL_GR_HI) + 1, CTRL_GR_HI); // n_fin1++
+
+                spm[P2_FIN1_OFF + gr.at(7)] = gr.at(8); spm[P2_FIN1_OFF + gr.at(7) + 1] = gr.at(9);
+                gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO); // i++
+
+                goto m13_loop;
+            }
+
+            // --- ONLY_DEL (k+1<vl, i_val+1>=ql) — mvd gr[3] ---
+        m13_only_del:
+            {
+                gr.st(7, gr.at(5, CTRL_GR_LO) << 1); // 2*n_pushed
+                gr.st(3, gr.at(8) - 1);               // emit_vd = vd-1
+
+                gr.st(4, gr.at(9) + 1);               // emit_k  = k+1
+                gr.st(5, gr.at(5, CTRL_GR_LO) + 1, CTRL_GR_LO); // n_pushed++
+                
+                spm[P2_PUSHED_OFF + gr.at(7)] = gr.at(3); spm[P2_PUSHED_OFF + gr.at(7) + 1] = gr.at(4);
+                gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO); // i++
+
+                goto m13_loop;
+            }
+
+        m13_terminate:
+            SPM_unit->buffer[32767] = 1;
+            //NOP
+
+            goto m13_done;
+
+            // === WRITEBACK ===
+        m13_wb:
+            spm[P2_META_OFF + P2_M_PUSHED] = gr.at(5, CTRL_GR_LO);
+            //NOP
+            spm[P2_META_OFF + P2_M_INTV] = gr.at(5, CTRL_GR_HI);
+            //NOP
+            spm[P2_META_OFF + P2_M_FIN0] = gr.at(6, CTRL_GR_LO);
+            //NOP
+            spm[P2_META_OFF + P2_M_FIN1] = gr.at(6, CTRL_GR_HI);
+            //NOP
+        m13_done: ;
         }
         (*PC)++;
     } else if (opcode == 0) {              // add rd rs1 rs2
@@ -1250,9 +1448,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         }
 
         if (reg_auto_increasement_flag_0)
-            addr_regfile_unit->st(reg_0, addr_regfile_unit->at(reg_0) + 1);
+            addr_regfile_unit->st(reg_0, addr_regfile_unit->at(reg_0) + 2);
         if (reg_auto_increasement_flag_1)
-            addr_regfile_unit->st(reg_1, addr_regfile_unit->at(reg_1) + 1);
+            addr_regfile_unit->st(reg_1, addr_regfile_unit->at(reg_1) + 2);
         (*PC)++;
     } else if (opcode == CTRL_MVDQ) {
         fprintf(stderr, "not implemented yet\n");

@@ -501,6 +501,34 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int done = gwfa_phase2(main_addressing_register[12]);
             main_addressing_register[15] = gwfa_get_n_a();
             if (done) write_spm_magic(32767, 1);
+        } else if (magic_id == 14) {
+            // Phase 2 tile load: pop from A into all PEs
+            int total = 0;
+            for (int pe = 0; pe < 4; pe++) {
+                int *pe_spm = SPM_unit->buffer
+                    + pe * SPM_BANK_GROUP_SIZE;
+                total += gwfa_phase2_tile_load(pe_spm);
+            }
+            // gr[2] = 1 if any diags loaded, 0 otherwise
+            main_addressing_register[2] =
+                (total > 0) ? 1 : 0;
+        } else if (magic_id == 15) {
+            // Phase 2 tile writeback
+            for (int pe = 0; pe < 4; pe++) {
+                int *pe_spm = SPM_unit->buffer
+                    + pe * SPM_BANK_GROUP_SIZE;
+                gwfa_phase2_tile_writeback(pe_spm);
+            }
+        } else if (magic_id == 16) {
+            // Phase 2 finalize (dedup, set n_a)
+            int err = gwfa_phase2_finalize();
+            main_addressing_register[15] =
+                gwfa_get_n_a();
+            if (err) write_spm_magic(32767, 1);
+        } else if (magic_id == 17) {
+            // Set score = gr[12] (current edit distance)
+            gwfa_set_score(
+                main_addressing_register[12]);
         } else if (magic_id == 6) {
             //WFA initializations
             int MEM_BLOCK_SIZE = 32;
