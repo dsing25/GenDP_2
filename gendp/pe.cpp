@@ -673,12 +673,15 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             };
 
             // --- EXTEND subroutine ---
-            // In: gr[2]=d, gr[9]=k, gr[11]=ts_off
+            // In: gr[8]=vd(packed), gr[9]=k, gr[11]=ts_off
             // Uses: gr[14]=ql, gr_lo[12]=vl, reg[10]=gs_base,
             //       reg[11]=q_base
             // Out: gr[9]=extended k
-            // Clobbers: gr[4], gr[7], gr[15], reg[6], reg[7], reg[8]
+            // Clobbers: gr[2], gr[4], gr[7], gr[15], reg[6], reg[7],
+            //           reg[8]
             auto extend = [&]() {
+                // d = lo(vd) - 0x4000
+                gr.st(2, gr.at(8, CTRL_GR_LO) - DIAG_BIAS);
                 // max_k = min(ql - d, vl) - 1
                 reg[8] = gr.at(14) - gr.at(2);
                 //NOP
@@ -761,108 +764,146 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         m8_outer_loop:
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
                 goto m8_writeback;                        // i >= tile_n
-            gr.st(2, gr.at(1, CTRL_GR_LO) + gr.at(1, CTRL_GR_LO));                  // 2*i
-            gr.st(8, spm[TILE_A_OFF + gr.at(2)]);        // vd
-            gr.st(9, spm[TILE_A_OFF + gr.at(2) + 1]);    // k
+
+            gr.st(2, gr.at(1, CTRL_GR_LO) << 1);                  // 2*i
+            //NOP
+
+            gr.st(8, spm[TILE_A_OFF + gr.at(2)]); gr.st(9, spm[TILE_A_OFF + gr.at(2) + 1]); // vd, k
+            //NOP
+
+            //NOP
+            //NOP
+
             // v == prev_v → skip node setup
             if (gr.at(8, CTRL_GR_HI) == gr.at(6, CTRL_GR_HI))
                 goto m8_skip_node;
+
             // node_idx++
             gr.st(6, gr.at(6, CTRL_GR_LO) + 1, CTRL_GR_LO);
             // prev_v = v
             gr.st(6, gr.at(8, CTRL_GR_HI), CTRL_GR_HI);
+
             // 2*node_idx
-            gr.st(15, gr.at(6, CTRL_GR_LO)
-                + gr.at(6, CTRL_GR_LO));
-            gr.st(11, spm[NODE_INFO_OFF + gr.at(15)]);   // ts_off
-            gr.st(12, spm[NODE_INFO_OFF + gr.at(15) + 1],
-                CTRL_GR_LO);                              // vl
+            gr.st(15, gr.at(6, CTRL_GR_LO) << 1);
+            //NOP
+
+            gr.st(11, spm[NODE_INFO_OFF + gr.at(15)]); gr.st(12, spm[NODE_INFO_OFF + gr.at(15) + 1]);    // ts_off, vl (clobbers 12_hi, but we overwrite it later anyway)
 
         m8_skip_node:
-            // d = lo(vd) - 0x4000
-            gr.st(2, gr.at(8, CTRL_GR_LO) - DIAG_BIAS);
-            extend();
+            extend(); //call
+
             // store k back
-            gr.st(15, gr.at(1, CTRL_GR_LO)
-                + gr.at(1, CTRL_GR_LO));                  // 2*i
-            spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
-            // emit_b(vd-1, k+1)
+            gr.st(15, gr.at(1, CTRL_GR_LO) + gr.at(1, CTRL_GR_LO));                  // 2*i
             gr.st(4, gr.at(8) - 1);                      // emit_vd
+
+            spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
             gr.st(5, gr.at(9) + 1);                     // emit_k
-            emit_b();
-            check_aout();
+
+            // emit_b(vd-1, k+1)
+            emit_b(); //call
+            
+            check_aout(); //call
+
             // ppk = k, prev_vd = vd, i++
             reg[2] = gr.at(9);
             reg[9] = gr.at(8);
-            gr.st(1, gr.at(1, CTRL_GR_LO) + 1,
-                CTRL_GR_LO);
+
+            gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO);
+            //NOP
 
             // === SEQUENTIAL CHECK ===
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
                 goto m8_last_emits;                       // i >= tile_n
-            gr.st(2, gr.at(1, CTRL_GR_LO)
-                + gr.at(1, CTRL_GR_LO));                  // 2*i
-            gr.st(8, spm[TILE_A_OFF + gr.at(2)]);        // next vd
-            gr.st(9, spm[TILE_A_OFF + gr.at(2) + 1]);    // next k
+
+            gr.st(2, gr.at(1, CTRL_GR_LO) + gr.at(1, CTRL_GR_LO));                  // 2*i
             gr.st(15, reg[9] + 1);                        // prev_vd+1
+
+            gr.st(8, spm[TILE_A_OFF + gr.at(2)]); gr.st(9, spm[TILE_A_OFF + gr.at(2) + 1]); // next vd and k
+            //NOP
+
+            //NOP
+            //NOP
+            
             if (gr.at(8) != gr.at(15))
                 goto m8_non_seq;
 
             // === SEQ_FIRST (2nd diagonal in run) ===
             {
-                gr.st(2, gr.at(8, CTRL_GR_LO) - DIAG_BIAS);  // d
-                extend();
-                gr.st(15, gr.at(1, CTRL_GR_LO)
-                    + gr.at(1, CTRL_GR_LO));              // 2*i
+                extend(); //Call
+
+                gr.st(15, gr.at(1, CTRL_GR_LO) << 1);                  // 2*i
+                //NOP
+
                 spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
                 // emit_k = max(ppk, k) + 1
                 gr.st(5, reg[2]);                        // ppk
-                if (gr.at(9) > gr.at(5))
+
+                if (gr.at(9) > gr.at(5)){
                     gr.st(5, gr.at(9));
+                    //NOP
+                }
+
                 gr.st(5, gr.at(5) + 1);
                 gr.st(4, reg[9]);                         // emit_vd=prev_vd
-                emit_b();
-                check_aout();
+
+                emit_b(); //call
+
+                check_aout(); //call
+
                 reg[1] = reg[2];                          // pk = ppk
                 reg[2] = gr.at(9);                        // ppk = k
+
                 reg[9] = gr.at(8);                        // prev_vd = vd
-                gr.st(1, gr.at(1, CTRL_GR_LO) + 1,
-                    CTRL_GR_LO);                          // i++
+                gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO);                          // i++
             }
 
             // === SEQ_WHILE (3rd+ diagonals) ===
         m8_seq_while:
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
                 goto m8_seq_last;
-            gr.st(2, gr.at(1, CTRL_GR_LO)
-                + gr.at(1, CTRL_GR_LO));
-            gr.st(8, spm[TILE_A_OFF + gr.at(2)]);
-            gr.st(9, spm[TILE_A_OFF + gr.at(2) + 1]);
+
+            gr.st(2, gr.at(1, CTRL_GR_LO) + gr.at(1, CTRL_GR_LO));
             gr.st(15, reg[9] + 1);
+
+            gr.st(8, spm[TILE_A_OFF + gr.at(2)]); gr.st(9, spm[TILE_A_OFF + gr.at(2) + 1]);
+            //NOP
+            
+            //NOP
+            //NOP
+
             if (gr.at(8) != gr.at(15))
                 goto m8_seq_last;
+
             {
-                gr.st(2, gr.at(8, CTRL_GR_LO) - DIAG_BIAS);  // d
-                extend();
-                gr.st(15, gr.at(1, CTRL_GR_LO)
-                    + gr.at(1, CTRL_GR_LO));
+                extend(); //call
+
+                gr.st(15, gr.at(1, CTRL_GR_LO) << 1);
+                //NOP
+
                 spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
-                // emit_k = max(pk, ppk+1, k+1)
                 gr.st(5, reg[1]);                        // pk
+
                 gr.st(15, reg[2] + 1);                    // ppk+1
+                gr.st(4, reg[9]);                          // prev_vd
+                
+                //NOT sure about this block. Might end up doing comp instr
+                // emit_k = max(pk, ppk+1, k+1)
                 if (gr.at(15) > gr.at(5))
                     gr.st(5, gr.at(15));
                 gr.st(15, gr.at(9) + 1);                  // k+1
                 if (gr.at(15) > gr.at(5))
                     gr.st(5, gr.at(15));
-                gr.st(4, reg[9]);                          // prev_vd
-                emit_b();
-                check_aout();
+
+                emit_b(); //call
+
+                check_aout(); //call
+                
+                //Be careful of ordering when we update these. We should get old val of reg2  on ld
                 reg[1] = reg[2];
                 reg[2] = gr.at(9);
+
                 reg[9] = gr.at(8);
-                gr.st(1, gr.at(1, CTRL_GR_LO) + 1,
-                    CTRL_GR_LO);
+                gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO);
             }
             goto m8_seq_while;
 
@@ -870,39 +911,53 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         m8_seq_last:
             gr.st(5, reg[1]);                            // pk
             gr.st(15, reg[2] + 1);                        // ppk+1
-            if (gr.at(15) > gr.at(5))
+
+            if (gr.at(15) > gr.at(5)){
                 gr.st(5, gr.at(15));
+                //NOP
+            }
             gr.st(4, reg[9]);                              // prev_vd
-            emit_b();
+
+            emit_b(); //call
+
             goto m8_trail_emit;
 
             // === NON_SEQ ===
         m8_non_seq:
             gr.st(4, reg[9]);                              // prev_vd
             gr.st(5, reg[2] + 1);                        // ppk+1
-            emit_b();
+
+            emit_b(); //call
 
             // === TRAIL_EMIT ===
         m8_trail_emit:
             gr.st(4, reg[9] + 1);                         // prev_vd+1
             gr.st(5, reg[2]);                             // ppk
-            emit_b();
+            
+            emit_b(); //call
+            
             goto m8_outer_loop;
 
             // === LAST_EMITS ===
         m8_last_emits:
             gr.st(4, reg[9]);
             gr.st(5, reg[2] + 1);
-            emit_b();
+            
+            emit_b(); //call
+            
             gr.st(4, reg[9] + 1);
             gr.st(5, reg[2]);
+            
             emit_b();
 
             // === WRITEBACK ===
         m8_writeback:
             spm[META_TB_N]   = gr.at(3, CTRL_GR_LO);    // tb_n
+            //NOP
             spm[META_TA_N]   = gr.at(3, CTRL_GR_HI);    // ta_n
+            //NOP
             spm[META_INTV_N] = gr.at(12, CTRL_GR_HI);   // intv_n
+            //NOP
         m8_done: ;
         } else if (magic_id == 11) {
             // Boundary sort: compare-and-swap last B of this PE with first B of next PE
