@@ -5,6 +5,7 @@ gr = 1
 SPM = 2
 comp_ib = 3
 ctrl_ib = 4
+s1c = 4            # Controller scratchpad (repurposed ctrl_ib)
 in_buf = 5
 out_buf = 6
 in_port = 7

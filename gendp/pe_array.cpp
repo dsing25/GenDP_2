@@ -39,6 +39,8 @@ pe_array::pe_array(int input_size, int output_size) {
     main_addressing_register[0] = 0;
     main_PC = 0;
     memset(va_regfile, 0, sizeof(va_regfile));
+    memset(s1c, 0, sizeof(s1c));
+    mm = nullptr;
     //+1 allows addressing full range. 1 is dummy data. Not legal in real hardware
     SPM_unit = new SPM(SPM_ADDR_NUM+1, &active_event_producers);
     for (i = 0; i < PE_NUM; i++)
@@ -187,6 +189,17 @@ LoadResult pe_array::load(int source_pos, int reg_immBar_flag, int rs1, int rs2,
             fprintf(stderr, "main load S2 addr %d error.\n", source_addr);
             exit(-1);
         }
+    } else if (source_pos == CTRL_S1C) {
+        if (source_addr >= 0 && source_addr < S1C_SIZE) {
+            data.data[0] = s1c[source_addr];
+#ifdef PROFILE
+        printf("%d from S1c[%d] to ", data.data[0], source_addr);
+#endif
+        } else {
+            fprintf(stderr, "main load S1c addr %d error.\n",
+                source_addr);
+            exit(-1);
+        }
     } else if (source_pos == 3) {
         PE_instruction[0] = compute_instruction_buffer[source_addr][0];
         PE_instruction[1] = compute_instruction_buffer[source_addr][1];
@@ -267,6 +280,17 @@ void pe_array::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, LoadRe
 #endif
         } else {
             fprintf(stderr, "main store S2 addr %d error.\n", dest_addr);
+            exit(-1);
+        }
+    } else if(dest_pos == CTRL_S1C) {
+        if (dest_addr >= 0 && dest_addr < S1C_SIZE) {
+            s1c[dest_addr] = data.data[0];
+#ifdef PROFILE
+            printf("S1c[%d].\n", dest_addr);
+#endif
+        } else {
+            fprintf(stderr, "main store S1c addr %d error.\n",
+                dest_addr);
             exit(-1);
         }
     } else if(dest_pos == 6) {
@@ -402,7 +426,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 sub.seq_off = (uint32_t*)(uintptr_t)va_regfile[1];
                 sub.seq_len = (int32_t*)(uintptr_t)va_regfile[2];
                 sub.arc = (subgfa_arc_t*)(uintptr_t)va_regfile[3];
-                sub.idx = (uint64_t*)(uintptr_t)va_regfile[4];
+                sub.arc_off = (uint32_t*)(uintptr_t)va_regfile[4];
                 sub.n_vtx = main_addressing_register[17];
                 sub.n_arc = main_addressing_register[18];
                 const uint32_t *q = (const uint32_t*)(uintptr_t)va_regfile[5];
@@ -426,6 +450,48 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 // Set PE gr[14] = ql
                 for (int pe = 0; pe < 4; pe++)
                     pe_unit[pe]->addr_regfile_unit->st(14, ql);
+
+                // Load graph topology into S2
+                int off = GRAPH_START;
+                s2->buffer[off++] = (int)sub.n_vtx;
+                s2->buffer[off++] = (int)sub.n_arc;
+                int seq_off_s2 = off;
+                for (uint32_t v = 0; v < sub.n_vtx; v++)
+                    s2->buffer[off++] =
+                        (int)sub.seq_off[v];
+                if (off & 1) off++; // even-align
+                int seq_len_s2 = off;
+                for (uint32_t v = 0; v < sub.n_vtx; v++)
+                    s2->buffer[off++] = sub.seq_len[v];
+                if (off & 1) off++;
+                int arc_off_s2 = off;
+                for (uint32_t v = 0; v <= sub.n_vtx; v++)
+                    s2->buffer[off++] =
+                        (int)sub.arc_off[v];
+                if (off & 1) off++;
+                int arc_s2 = off;
+                for (uint32_t a = 0; a < sub.n_arc; a++){
+                    uint32_t vw =
+                        (uint32_t)sub.arc[a].v
+                        | ((uint32_t)sub.arc[a].w << 16);
+                    s2->buffer[off++] = (int)vw;
+                    s2->buffer[off++] = sub.arc[a].ow;
+                }
+
+                // Set controller S2 offset registers
+                main_addressing_register[29] =
+                    seq_off_s2;
+                main_addressing_register[30] =
+                    seq_len_s2;
+                main_addressing_register[31] =
+                    arc_off_s2;
+
+                // Set MM pointer and base offsets
+                mm = gwfa_get_mm();
+                main_addressing_register[19] =
+                    gwfa_get_s_a_mm_off();
+                main_addressing_register[20] =
+                    gwfa_get_s_B_a_mm_off();
             }
             main_addressing_register[15] = gwfa_get_n_a();
         } else if (magic_id == 2) {

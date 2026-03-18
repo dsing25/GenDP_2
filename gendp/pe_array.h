@@ -29,6 +29,8 @@ class pe_array {
         int ras = 0;
         int input_buffer_size, output_buffer_size;
         uint64_t va_regfile[16];
+        int s1c[S1C_SIZE];     // Controller scratchpad
+        int *mm;               // Main memory (4GB block)
 
         void run(int cycle_limit, int simd, int setting, int main_instruction_setting);
         void show_gr();
