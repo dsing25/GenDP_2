@@ -152,7 +152,7 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_COMP_IB 3
 #define CTRL_CTRL_IB 4
 #define CTRL_S1C 4         // Controller scratchpad (repurposed ctrl_ib)
-#define S1C_SIZE 512
+#define S1C_SIZE 1024
 #define CTRL_IN_BUF 5
 #define CTRL_OUT_BUF 6
 #define CTRL_IN_PORT 7
@@ -173,6 +173,11 @@ inline int get_base_opcode(int opcode) {
 // GWFA interleaved SPM regions (pre-swizzle addresses)
 #define GWFA_Q_START  24064  // 94KB
 #define GWFA_GS_START 25088  // 98KB
+
+// GWFA ping-pong buffer bases (per-PE SPM offsets)
+#define GWFA_BUF0_BASE 0
+#define GWFA_BUF1_BASE 1280
+#define GWFA_P2_BASE   2560
 
 // GWFA graph topology in S2 (controller access)
 #define GRAPH_START 0

@@ -69,6 +69,8 @@ class pe_array {
     private:
         //helper
         int* get_output_dest(int dest, int rd);
+        void set_output_dest(int dest, int rd, int val);
+        int read_gr_src(int src, int idx);
         void process_events();
         void handle_spm_data_ready(SpmDataReadyData* evData);
 

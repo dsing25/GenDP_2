@@ -113,45 +113,33 @@ static subgfa_subgraph_t *buildSubgraph(
     const std::vector<int32_t> &arc_ow,
     const std::vector<uint64_t> &idx)
 {
-    subgfa_subgraph_t *sub =
-        (subgfa_subgraph_t*)calloc(
-            1, sizeof(subgfa_subgraph_t));
+    subgfa_subgraph_t *sub = (subgfa_subgraph_t*)calloc(1, sizeof(subgfa_subgraph_t));
     sub->n_vtx = n_vtx;
     sub->n_arc = (uint32_t)n_arc;
 
-    sub->graphSeq = encode_2bit(
-        graphSeq.data(), graphSeq.size());
+    sub->graphSeq = encode_2bit(graphSeq.data(), graphSeq.size());
 
-    sub->seq_off = (uint32_t*)
-        malloc(n_vtx * sizeof(uint32_t));
-    memcpy(sub->seq_off, seq_off.data(),
-        n_vtx * sizeof(uint32_t));
+    sub->seq_off = (uint32_t*)malloc(n_vtx * sizeof(uint32_t));
+    memcpy(sub->seq_off, seq_off.data(), n_vtx * sizeof(uint32_t));
 
-    sub->seq_len = (int32_t*)
-        malloc(n_vtx * sizeof(int32_t));
-    memcpy(sub->seq_len, seq_len.data(),
-        n_vtx * sizeof(int32_t));
+    sub->seq_len = (int32_t*)malloc(n_vtx * sizeof(int32_t));
+    memcpy(sub->seq_len, seq_len.data(), n_vtx * sizeof(int32_t));
 
-    sub->arc = (subgfa_arc_t*)
-        malloc(n_arc * sizeof(subgfa_arc_t));
+    sub->arc = (subgfa_arc_t*)malloc(n_arc * sizeof(subgfa_arc_t));
     for (uint64_t i = 0; i < n_arc; i++) {
-        assert(arc_v[i] <= 0xFFFF
-            && "vertex ID exceeds 16 bits");
-        assert(arc_w[i] <= 0xFFFF
-            && "vertex ID exceeds 16 bits");
+        assert(arc_v[i] <= 0xFFFF && "vertex ID exceeds 16 bits");
+        assert(arc_w[i] <= 0xFFFF && "vertex ID exceeds 16 bits");
         sub->arc[i].v = (uint16_t)arc_v[i];
         sub->arc[i].w = (uint16_t)arc_w[i];
         sub->arc[i].ow = arc_ow[i];
     }
 
     // Build CSR arc_off from cumulative n_arcs
-    sub->arc_off = (uint32_t*)
-        malloc((n_vtx + 1) * sizeof(uint32_t));
+    sub->arc_off = (uint32_t*)malloc((n_vtx + 1) * sizeof(uint32_t));
     sub->arc_off[0] = 0;
     for (uint32_t v = 0; v < n_vtx; v++) {
         uint32_t n_arcs_v = (uint32_t)idx[v];
-        sub->arc_off[v + 1] =
-            sub->arc_off[v] + n_arcs_v;
+        sub->arc_off[v + 1] = sub->arc_off[v] + n_arcs_v;
     }
     assert(sub->arc_off[n_vtx] == (uint32_t)n_arc);
 

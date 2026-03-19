@@ -563,7 +563,13 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 #endif
 
     if (is_magic) {
+        constexpr int MAGIC_MASK_BITS = 8;
         int magic_id = magic_payload;
+        int magic_mask = 0;
+        if (magic_payload >= (1 << MAGIC_MASK_BITS)) {
+            magic_id = magic_payload >> MAGIC_MASK_BITS;
+            magic_mask = magic_payload & ((1 << MAGIC_MASK_BITS) - 1);
+        }
 
         // Shared PE register aliases and subroutines for GWFA magic
         constexpr int DIAG_BIAS = 16384; // 0x4000
@@ -667,7 +673,11 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             constexpr int META_TILE_N   = 1155;
             constexpr int META_INTV_N   = 1159;
 
-            int *spm  = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+            // Ping-pong: mask bit 0 selects buffer half
+            int buf_base = (magic_mask & 1)
+                ? GWFA_BUF1_BASE : GWFA_BUF0_BASE;
+            int *spm  = &SPM_unit->buffer[
+                id * SPM_BANK_GROUP_SIZE + buf_base];
 
             // --- EMIT_B subroutine ---
             // In: gr[4]=emit_vd(packed), gr[5]=emit_k (adjacent for mvd)
@@ -964,11 +974,16 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         m8_done: ;
         } else if (magic_id == 11) {
             // Boundary sort: compare-and-swap last B of this PE with first B of next PE
-            int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+            // Ping-pong: mask bit 0 selects buffer half
+            int buf_base = (magic_mask & 1)
+                ? GWFA_BUF1_BASE : GWFA_BUF0_BASE;
+            int *spm = &SPM_unit->buffer[
+                id * SPM_BANK_GROUP_SIZE + buf_base];
             int tb_n = spm[1152]; // META_OFF
             if (id < 3) {
                 int *next = &SPM_unit->buffer[
-                    (id + 1) * SPM_BANK_GROUP_SIZE];
+                    (id + 1) * SPM_BANK_GROUP_SIZE
+                    + buf_base];
                 int next_tb_n = next[1152];
                 if (tb_n > 0 && next_tb_n > 0) {
                     int my_off = 256 + 2 * (tb_n - 1);
@@ -1027,7 +1042,8 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             constexpr int P2_M_FIN1     = 3;
             constexpr int P2_M_TILE_N   = 4;
 
-            int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+            int *spm = &SPM_unit->buffer[
+                id * SPM_BANK_GROUP_SIZE + GWFA_P2_BASE];
 
             // === INIT ===
             gr.st(1, spm[P2_META_OFF + P2_M_TILE_N], CTRL_GR_HI); // tile_n
