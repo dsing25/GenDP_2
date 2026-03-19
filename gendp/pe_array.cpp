@@ -184,8 +184,8 @@ struct Graph {
         nodes[3].sequence_packed[1] = 0xB9F311FF;  // bp 16-31: TTTTCACATATTCGTG
         nodes[3].sequence_packed[2] = 0x7FEBDCF0;  // bp 32-47: AATTATCTTGGTTTTC
         nodes[3].sequence_packed[3] = 0x8DFCBCDF;  // bp 48-63: TTCTATTGATTTCTAG
-        nodes[3].num_in_neighbors = 1;
-        nodes[3].in_neighbors[0] = 69829;
+        nodes[3].num_in_neighbors = 0;
+        nodes[3].in_neighbors[0] = 0;
         nodes[3].num_out_neighbors = 1;
         nodes[3].out_neighbors[0] = 69831;
         nodes[3].valid = true;
@@ -1007,7 +1007,7 @@ if (is_magic) {
         //   gr[4] = basepairs (32-bit)
         //   gr[5] = (unused - available)
         //   gr[6] = num_out_neighbors
-        //   gr[7] = num_chunks
+        //   gr[7] = (unused - available, was num_chunks)
         //   gr[10] = num_in_neighbors (for Step 1.5 incoming edge check)
         //   gr[11] = node_length (total basepairs for this node)
         // NOTE: Priority is NOT output (not needed in controller)
@@ -1022,7 +1022,7 @@ if (is_magic) {
             main_addressing_register[4] = top.basepairs;
             // gr[5] intentionally NOT written - available for other use
             main_addressing_register[6] = top.num_out_neighbors;
-            main_addressing_register[7] = top.num_chunks;
+            // gr[7] intentionally NOT written - no longer using chunks
             main_addressing_register[10] = top.num_in_neighbors;  // Step 1.5: incoming edges
             main_addressing_register[11] = top.node_length;       // Total basepairs for loop termination
 
@@ -1045,7 +1045,7 @@ if (is_magic) {
             main_addressing_register[3] = 0;  // all flags cleared including valid bit
             // gr[5] intentionally NOT written
             main_addressing_register[6] = 0;
-            main_addressing_register[7] = 0;
+            // gr[7] intentionally NOT written - no longer using chunks
             main_addressing_register[10] = 0;
             main_addressing_register[11] = 0;  // node_length = 0 when empty
 
@@ -1056,8 +1056,8 @@ if (is_magic) {
     }
     else if (magic_payload == 6) {
         // Magic payload 6: Get queue size
-        // Output to gr[0]
-        main_addressing_register[0] = graphAlignQueue.size;
+        // Output to gr[1] (gr[0] must ALWAYS be 0)
+        main_addressing_register[1] = graphAlignQueue.size;
 
 #ifdef PROFILE
         printf("Magic instruction (payload=%d): Queue size = %d\n", magic_payload, graphAlignQueue.size);
@@ -1066,26 +1066,22 @@ if (is_magic) {
     else if (magic_payload == 7) {
         // Magic payload 7: Get in-neighbor ID by index
         // Input:
-        //   gr[0] = node_id
-        //   gr[1] = neighbor_index (0 to num_in_neighbors-1)
+        //   gr[1] = node_id (from queue, preserved)
+        //   gr[5] = neighbor_index (0 to num_in_neighbors-1)
         // Output:
-        //   gr[2] = neighbor_id
-        //   gr[4] = valid (1 if found, 0 if not)
-        uint32_t node_id = main_addressing_register[0];
-        int neighbor_idx = main_addressing_register[1];
+        //   gr[5] = neighbor_id (overwrites the index)
+        uint32_t node_id = main_addressing_register[1];
+        int neighbor_idx = main_addressing_register[5];
         GraphNode* node = graphStructure.getNode(node_id);
 
         if (node && neighbor_idx >= 0 && neighbor_idx < node->num_in_neighbors) {
-            main_addressing_register[2] = node->in_neighbors[neighbor_idx];
-            main_addressing_register[4] = 1;  // valid
+            main_addressing_register[5] = node->in_neighbors[neighbor_idx];
 
 #ifdef PROFILE
             printf("Magic instruction (payload=%d): Get node=%u in_neighbor[%d]=%u\n",
                    magic_payload, node_id, neighbor_idx, node->in_neighbors[neighbor_idx]);
 #endif
         } else {
-            main_addressing_register[4] = 0;  // invalid
-
 #ifdef PROFILE
             printf("Magic instruction (payload=%d): Get node=%u in_neighbor[%d] -> INVALID\n",
                    magic_payload, node_id, neighbor_idx);
@@ -1094,27 +1090,27 @@ if (is_magic) {
     }
     else if (magic_payload == 8) {
         // Magic payload 8: Get node info
-        // Input: gr[0] = node_id
+        // Input: gr[1] = node_id (gr[0] must ALWAYS be 0)
         // Output:
-        //   gr[1] = length
-        //   gr[2] = num_in_neighbors
-        //   gr[3] = num_out_neighbors
-        //   gr[4] = valid (1 if found, 0 if not)
-        uint32_t node_id = main_addressing_register[0];
+        //   gr[2] = length
+        //   gr[3] = num_in_neighbors
+        //   gr[5] = num_out_neighbors
+        //   gr[9] = valid (1 if found, 0 if not)
+        uint32_t node_id = main_addressing_register[1];
         GraphNode* node = graphStructure.getNode(node_id);
 
         if (node) {
-            main_addressing_register[1] = node->length;
-            main_addressing_register[2] = node->num_in_neighbors;
-            main_addressing_register[3] = node->num_out_neighbors;
-            main_addressing_register[4] = 1;  // valid
+            main_addressing_register[2] = node->length;
+            main_addressing_register[3] = node->num_in_neighbors;
+            main_addressing_register[5] = node->num_out_neighbors;
+            main_addressing_register[9] = 1;  // valid
 
 #ifdef PROFILE
             printf("Magic instruction (payload=%d): Get node=%u -> len=%u in=%u out=%u\n",
                    magic_payload, node_id, node->length, node->num_in_neighbors, node->num_out_neighbors);
 #endif
         } else {
-            main_addressing_register[4] = 0;  // not found
+            main_addressing_register[9] = 0;  // not found
 
 #ifdef PROFILE
             printf("Magic instruction (payload=%d): Get node=%u -> NOT FOUND\n",
@@ -1123,27 +1119,25 @@ if (is_magic) {
         }
     }
     else if (magic_payload == 9) {
-        // Magic payload 9: Get node sequence base
+        // Magic payload 9: Get node sequence base (1 basepair at a time)
         // Input:
-        //   gr[0] = node_id
-        //   gr[1] = position
+        //   gr[1] = node_id (gr[0] must ALWAYS be 0)
+        //   gr[14] = position (BP sent counter doubles as position index)
         // Output:
-        //   gr[2] = base (ASCII 'A', 'C', 'G', 'T')
-        //   gr[4] = valid
-        uint32_t node_id = main_addressing_register[0];
-        int pos = main_addressing_register[1];
+        //   gr[4] = base value (0-3 for A/C/G/T)
+        uint32_t node_id = main_addressing_register[1];
+        int pos = main_addressing_register[14];
         GraphNode* node = graphStructure.getNode(node_id);
 
         if (node && pos < node->length) {
-            main_addressing_register[2] = (uint32_t)node->sequence[pos];
-            main_addressing_register[4] = 1;  // valid
+            main_addressing_register[4] = (uint32_t)node->sequence[pos];
 
 #ifdef PROFILE
-            printf("Magic instruction (payload=%d): Get node=%u seq[%d]='%c'\n",
-                   magic_payload, node_id, pos, node->sequence[pos]);
+            printf("Magic instruction (payload=%d): Get node=%u seq[%d]=%u\n",
+                   magic_payload, node_id, pos, (uint32_t)node->sequence[pos]);
 #endif
         } else {
-            main_addressing_register[4] = 0;  // invalid
+            main_addressing_register[4] = 0;
 
 #ifdef PROFILE
             printf("Magic instruction (payload=%d): Get node=%u seq[%d] -> INVALID\n",
@@ -1154,26 +1148,22 @@ if (is_magic) {
     else if (magic_payload == 10) {
         // Magic payload 10: Get out-neighbor ID by index
         // Input:
-        //   gr[0] = node_id
-        //   gr[1] = neighbor_index (0 to num_out_neighbors-1)
+        //   gr[1] = node_id (gr[0] must ALWAYS be 0)
+        //   gr[5] = neighbor_index (0 to num_out_neighbors-1)
         // Output:
-        //   gr[2] = neighbor_id
-        //   gr[4] = valid (1 if found, 0 if not)
-        uint32_t node_id = main_addressing_register[0];
-        int neighbor_idx = main_addressing_register[1];
+        //   gr[5] = neighbor_id (overwrites index, consistent with magic(7))
+        uint32_t node_id = main_addressing_register[1];
+        int neighbor_idx = main_addressing_register[5];
         GraphNode* node = graphStructure.getNode(node_id);
 
         if (node && neighbor_idx >= 0 && neighbor_idx < node->num_out_neighbors) {
-            main_addressing_register[2] = node->out_neighbors[neighbor_idx];
-            main_addressing_register[4] = 1;  // valid
+            main_addressing_register[5] = node->out_neighbors[neighbor_idx];
 
 #ifdef PROFILE
             printf("Magic instruction (payload=%d): Get node=%u out_neighbor[%d]=%u\n",
                    magic_payload, node_id, neighbor_idx, node->out_neighbors[neighbor_idx]);
 #endif
         } else {
-            main_addressing_register[4] = 0;  // invalid
-
 #ifdef PROFILE
             printf("Magic instruction (payload=%d): Get node=%u out_neighbor[%d] -> INVALID\n",
                    magic_payload, node_id, neighbor_idx);
@@ -1218,14 +1208,12 @@ if (is_magic) {
     else if (magic_payload == 12) {
         // Magic payload 12: Query CAM for node's SPM address
         // Input:
-        //   gr[0] = node_id
+        //   gr[5] = neighbor_node_id (from magic(7) output)
         // Output:
-        //   gr[1] = spm_addr (0 if not found)
-        //   gr[2] = found (1 if in CAM, 0 if not)
-        uint32_t node_id = main_addressing_register[0];
+        //   gr[9] = spm_addr (0 if not found)
+        uint32_t node_id = main_addressing_register[5];
         uint32_t spm_addr = sliceNodeCAM.getSpmAddr(node_id);
-        main_addressing_register[1] = spm_addr;
-        main_addressing_register[2] = (spm_addr != 0) ? 1 : 0;
+        main_addressing_register[9] = spm_addr;
 
 #ifdef PROFILE
         printf("Magic instruction (payload=%d): CAM lookup node=%u -> spm=%u (%s)\n",
@@ -1234,13 +1222,13 @@ if (is_magic) {
     }
     else if (magic_payload == 13) {
         // Magic payload 13: Get CAM status
-        // Output:
-        //   gr[0] = CAM size (number of nodes in current slice)
-        //   gr[1] = CAM capacity (MAX_SLICE_NODES)
-        //   gr[2] = next_spm_addr (next address to be allocated)
-        main_addressing_register[0] = sliceNodeCAM.size;
-        main_addressing_register[1] = MAX_SLICE_NODES;
-        main_addressing_register[2] = sliceNodeCAM.next_spm_addr;
+        // Output (gr[0] must ALWAYS be 0):
+        //   gr[1] = CAM size (number of nodes in current slice)
+        //   gr[2] = CAM capacity (MAX_SLICE_NODES)
+        //   gr[5] = next_spm_addr (next address to be allocated)
+        main_addressing_register[1] = sliceNodeCAM.size;
+        main_addressing_register[2] = MAX_SLICE_NODES;
+        main_addressing_register[5] = sliceNodeCAM.next_spm_addr;
 
 #ifdef PROFILE
         printf("Magic instruction (payload=%d): CAM status -> size=%d, capacity=%d, next_addr=%u\n",
