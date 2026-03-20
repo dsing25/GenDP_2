@@ -32,6 +32,8 @@ Get into the for loop for basepairs
         hinN = newHN >> WordSize - 1
     Go back to the start of the for loop for basepairs
     Once you run out of basepairs, break the loop, push the neighbors of this node into the queue
+
+    
 Pop a new node (69831)
 Start NodeInner
 Check if it has incoming edges (this will be true)

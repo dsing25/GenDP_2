@@ -15,18 +15,13 @@
 #define MAX_GRAPH_NODES 1000
 #define MAX_NODE_SEQ_LEN 256   // Max base pairs per node
 #define MAX_NEIGHBORS 10       // Max in/out neighbors per node
-#define PACKED_SEQ_WORDS (MAX_NODE_SEQ_LEN / 16)  // 256 bp / 16 bp per word = 16 words
+// Removed PACKED_SEQ_WORDS - sequences now stored as ASCII only
 
 struct GraphNode {
     uint32_t node_id;
 
-    // ASCII DNA sequence (for compatibility/debugging)
+    // DNA sequence stored as ASCII characters (A, C, G, T)
     char sequence[MAX_NODE_SEQ_LEN];
-
-    // Packed DNA sequence: 2 bits per base (A=00, C=01, G=10, T=11)
-    // Each uint32_t holds 16 basepairs (32 bits / 2 bits per bp)
-    // To extract bp at position i: (sequence_packed[i/16] >> ((i%16)*2)) & 0x3
-    uint32_t sequence_packed[PACKED_SEQ_WORDS];
 
     uint16_t length;                  // Number of base pairs
     uint32_t in_neighbors[MAX_NEIGHBORS];
@@ -37,7 +32,6 @@ struct GraphNode {
 
     GraphNode() : node_id(0), length(0), num_in_neighbors(0), num_out_neighbors(0), valid(false) {
         memset(sequence, 0, sizeof(sequence));
-        memset(sequence_packed, 0, sizeof(sequence_packed));
         memset(in_neighbors, 0, sizeof(in_neighbors));
         memset(out_neighbors, 0, sizeof(out_neighbors));
     }
@@ -142,10 +136,6 @@ struct Graph {
         nodes[0].node_id = 69816;
         nodes[0].length = 64;
         strcpy(nodes[0].sequence, "TTTGTATGATTTCAATCTTTTAAAATTTATTGTCCAGGTACGGTTGCTCACACCTGTAATCCCA");
-        nodes[0].sequence_packed[0] = 0xC1FCB3BF;  // bp 0-15:  TTTGTATGATTTCAAT
-        nodes[0].sequence_packed[1] = 0xBCFC03FD;  // bp 16-31: CTTTTAAAATTTATTG
-        nodes[0].sequence_packed[2] = 0xDBE93A17;  // bp 32-47: TCCAGGTACGGTTGCT
-        nodes[0].sequence_packed[3] = 0x15C3B511;  // bp 48-63: CACACCTGTAATCCCA
         nodes[0].num_in_neighbors = 2;
         nodes[0].in_neighbors[0] = 69819;
         nodes[0].in_neighbors[1] = 69820;
@@ -157,7 +147,6 @@ struct Graph {
         nodes[1].node_id = 69819;
         nodes[1].length = 1;
         strcpy(nodes[1].sequence, "C");
-        nodes[1].sequence_packed[0] = 0x00000001;  // C (01 in binary)
         nodes[1].num_in_neighbors = 1;
         nodes[1].in_neighbors[0] = 69831;
         nodes[1].num_out_neighbors = 1;
@@ -168,7 +157,6 @@ struct Graph {
         nodes[2].node_id = 69820;
         nodes[2].length = 1;
         strcpy(nodes[2].sequence, "T");
-        nodes[2].sequence_packed[0] = 0x00000003;  // T (11 in binary)
         nodes[2].num_in_neighbors = 1;
         nodes[2].in_neighbors[0] = 69831;
         nodes[2].num_out_neighbors = 1;
@@ -180,10 +168,6 @@ struct Graph {
         nodes[3].node_id = 69830;
         nodes[3].length = 64;
         strcpy(nodes[3].sequence, "TTGAGTGTGTTTTTAATTTTCACATATTCGTGAATTATCTTGGTTTTCTTCTATTGATTTCTAG");
-        nodes[3].sequence_packed[0] = 0x0FFEEE2F;  // bp 0-15:  TTGAGTGTGTTTTTAA
-        nodes[3].sequence_packed[1] = 0xB9F311FF;  // bp 16-31: TTTTCACATATTCGTG
-        nodes[3].sequence_packed[2] = 0x7FEBDCF0;  // bp 32-47: AATTATCTTGGTTTTC
-        nodes[3].sequence_packed[3] = 0x8DFCBCDF;  // bp 48-63: TTCTATTGATTTCTAG
         nodes[3].num_in_neighbors = 0;
         nodes[3].in_neighbors[0] = 0;
         nodes[3].num_out_neighbors = 1;
@@ -195,8 +179,6 @@ struct Graph {
         nodes[4].node_id = 69831;
         nodes[4].length = 28;
         strcpy(nodes[4].sequence, "CTTCATTCCATTTTAGTCAGAGAAGGTA");
-        nodes[4].sequence_packed[0] = 0x8FF17C7D;  // bp 0-15:  CTTCATTCCATTTTAG
-        nodes[4].sequence_packed[1] = 0x003A0887;  // bp 16-27: TCAGAGAAGGTA
         nodes[4].num_in_neighbors = 1;
         nodes[4].in_neighbors[0] = 69830;
         nodes[4].num_out_neighbors = 2;
@@ -205,7 +187,7 @@ struct Graph {
         nodes[4].valid = true;
 
         printf("Hardcoded verification graph initialized: 5 nodes (69816, 69819, 69820, 69830, 69831)\n");
-        printf("  Sequences stored in both ASCII and 2-bit packed format\n");
+        printf("  Sequences stored as ASCII characters (A, C, G, T)\n");
     }
 };
 
@@ -253,10 +235,9 @@ struct QueueEntry {
     // Bits 3-7: Reserved
     uint8_t  flags;
 
-    // DNA sequence chunk (16 basepairs, 2 bits each)
-    // Encoding: A=00, C=01, G=10, T=11
-    // Example: 0x12 = [A,T,C,A] = [00,11,01,00] (LSB first)
-    uint32_t basepairs;          // Stores up to 16 bases
+    // Full DNA sequence for this node stored as ASCII characters (A, C, G, T)
+    // Encoding happens on-the-fly in magic(9) when basepairs are fetched
+    char sequence[MAX_NODE_SEQ_LEN];
 
     // Out-neighbors for propagation (stored directly for fast access)
     uint32_t out_neighbors[MAX_QUEUE_NEIGHBORS];
@@ -273,7 +254,8 @@ struct QueueEntry {
     uint16_t node_length;        // Total basepairs to process
 
     QueueEntry() : target_node(0), priority(0), spm_addr(0),
-                   flags(0), basepairs(0), num_out_neighbors(0), num_in_neighbors(0), num_chunks(0), node_length(0) {
+                   flags(0), num_out_neighbors(0), num_in_neighbors(0), num_chunks(0), node_length(0) {
+        memset(sequence, 0, sizeof(sequence));
         memset(out_neighbors, 0, sizeof(out_neighbors));
     }
 
@@ -317,24 +299,6 @@ struct QueueEntry {
 
     inline void setCurrSliceExists(bool value) { updateFlag(FLAG_CURR_SLICE_EXISTS, value); }
     inline bool getCurrSliceExists() const { return getFlag(FLAG_CURR_SLICE_EXISTS); }
-
-    // Set a basepair at specific position (0-15)
-    void setBasepair(int pos, char base) {
-        if (pos >= 0 && pos < 16) {
-            uint8_t encoded = encodeDNABase(base);
-            uint32_t mask = ~(0x3 << (pos * 2));  // Clear 2 bits at position
-            basepairs = (basepairs & mask) | (encoded << (pos * 2));
-        }
-    }
-
-    // Get basepair at specific position (0-15)
-    char getBasepair(int pos) const {
-        if (pos >= 0 && pos < 16) {
-            uint8_t encoded = (basepairs >> (pos * 2)) & 0x3;
-            return decodeDNABase(encoded);
-        }
-        return 'A';
-    }
 };
 
 struct PriorityQueue {
@@ -380,7 +344,7 @@ struct PriorityQueue {
         entry.spm_addr = spm_addr;
         entry.flags = 0;
         entry.setSkipFirst(skip_first);
-        entry.basepairs = 0;
+        memset(entry.sequence, 0, sizeof(entry.sequence));
         entry.num_out_neighbors = 0;
         return insert(entry);
     }
@@ -407,7 +371,7 @@ struct PriorityQueue {
 // ==== Slice Node CAM (Content Addressable Memory) ====
 // Tracks nodes in current slice and their SPM addresses
 #define MAX_SLICE_NODES 32           // Max nodes in current slice
-#define SPM_SLICE_DATA_START 10      // Starting SPM address for slice data
+#define SPM_SLICE_DATA_START 18      // Starting SPM address for slice data
 #define SPM_SLICE_DATA_SIZE 4        // Words per node (VN, VP, scoreEnd, reserved)
 
 struct SliceNodeCAM {
@@ -539,10 +503,13 @@ pe_array::pe_array(int input_size, int output_size) {
     seedEntry.setSkipFirst(1);           // Seed node starts from extraSlice
     seedEntry.setPrevSliceExists(0);     // No previous slice
     seedEntry.setCurrSliceExists(1);     // Current slice exists
-    seedEntry.basepairs = graphStructure.nodes[3].sequence_packed[0];  // First 16bp: 0x0FFEEE2F
+    // Copy full sequence from graph
+    strncpy(seedEntry.sequence, graphStructure.nodes[3].sequence, MAX_NODE_SEQ_LEN - 1);
+    seedEntry.sequence[MAX_NODE_SEQ_LEN - 1] = '\0';
     seedEntry.out_neighbors[0] = 69831;
     seedEntry.num_out_neighbors = 1;
     seedEntry.num_in_neighbors = graphStructure.nodes[3].num_in_neighbors;  // Step 1.5: incoming edges
+    seedEntry.node_length = graphStructure.nodes[3].length;  // Total basepairs
     seedEntry.num_chunks = (graphStructure.nodes[3].length + 15) / 16;  // Node 69830 length=64 -> 4 chunks
     graphAlignQueue.insert(seedEntry);
 
@@ -890,17 +857,17 @@ if (is_magic) {
 
     if (magic_payload == 1) {
         // Magic payload 1: Load equality vectors into PE0 SPM slots 0-3
-        // TODO: Replace these hardcoded values with your actual equality vectors
-        SPM_unit->access_magic(0, 0) = 553914624;  // PE0 SPM[0] BA
-        SPM_unit->access_magic(0, 1) = 412155976;  // PE0 SPM[1] BT
-        SPM_unit->access_magic(0, 2) = 526336;  // PE0 SPM[2] BC
-        SPM_unit->access_magic(0, 3) = 3328370359;  // PE0 SPM[3] BG
+        // Order matches basepair encoding: A=0, C=1, G=2, T=3
+        SPM_unit->access_magic(0, 0) = 553914624;  // PE0 SPM[0] BA (A=0)
+        SPM_unit->access_magic(0, 1) = 412155976;     // PE0 SPM[1] BC (C=1)
+        SPM_unit->access_magic(0, 2) = 526336; // PE0 SPM[2] BG (G=2)
+        SPM_unit->access_magic(0, 3) = 3328370359;  // PE0 SPM[3] BT (T=3)
 
         // Initialize extraSlice values at SPM[4-6] (32-bit values only)
         // From GbvTraces.log:
-        SPM_unit->access_magic(0, 4) = 1;            // VN (bottom 32 bits)
-        SPM_unit->access_magic(0, 5) = 1229530258;   // VP (bottom 32 bits) = 0x49249252
-        SPM_unit->access_magic(0, 6) = 1;            // scoreEnd (regfile[25] bottom 32 bits)
+        SPM_unit->access_magic(0, 15) = 1;            // VN (bottom 32 bits)
+        SPM_unit->access_magic(0, 16) = 1229530258;   // VP (bottom 32 bits) = 0x49249252
+        SPM_unit->access_magic(0, 17) = 22;            // scoreEnd (regfile[25] bottom 32 bits)
 
 #ifdef PROFILE
         printf("Magic instruction (payload=%d): Loaded equality vectors into PE0 SPM[0-3]\n", magic_payload);
@@ -945,11 +912,14 @@ if (is_magic) {
         }
 
         entry.flags = (uint8_t)main_addressing_register[3];  // Load all flags at once
-        entry.basepairs = main_addressing_register[4];
 
-        // Automatically populate neighbors and num_chunks from graph
+        // Automatically populate neighbors, sequence, and num_chunks from graph
         GraphNode* node = graphStructure.getNode(entry.target_node);
         if (node) {
+            // Copy full sequence from graph to queue entry
+            strncpy(entry.sequence, node->sequence, MAX_NODE_SEQ_LEN - 1);
+            entry.sequence[MAX_NODE_SEQ_LEN - 1] = '\0';  // Ensure null termination
+
             entry.num_out_neighbors = (node->num_out_neighbors < MAX_QUEUE_NEIGHBORS)
                                       ? node->num_out_neighbors
                                       : MAX_QUEUE_NEIGHBORS;
@@ -963,6 +933,7 @@ if (is_magic) {
             // Calculate num_chunks: ceil(node_length / 16)
             entry.num_chunks = (node->length + 15) / 16;
         } else {
+            memset(entry.sequence, 0, sizeof(entry.sequence));
             entry.num_out_neighbors = 0;
             entry.num_in_neighbors = 0;
             entry.node_length = 0;
@@ -988,17 +959,13 @@ if (is_magic) {
 #endif
     }
     else if (magic_payload == 4) {
-        // Magic payload 4: Pop from priority queue
-        // NOTE: Does NOT write to any register - validity already checked via magic(5) gr[3] bit3
-        // Previously wrote success to gr[4], but that destroyed basepairs from magic(5)
-        graphAlignQueue.pop();
-
+        // Magic payload 4: Reserved for future use (currently empty)
 #ifdef PROFILE
-        printf("Magic instruction (payload=%d): Queue pop\n", magic_payload);
+        printf("Magic instruction (payload=%d): Reserved/unused\n", magic_payload);
 #endif
     }
     else if (magic_payload == 5) {
-        // Magic payload 5: Get top element (peek without removing)
+        // Magic payload 5: Get top element AND pop (peek + pop combined)
         // Output to addressing registers:
         //   gr[0] = ALWAYS 0 (never written - preserved as zero constant)
         //   gr[1] = target_node (node ID)
@@ -1019,12 +986,15 @@ if (is_magic) {
             main_addressing_register[2] = top.spm_addr;
             // Pack valid=1 into bit3 of flags
             main_addressing_register[3] = top.flags | (1 << 3);  // flags with bit3=valid=1
-            main_addressing_register[4] = top.basepairs;
+            // gr[4] intentionally NOT written - will be set by magic(9) when fetching basepairs
             // gr[5] intentionally NOT written - available for other use
             main_addressing_register[6] = top.num_out_neighbors;
             // gr[7] intentionally NOT written - no longer using chunks
             main_addressing_register[10] = top.num_in_neighbors;  // Step 1.5: incoming edges
             main_addressing_register[11] = top.node_length;       // Total basepairs for loop termination
+
+            // Pop the entry after reading it
+            // graphAlignQueue.pop();
 
 #ifdef PROFILE
             GraphNode* node = graphStructure.getNode(top.target_node);
@@ -1119,29 +1089,40 @@ if (is_magic) {
         }
     }
     else if (magic_payload == 9) {
-        // Magic payload 9: Get node sequence base (1 basepair at a time)
+        // Magic payload 9: Get basepair from queue's stored sequence (1 basepair at a time)
         // Input:
-        //   gr[1] = node_id (gr[0] must ALWAYS be 0)
         //   gr[14] = position (BP sent counter doubles as position index)
         // Output:
-        //   gr[4] = base value (0-3 for A/C/G/T)
-        uint32_t node_id = main_addressing_register[1];
+        //   gr[4] = base value (0-3 for A/C/G/T), encoded on-the-fly
+        // NOTE: Fetches from queue top's sequence, not from graph
         int pos = main_addressing_register[14];
-        GraphNode* node = graphStructure.getNode(node_id);
 
-        if (node && pos < node->length) {
-            main_addressing_register[4] = (uint32_t)node->sequence[pos];
+        if (!graphAlignQueue.empty()) {
+            const QueueEntry& entry = graphAlignQueue.top();
+
+            if (pos < entry.node_length) {
+                char base_char = entry.sequence[pos];
+                uint8_t encoded = encodeDNABase(base_char);
+                main_addressing_register[4] = (uint32_t)encoded;
 
 #ifdef PROFILE
-            printf("Magic instruction (payload=%d): Get node=%u seq[%d]=%u\n",
-                   magic_payload, node_id, pos, (uint32_t)node->sequence[pos]);
+                printf("Magic instruction (payload=%d): Get queue_top seq[%d]='%c' -> encoded=%u\n",
+                       magic_payload, pos, base_char, encoded);
 #endif
+            } else {
+                main_addressing_register[4] = 0;
+
+#ifdef PROFILE
+                printf("Magic instruction (payload=%d): Get queue_top seq[%d] -> OUT OF RANGE\n",
+                       magic_payload, pos);
+#endif
+            }
         } else {
             main_addressing_register[4] = 0;
 
 #ifdef PROFILE
-            printf("Magic instruction (payload=%d): Get node=%u seq[%d] -> INVALID\n",
-                   magic_payload, node_id, pos);
+            printf("Magic instruction (payload=%d): Queue empty, cannot fetch basepair\n",
+                   magic_payload);
 #endif
         }
     }
@@ -1210,10 +1191,10 @@ if (is_magic) {
         // Input:
         //   gr[5] = neighbor_node_id (from magic(7) output)
         // Output:
-        //   gr[9] = spm_addr (0 if not found)
+        //   gr[2] = spm_addr (0 if not found)
         uint32_t node_id = main_addressing_register[5];
         uint32_t spm_addr = sliceNodeCAM.getSpmAddr(node_id);
-        main_addressing_register[9] = spm_addr;
+        main_addressing_register[2] = spm_addr;
 
 #ifdef PROFILE
         printf("Magic instruction (payload=%d): CAM lookup node=%u -> spm=%u (%s)\n",
@@ -2000,9 +1981,11 @@ if (opcode == 0) {              // add rd rs1 rs2
 }
 
 void pe_array::show_gr() {
-    int i;
-    for (i = 0; i < ADDR_REGISTER_NUM; i++)
-        printf("main gr[%d] = %d\n", i, main_addressing_register[i]);
+    for (int i = 0; i < ADDR_REGISTER_NUM; i++) {
+        printf("gr[%d]=%d  ", i, main_addressing_register[i]);
+        if ((i + 1) % 4 == 0) printf("\n");
+    }
+    if (ADDR_REGISTER_NUM % 4 != 0) printf("\n");
 }
 
 void pe_array::show_spm_nonzero(int start, int end) {
@@ -2029,7 +2012,7 @@ void pe_array::show_spm_nonzero(int start, int end) {
         for (int i = search_start; i < search_end; i++) {
             if (SPM_unit->buffer[i] != 0) {
                 if (!bank_has_data) {
-                    printf("\n--- Bank %d (addresses %d-%d) ---\n", bank, bank_start, bank_end - 1);
+                    printf("--- Bank %d (addresses %d-%d) ---\n", bank, bank_start, bank_end - 1);
                     bank_has_data = true;
                 }
                 printf("  SPM[%5d] = %10d (0x%08x)\n", i, SPM_unit->buffer[i], SPM_unit->buffer[i]);
@@ -2041,7 +2024,7 @@ void pe_array::show_spm_nonzero(int start, int end) {
     if (count == 0) {
         printf("  (All values are zero)\n");
     } else {
-        printf("\nTotal non-zero values: %d\n", count);
+        printf("Total non-zero values: %d\n", count);
     }
     printf("===================================\n");
 }
@@ -2065,11 +2048,11 @@ void pe_array::show_compute_reg(const char* label, const char** reg_names) {
     // Use member variable if no parameter provided
     const char** names_to_use = (reg_names != nullptr) ? reg_names : compute_reg_names;
 
-    printf("\n========== %s ==========\n", label);
+    printf("========== %s ==========\n", label);
     for (int i = 0; i < 1; i++) {
         if (pe_unit[i] == nullptr) continue;
 
-        printf("\n--- PE[%d] ---\n", i);
+        printf("--- PE[%d] ---\n", i);
 
         // Show compute registers using existing public function
         printf("Compute Registers (reg):\n");
@@ -2078,10 +2061,12 @@ void pe_array::show_compute_reg(const char* label, const char** reg_names) {
         // Show addressing registers (directly accessible since it's public)
         printf("\nAddressing Registers (gr):\n");
         for (int j = 0; j < ADDR_REGISTER_NUM; j++) {
-            printf("  gr[%d] = %d\n", j, pe_unit[i]->addr_regfile_unit->buffer[j]);
+            printf("  gr[%d]=%d  ", j, pe_unit[i]->addr_regfile_unit->buffer[j]);
+            if ((j + 1) % 4 == 0) printf("\n");
         }
+        if (ADDR_REGISTER_NUM % 4 != 0) printf("\n");
     }
-    printf("=======================================\n\n");
+    printf("=======================================\n");
     #endif
 }
 
@@ -2350,11 +2335,7 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
 
     #ifdef DEBUG
             // GBV Debug
-            printf("\n========== Cycle %d ==========\n", cycle);
-
-            // Main controller addressing registers
-            //printf("Main Controller (gr):\n  ");
-            //show_gr();
+            printf("\n========== Cycle %d ==========", cycle);
 
             // Input/Output buffers
             // printf("Input buffer: ");
@@ -2369,7 +2350,9 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             //show_compute_instruction_buffer();
             //show_main_instruction_buffer();
             show_compute_reg("PE Debug");
-
+            // Main controller addressing registers
+            printf("Main Controller (gr):\n");
+            show_gr();
             printf("=====================================\n");
     #endif
 
