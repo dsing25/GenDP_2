@@ -1042,8 +1042,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             constexpr int P2_M_FIN1     = 3;
             constexpr int P2_M_TILE_N   = 4;
 
+            int p2_base = (magic_mask & 1) ? GWFA_P2B_BASE : GWFA_P2_BASE;
             int *spm = &SPM_unit->buffer[
-                id * SPM_BANK_GROUP_SIZE + GWFA_P2_BASE];
+                id * SPM_BANK_GROUP_SIZE + p2_base];
 
             // === INIT ===
             gr.st(1, spm[P2_META_OFF + P2_M_TILE_N], CTRL_GR_HI); // tile_n
