@@ -386,8 +386,8 @@ comp_instr_buffer::comp_instr_buffer(int size) {
     buffer = (unsigned long**)malloc(size * sizeof(unsigned long*));
     for (i = 0; i < size; i++) {
         buffer[i] = (unsigned long*)malloc(COMP_INSTR_BUFFER_GROUP_SIZE * sizeof(unsigned long));
-        buffer[i][0] = 0x20f7800000000;
-        buffer[i][1] = 0x20f7800000000;
+        buffer[i][0] = COMP_HALT_INSTRUCTION;
+        buffer[i][1] = COMP_HALT_INSTRUCTION;
     }
         
     buffer_size = size;

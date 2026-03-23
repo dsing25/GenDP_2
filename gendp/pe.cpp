@@ -2,6 +2,7 @@
 #include "FIFO.h"
 #include "sys_def.h"
 #include <cassert>
+#include <algorithm>
 #include "simulator.h"
 #include <iostream>
 
@@ -168,18 +169,31 @@ void pe::run(int simd) {
 //#ifdef PROFILE
 //    printf("\n");
 //#endif
+    // Clamp gr addresses to 0 for regfile read (patched below)
     for (i = 0; i < 6; i++) {
-        regfile_unit->read_addr[i] =  input_addr[0][i];
-        regfile_unit->read_addr[i+6] = input_addr[1][i];
+        regfile_unit->read_addr[i] = input_addr[0][i] < REGFILE_ADDR_NUM ? input_addr[0][i] : 0;
+        regfile_unit->read_addr[i+6] = input_addr[1][i] < REGFILE_ADDR_NUM ? input_addr[1][i] : 0;
     }
     regfile_unit->read(regfile_unit->read_addr, regfile_unit->read_data);
-    regfile_unit->write_addr[0] = output_addr[0];
-    regfile_unit->write_addr[1] = output_addr[1];
+    regfile_unit->write_addr[0] = output_addr[0] < REGFILE_ADDR_NUM ? output_addr[0] : -1;
+    regfile_unit->write_addr[1] = output_addr[1] < REGFILE_ADDR_NUM ? output_addr[1] : -1;
 
     int cu_inputs[2][6];
     for (i = 0; i < 6; i++){
         cu_inputs[0][i] = regfile_unit->read_data[i];
         cu_inputs[1][i] = regfile_unit->read_data[6+i];
+    }
+    // Patch compute inputs for gr addresses (addr >= 32)
+    for (int s = 0; s < 2; s++) {
+        for (int j = 0; j < 6; j++) {
+            int addr = input_addr[s][j];
+            if (addr >= 64)
+                cu_inputs[s][j] = addr_regfile_unit->at(addr - 64, CTRL_GR_HI);
+            else if (addr >= 48)
+                cu_inputs[s][j] = addr_regfile_unit->at(addr - 48, CTRL_GR_LO);
+            else if (addr >= 32)
+                cu_inputs[s][j] = addr_regfile_unit->at(addr - 32);
+        }
     }
     //Patch up for immediates
     if (is_immediate_opcode(op[0][0])){
@@ -208,6 +222,16 @@ void pe::run(int simd) {
     }
 
 
+    // Write compute outputs to gr if addressed (addr >= 32)
+    for (int s = 0; s < 2; s++) {
+        int addr = output_addr[s];
+        if (addr >= 64)
+            addr_regfile_unit->st(addr - 64, regfile_unit->write_data[s], CTRL_GR_HI);
+        else if (addr >= 48)
+            addr_regfile_unit->st(addr - 48, regfile_unit->write_data[s], CTRL_GR_LO);
+        else if (addr >= 32)
+            addr_regfile_unit->st(addr - 32, regfile_unit->write_data[s]);
+    }
     regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 0);
     regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 1);
 #ifdef PROFILE
@@ -223,11 +247,40 @@ void pe::run(int simd) {
         fprintf(stderr, "PE[%d] PC[0]=%d out of bounds\n", id, PC[0]);
         exit(-1);
     }
+    int old_PC = PC[0];
     decode(ctrl_instr_buffer_unit->buffer[PC[1]][1], &PC[1], src_dest[1], &ctrl_op[1], simd, &ctrl_write_addrs[0], &ctrl_write_data[0]);
     decode(ctrl_instr_buffer_unit->buffer[PC[0]][0], &PC[0], src_dest[0], &ctrl_op[0], simd, &ctrl_write_addrs[1], &ctrl_write_data[1]);
 
-    // Track if PE is halted (both slots executing halt instruction, opcode 15)
-    halted = (ctrl_op[0] == 15 && ctrl_op[1] == 15);
+    // Branch-as-group: both VLIW slots must agree on control flow
+    auto is_ctrl_flow = [](int op) {
+        return (op >= CTRL_BNE && op <= CTRL_JUMP)
+            || op == CTRL_CALL || op == CTRL_RET
+            || op == CTRL_RETNE;
+    };
+    bool cf0 = is_ctrl_flow(ctrl_op[0]), cf1 = is_ctrl_flow(ctrl_op[1]);
+
+    // Halt must be paired in both slots
+    if ((ctrl_op[0] == CTRL_HALT) != (ctrl_op[1] == CTRL_HALT)) {
+        fprintf(stderr,
+            "PE[%d] PC=%d halt must be paired (op0=%d op1=%d)\n",
+            id, old_PC, ctrl_op[0], ctrl_op[1]);
+        exit(-1);
+    }
+    // Both control flow: must target same PC
+    if (cf0 && cf1 && PC[0] != PC[1]) {
+        fprintf(stderr,
+            "PE[%d] PC=%d diverging branches: slot0->%d slot1->%d\n",
+            id, old_PC, PC[0], PC[1]);
+        exit(-1);
+    }
+    // One control flow taken: sync other slot
+    bool took0 = (PC[0] != old_PC + 1);
+    bool took1 = (PC[1] != old_PC + 1);
+    if (cf0 && took0 && !cf1) PC[1] = PC[0];
+    if (cf1 && took1 && !cf0) PC[0] = PC[1];
+
+    // Track if PE is halted (both slots executing halt instruction)
+    halted = (ctrl_op[0] == CTRL_HALT && ctrl_op[1] == CTRL_HALT);
 
     addr_regfile_unit->write(ctrl_write_addrs, ctrl_write_data, CTRL_REGFILE_WRITE_PORTS);
 
@@ -589,33 +642,33 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         // Uses: gr[14]=ql, gr_lo[12]=vl, reg[10]=gs_base,
         //       reg[11]=q_base
         // Out: gr[9]=extended k, gr[2]=d
-        // Clobbers: gr[2], gr[4], gr[7], gr[15], reg[6], reg[7],
+        // Clobbers: gr[2], gr[4], gr[7], reg[6], reg[7],
         //           reg[8]
         auto extend = [&]() {
-            // d = lo(vd) - 0x4000
-            gr.st(2, gr.at(8, CTRL_GR_LO) - DIAG_BIAS);
-            // precompute char-space offsets (+1 for 1-based)
-            gr.st(4, gr.at(11) + gr.at(9) + 1);     // ts_off+k+1
             //COMP
             {
                 //NOP
                 //NOP
             }
+            // d = lo(vd) - 0x4000
+            gr.st(2, gr.at(8, CTRL_GR_LO) - DIAG_BIAS);
+            // precompute char-space offsets (+1 for 1-based)
+            gr.st(4, gr.at(11) + gr.at(9) + 1);     // ts_off+k+1
 
-            //NOP
-            //NOP
             //COMP
             {
                 // max_k = min(ql - d, vl)
                 reg[8] = std::min(gr.at(12, CTRL_GR_LO), gr.at(14) - gr.at(2));
                 gr.st(7, gr.at(2) + gr.at(9) + 1);      // d+k+1
             }
+            //NOP
+            //NOP
 
 
             while (true){
+                //COMP halt
                 reg[6] = mvi2_ld(10, 4); gr.st(4, gr.at(4) + 1); //load gs char and cursor++
                 //NOP
-                //COMP halt
 
                 reg[7] = mvi2_ld(11, 7); gr.st(7, gr.at(7) + 1); //load q char and cursor++
                 gr.st(9, gr.at(9) + 1);              // k++
@@ -738,14 +791,14 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // Clobbers: gr[2], gr[7], gr[15]
             auto check_aout = [&]() {
                 // extract d from vd
-                gr.st(2, gr.at(8, CTRL_GR_LO) - DIAG_BIAS);
-                // reached end of vertex?
-                gr.st(15, gr.at(12, CTRL_GR_LO) - 1);
                 //COMP
                 {
                 //NOP
                 //NOP
                 }
+                gr.st(2, gr.at(8, CTRL_GR_LO) - DIAG_BIAS);
+                // reached end of vertex?
+                gr.st(15, gr.at(12, CTRL_GR_LO) - 1);
 
                 gr.st(7, gr.at(3, CTRL_GR_HI) << 1);       // 2*ta_n specualtive. overwrite if no br
                 if (gr.at(9) == gr.at(15))
@@ -758,8 +811,8 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 }
 
                 if (gr.at(15) != gr.at(7)) return;
-                gr.st(7, gr.at(3, CTRL_GR_HI) << 1);       // 2*ta_n
                 //COMP halt
+                gr.st(7, gr.at(3, CTRL_GR_HI) << 1);       // 2*ta_n
 
             m8_ca_do:
                 // append (vd, k) to tile_aout[2*ta_n]
@@ -800,18 +853,18 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
             //// node_idx++
             // prev_v = v
-            gr.st(6, gr.at(8, CTRL_GR_HI), CTRL_GR_HI);
-            //NOP
             //COMP
-            { 
+            {
                 // 2*node_idx
                 gr.st(15, gr.at(6, CTRL_GR_LO)+gr.at(6, CTRL_GR_LO)+2);
                 // node_idx++
                 gr.st(6, gr.at(6, CTRL_GR_LO) + 1, CTRL_GR_LO);
             }
+            gr.st(6, gr.at(8, CTRL_GR_HI), CTRL_GR_HI);
+            //NOP
 
-            gr.st(11, spm[NODE_INFO_OFF + gr.at(15)]); gr.st(12, spm[NODE_INFO_OFF + gr.at(15) + 1]);    // ts_off, vl (clobbers 12_hi, but we overwrite it later anyway)
             //COMP halt
+            gr.st(11, spm[NODE_INFO_OFF + gr.at(15)]); gr.st(12, spm[NODE_INFO_OFF + gr.at(15) + 1]);    // ts_off, vl (clobbers 12_hi, but we overwrite it later anyway)
 
         m8_skip_node:
             extend(); //call
@@ -828,76 +881,79 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             emit_b(); //call
             
             check_aout(); //call
-            //set pc
+            //set PC comp
 
-            // ppk = k, prev_vd = vd, i++
-            reg[2] = gr.at(9);
-            reg[9] = gr.at(8);
 
             gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO);
-            //NOP
-
+            //set PC comp
+            
+            //COMP (speculative if not last emit
+            {
+                gr.st(2, gr.at(1, CTRL_GR_LO) + gr.at(1, CTRL_GR_LO));                  // 2*i
+                gr.st(15, reg[9] + 1);                        // prev_vd+1
+            }
             // === SEQUENTIAL CHECK ===
+            // If branching to last_emits, skip reg moves — last_emits
+            // uses gr[8](vd) and gr[9](k) directly.
+            gr.st(4, gr.at(8));                            // prev_vd = vd
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
                 goto m8_last_emits;                       // i >= tile_n
 
-            gr.st(2, gr.at(1, CTRL_GR_LO) + gr.at(1, CTRL_GR_LO));                  // 2*i
-            gr.st(15, reg[9] + 1);                        // prev_vd+1
-
+            //COMP
+            {
+                // ppk = k, prev_vd = vd
+                reg[2] = gr.at(9);
+                reg[9] = gr.at(8);
+            }
             gr.st(8, spm[TILE_A_OFF + gr.at(2)]); gr.st(9, spm[TILE_A_OFF + gr.at(2) + 1]); // next vd and k
             //NOP
 
+            //COMP halt
             //NOP
             //NOP
             
             if (gr.at(8) != gr.at(15))
                 goto m8_non_seq;
+            gr.st(15, gr.at(1, CTRL_GR_LO) << 1);                  // 2*i
 
             // === SEQ_FIRST (2nd diagonal in run) ===
             {
                 extend(); //Call
                 //set PC comp
 
-                gr.st(15, gr.at(1, CTRL_GR_LO) << 1);                  // 2*i
+                spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
+                //set PC comp
+
+                //COMP
+                {
+                    // emit_k = max(ppk, k) + 1
+                    gr.st(5, std::max((int)reg[2], gr.at(9)) + 1);
+                    gr.st(4, reg[9]);                         // emit_vd=prev_vd
+                }
+                emit_b(); //call
                 //NOP
 
-                spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
-                // emit_k = max(ppk, k) + 1
-                gr.st(5, reg[2]);                        // ppk
-
-                if (gr.at(9) > gr.at(5)){
-                    gr.st(5, gr.at(9));
-                    //NOP
-                }
-
-                gr.st(5, gr.at(5) + 1);
-                gr.st(4, reg[9]);                         // emit_vd=prev_vd
-
-                emit_b(); //call
-
                 check_aout(); //call
-                //set pc
-
-                reg[1] = reg[2];                          // pk = ppk
-                reg[2] = gr.at(9);                        // ppk = k
+                //set PC comp
 
                 reg[9] = gr.at(8);                        // prev_vd = vd
                 gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO);                          // i++
-            }
 
+            }
+            
             // === SEQ_WHILE (3rd+ diagonals) ===
         m8_seq_while:
-            if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
-                goto m8_seq_last;
-
             gr.st(2, gr.at(1, CTRL_GR_LO) + gr.at(1, CTRL_GR_LO));
-            gr.st(15, reg[9] + 1);
+            if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
+                goto m8_seq_last_swap;
 
+
+            reg[2] = gr.at(9);
             gr.st(8, spm[TILE_A_OFF + gr.at(2)]); gr.st(9, spm[TILE_A_OFF + gr.at(2) + 1]);
-            //NOP
             
-            //NOP
-            //NOP
+            //Be careful of ordering when we update these. We should get old val of reg2  on ld
+            reg[1] = reg[2];
+            gr.st(15, reg[9] + 1);
 
             if (gr.at(8) != gr.at(15))
                 goto m8_seq_last;
@@ -907,46 +963,47 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 //set PC comp
 
                 gr.st(15, gr.at(1, CTRL_GR_LO) << 1);
+                //set PC comp
+    
+                //COMP
+                { 
+                    //NOP
+                    //NOP
+                }
+                spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
+                gr.st(15, reg[2] + 1);                    // ppk+1
+
+                //COMP
+                {
+                    // emit_k = max(pk, ppk+1, k+1)
+                    gr.st(5, std::max({(int)reg[1], gr.at(15), gr.at(9) + 1}));
+                    gr.st(4, reg[9]);                          // prev_vd
+                } //NOTE not illustrated, next COMP will be halt. Will execute during emit_b
+                emit_b(); //call
                 //NOP
 
-                spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
-                gr.st(5, reg[1]);                        // pk
-
-                gr.st(15, reg[2] + 1);                    // ppk+1
-                gr.st(4, reg[9]);                          // prev_vd
-                
-                //NOT sure about this block. Might end up doing comp instr
-                // emit_k = max(pk, ppk+1, k+1)
-                if (gr.at(15) > gr.at(5))
-                    gr.st(5, gr.at(15));
-                gr.st(15, gr.at(9) + 1);                  // k+1
-                if (gr.at(15) > gr.at(5))
-                    gr.st(5, gr.at(15));
-
-                emit_b(); //call
-
                 check_aout(); //call
-                //set pc
+                //set PC comp
                 
-                //Be careful of ordering when we update these. We should get old val of reg2  on ld
-                reg[1] = reg[2];
-                reg[2] = gr.at(9);
-
-                reg[9] = gr.at(8);
-                gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO);
             }
+            gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO);
             goto m8_seq_while;
 
             // === SEQ_LAST ===
+        m8_seq_last_swap: //same as seq_last, but adds the reg swap
+            reg[1] = reg[2];
+            reg[2] = gr.at(9);
         m8_seq_last:
-            gr.st(5, reg[1]);                            // pk
             gr.st(15, reg[2] + 1);                        // ppk+1
+            //set PC comp
 
-            if (gr.at(15) > gr.at(5)){
-                gr.st(5, gr.at(15));
-                //NOP
+            //COMP
+            {
+                // emit_k = max(pk, ppk+1)
+                gr.st(5, std::max((int)reg[1], gr.at(15)));
             }
             gr.st(4, reg[9]);                              // prev_vd
+            //NOP
 
             emit_b(); //call
 
@@ -970,13 +1027,18 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
             // === LAST_EMITS ===
         m8_last_emits:
-            gr.st(4, reg[9]);
-            gr.st(5, reg[2] + 1);
-            
+
+            //COMP (We don't actually want to run this block, but the trace was executing, so we're gonna hit it, and it doesn't matter
+            {
+                // ppk = k, prev_vd = vd
+                reg[2] = gr.at(9);
+                reg[9] = gr.at(8);
+            }
+            gr.st(5, gr.at(9) + 1);                       // ppk+1 = k+1
             emit_b(); //call
-            
-            gr.st(4, reg[9] + 1);
-            gr.st(5, reg[2]);
+
+            gr.st(4, gr.at(8) + 1);                       // prev_vd+1 = vd+1
+            gr.st(5, gr.at(9));                            // ppk = k
             
             emit_b();
 
@@ -1058,6 +1120,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             constexpr int P2_M_FIN0     = 2;
             constexpr int P2_M_FIN1     = 3;
             constexpr int P2_M_TILE_N   = 4;
+            int tmp;
 
             int *spm = &SPM_unit->buffer[
                 id * SPM_BANK_GROUP_SIZE + GWFA_P2_BASE];
@@ -1071,18 +1134,16 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
             if (gr.at(1, CTRL_GR_HI) <= 0)
                 goto m13_wb; // still write zero metadata
+            //NOP
 
             reg[10] = GWFA_GS_START * 16;  // gs_base
             reg[11] = GWFA_Q_START * 16;   // q_base
 
             // === LOOP ===
         m13_loop:
+            gr.st(7, gr.at(1, CTRL_GR_LO) << 2); // 4*i (paired with branch)
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
                 goto m13_wb;
-
-            // 4*i for input indexing
-            gr.st(7, gr.at(1, CTRL_GR_LO) << 2); // 4*i
-            //NOP
 
             // load vd, k
             gr.st(8, spm[P2_INPUT_OFF + gr.at(7)]); gr.st(9, spm[P2_INPUT_OFF + gr.at(7) + 1]);
@@ -1092,42 +1153,64 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //NOP
 
             extend(); // sets gr[2]=d, updates gr[9]=k
+            //set PC comp
 
-            gr.st(4, gr.at(2) + gr.at(9)); // i_val = d + k
             // === BRANCH TREE ===
             gr.st(15, gr.at(9) + 1); // k+1
+            //set PC comp
 
-            if (gr.at(15) >= gr.at(12, CTRL_GR_LO))
+            //COMP
+            tmp = gr.at(15); //This tmp is a little wierd, so I shall explain. In the simulator, the 
+                             //comp trace and the data trace happen simultaneously, so the use of 
+                             //gr15 does not conflict with the write here. This tmp models that, but
+                             //it will not be necessary in the isa. The if statement will use gr15.
+                             //In the code you might want to consider something like a to write 
+                             //list, and then in all decodes/execs they write the value and dest to 
+                             //that list. At the end of pe run you writeback everything
+            {
+                // k+1 < vl: check i_val+1 vs ql
+                gr.st(15, gr.at(2) + gr.at(9) + 1);
+                gr.st(7, gr.at(5, CTRL_GR_LO) << 1);  // 2*n_pushed (speculative)
+            }
+            gr.st(4, gr.at(2) + gr.at(9)); // i_val = d + k
+            if (tmp >= gr.at(12, CTRL_GR_LO))
                 goto m13_not_mid_v;
 
-            // k+1 < vl: check i_val+1 vs ql
-            gr.st(15, gr.at(4) + 1);
-            //NOP
-
+            //COMP  (speculative. Assumes we'll make it to midv)
+            {
+                // gr[7] = 2*n_pushed already computed above
+                gr.st(3, gr.at(8) - 1);                // emit_vd = vd-1
+                gr.st(4, gr.at(9) + 1);                // emit_k  = k+1
+            }
             if (gr.at(15) >= gr.at(14))
                 goto m13_only_del;
+            //NOP
 
             // --- MID_V_MID_Q: push 3 diags (gr[3,4] = contiguous mvd pair) ---
             {
-                gr.st(7, gr.at(5, CTRL_GR_LO) << 1);  // 2*n_pushed
-                gr.st(3, gr.at(8) - 1);                // emit_vd = vd-1
-                gr.st(4, gr.at(9) + 1);                // emit_k  = k+1
-                //NOP
-
+                //COMP halt
                 // push (vd-1, k+1) — mvd gr[3]
                 spm[P2_PUSHED_OFF + gr.at(7)] = gr.at(3); spm[P2_PUSHED_OFF + gr.at(7) + 1] = gr.at(4);
-                gr.st(7, gr.at(7) + 2);
+                //set PC comp
 
-                // push (vd, k+1) — mvd gr[3] (k+1 still in gr[4])
-                gr.st(3, gr.at(8));
+                //COMP
+                {
+                    gr.st(7, gr.at(7) + 2);
+                    // push (vd, k+1) — mvd gr[3] (k+1 still in gr[4])
+                    gr.st(3, gr.at(8));
+                }
+                //NOP
                 //NOP
                 
                 spm[P2_PUSHED_OFF + gr.at(7)] = gr.at(3); spm[P2_PUSHED_OFF + gr.at(7) + 1] = gr.at(4); gr.st(7, gr.at(7) + 2); //auto increment
                 gr.st(3, gr.at(8) + 1); // push (vd+1, k) — mvd gr[3]
+                //COMP
+                {
+                    gr.st(4, gr.at(9));
+                    gr.st(5, gr.at(5, CTRL_GR_LO) + 3, CTRL_GR_LO); // n_pushed+=3
+                }
 
-                gr.st(4, gr.at(9));
-                gr.st(5, gr.at(5, CTRL_GR_LO) + 3, CTRL_GR_LO); // n_pushed+=3
-
+                //COMP halt
                 spm[P2_PUSHED_OFF + gr.at(7)] = gr.at(3); spm[P2_PUSHED_OFF + gr.at(7) + 1] = gr.at(4);
                 gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO); // i++
 
@@ -1136,28 +1219,38 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
             // --- NOT_MID_V (k+1 >= vl) ---
         m13_not_mid_v:
-            gr.st(15, gr.at(4) + 1); // i_val+1
-            //NOP
-            
+            //COMP  (overflow. Not desired)
+            {
+                // gr[7] = 2*n_pushed already computed above
+                gr.st(3, gr.at(8) - 1);                // emit_vd = vd-1
+                gr.st(4, gr.at(9) + 1);                // emit_k  = k+1
+            }
             if (gr.at(15) >= gr.at(14))
                 goto m13_end_both;
+            //set PC comp
 
             // --- END_V_MID_Q: intv + finished endQ=0 ---
             {
-                // intv: (vd, vd+1) — mvd gr[3] (gr[3,4] contiguous)
-                gr.st(7, gr.at(5, CTRL_GR_HI) << 1); // 2*n_intv
-                gr.st(3, gr.at(8));                    // vd
-
+                //COMP
+                {
+                    gr.st(7, gr.at(5, CTRL_GR_HI) << 1); // 2*n_intv (speculative)
+                    // intv: (vd, vd+1) — mvd gr[3] (gr[3,4] contiguous)
+                    // gr[7] = 2*n_intv already computed above
+                    gr.st(3, gr.at(8));                    // vd
+                }
                 gr.st(4, gr.at(8) + 1);               // vd+1
-                //NOP
-
-                spm[P2_INTV_OFF + gr.at(7)] = gr.at(3); spm[P2_INTV_OFF + gr.at(7) + 1] = gr.at(4);
                 gr.st(5, gr.at(5, CTRL_GR_HI) + 1, CTRL_GR_HI); // n_intv++
 
-                // finished endQ=0: (vd, k) — mvd gr[8] (gr[8,9] contiguous)
-                gr.st(7, gr.at(6, CTRL_GR_LO) << 1); // 2*n_fin0
-                gr.st(6, gr.at(6, CTRL_GR_LO) + 1, CTRL_GR_LO); // n_fin0++
-                                                                //
+                spm[P2_INTV_OFF + gr.at(7)] = gr.at(3); spm[P2_INTV_OFF + gr.at(7) + 1] = gr.at(4);
+                //NOP
+                //COMP
+                {
+                    // finished endQ=0: (vd, k) — mvd gr[8] (gr[8,9] contiguous)
+                    gr.st(7, gr.at(6, CTRL_GR_LO) << 1); // 2*n_fin0
+                    gr.st(6, gr.at(6, CTRL_GR_LO) + 1, CTRL_GR_LO); // n_fin0++
+                }
+
+                //COMP halt
                 spm[P2_FIN0_OFF + gr.at(7)] = gr.at(8); spm[P2_FIN0_OFF + gr.at(7) + 1] = gr.at(9);
                 gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO); // i++
 
@@ -1572,6 +1665,17 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         *PC = ras;
 #ifdef PROFILE
         printf("ret (PC=%d)\t", ras);
+#endif
+    } else if (opcode == CTRL_RETNE) {
+        rs1 = sext_imm_1;
+        rs2 = reg_1;
+        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->at(rs1);
+        else comp_0 = sext_imm_1;
+        comp_1 = addr_regfile_unit->at(rs2);
+        if (comp_0 != comp_1) *PC = ras;
+        else (*PC)++;
+#ifdef PROFILE
+        printf("retne %d %d (PC=%d)\t", comp_0, comp_1, *PC);
 #endif
     } else {
         fprintf(stderr, "PE[%d] control instruction opcode error.\n", id);

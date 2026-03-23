@@ -5,18 +5,18 @@ def compute_instruction(op_0, op_1, op_2, in_addr_0, in_addr_1, in_addr_2, in_ad
     '''
     in_addr_0 can be immediate
     in_addr_4 can be immediate
+    addr mapping: [0:31]=reg, [32:47]=gr, [48:63]=gr_lo, [64:79]=gr_hi
     '''
-    instr = "0" * 14 \
-            + "{:0>5b}".format(op_0) \
+    instr = "{:0>5b}".format(op_0) \
             + "{:0>5b}".format(op_1) \
             + "{:0>5b}".format(op_2) \
-            + "{:0>5b}".format(in_addr_0) \
-            + "{:0>5b}".format(in_addr_1) \
-            + "{:0>5b}".format(in_addr_2) \
-            + "{:0>5b}".format(in_addr_3) \
-            + "{:0>5b}".format(in_addr_4) \
-            + "{:0>5b}".format(in_addr_5) \
-            + "{:0>5b}".format(out_addr)
+            + "{:0>7b}".format(in_addr_0) \
+            + "{:0>7b}".format(in_addr_1) \
+            + "{:0>7b}".format(in_addr_2) \
+            + "{:0>7b}".format(in_addr_3) \
+            + "{:0>7b}".format(in_addr_4) \
+            + "{:0>7b}".format(in_addr_5) \
+            + "{:0>7b}".format(out_addr)
     value = int(instr, 2)
     return hex(value) + "\n"
     

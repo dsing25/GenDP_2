@@ -100,7 +100,7 @@ int poa_read_input(poa *poa_input, std::string poa_input_file, unsigned long poa
     if (fp_poa_compute_instruction.is_open()) {
         read_index = 0;
         while(getline(fp_poa_compute_instruction, line)) {
-            poa_compute_instruction[read_index/2][read_index%2] = std::stol(line, 0, 16);
+            poa_compute_instruction[read_index/2][read_index%2] = std::stoul(line, 0, 16);
             read_index++;
         }
     } else {
@@ -113,7 +113,7 @@ int poa_read_input(poa *poa_input, std::string poa_input_file, unsigned long poa
     if (fp_poa_main_instruction.is_open()) {
         read_index = 0;
         while(getline(fp_poa_main_instruction, line)) {
-            poa_main_instruction[read_index] = std::stol(line, 0, 16);
+            poa_main_instruction[read_index] = std::stoul(line, 0, 16);
             read_index++;
         }
     } else {
@@ -131,7 +131,7 @@ int poa_read_input(poa *poa_input, std::string poa_input_file, unsigned long poa
         if (fp_poa_pe_instruction[i].is_open()) {
             read_index = 0;
             while(getline(fp_poa_pe_instruction[i], line)) {
-                poa_pe_instruction[i][read_index/2][read_index%2] = std::stol(line, 0, 16);
+                poa_pe_instruction[i][read_index/2][read_index%2] = std::stoul(line, 0, 16);
                 read_index++;
             }
         } else {

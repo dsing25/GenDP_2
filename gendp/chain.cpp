@@ -90,7 +90,7 @@ std::vector<call_t> chain_read_input(std::string chain_input_file, unsigned long
     if (fp_chain_compute_instruction.is_open()) {
         read_index = 0;
         while(getline(fp_chain_compute_instruction, line)) {
-            chain_compute_instruction[read_index/2][read_index%2] = std::stol(line, 0, 16);
+            chain_compute_instruction[read_index/2][read_index%2] = std::stoul(line, 0, 16);
             read_index++;
         }
     } else {
@@ -103,7 +103,7 @@ std::vector<call_t> chain_read_input(std::string chain_input_file, unsigned long
     if (fp_chain_main_instruction.is_open()) {
         read_index = 0;
         while(getline(fp_chain_main_instruction, line)) {
-            chain_main_instruction[read_index/2][read_index%2] = std::stol(line, 0, 16);
+            chain_main_instruction[read_index/2][read_index%2] = std::stoul(line, 0, 16);
             read_index++;
         }
     } else {
@@ -117,7 +117,7 @@ std::vector<call_t> chain_read_input(std::string chain_input_file, unsigned long
         if (fp_chain_pe_instruction[i].is_open()) {
             read_index = 0;
             while(getline(fp_chain_pe_instruction[i], line)) {
-                chain_pe_instruction[i][read_index/2][read_index%2] = std::stol(line, 0, 16);
+                chain_pe_instruction[i][read_index/2][read_index%2] = std::stoul(line, 0, 16);
                 read_index++;
             }
         } else {

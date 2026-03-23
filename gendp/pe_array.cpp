@@ -1759,6 +1759,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #ifdef PROFILE
         printf("ret (PC=%d)\n", ras);
 #endif
+    } else if (opcode == CTRL_RETNE) {
+        rs1 = sext_imm_1;
+        rs2 = reg_1;
+        if (reg_immBar_flag_1) comp_0 = read_gr_src(src, rs1);
+        else comp_0 = sext_imm_1;
+        comp_1 = read_gr_src(src, rs2);
+        if (comp_0 != comp_1) *PC = ras;
+        else (*PC)++;
+#ifdef PROFILE
+        printf("retne %d %d (PC=%d)\n", comp_0, comp_1, *PC);
+#endif
     } else {
         fprintf(stderr, "main control instruction opcode error. opcode = %d\n", opcode);
         exit(-1);
@@ -1857,7 +1868,7 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
         // Arithmetic (opcodes 0-3) now runs pre-PE via
         // decode(). Skip here to avoid double-execution.
         if (opcode <= 3 || opcode == CTRL_CALL
-            || opcode == CTRL_RET) {
+            || opcode == CTRL_RET || opcode == CTRL_RETNE) {
 #ifdef PROFILE
             printf("\n");
 #endif
@@ -2257,6 +2268,33 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             decode(main_instruction_buffer[old_PC][0],
                 &slot0_PC, simd, setting,
                 MAIN_INSTRUCTION_1);
+
+            // Branch-as-group: if slot 0 branched, it
+            // must agree with slot 1
+            int op0 = main_instruction_buffer[old_PC][0]
+                & ((1 << CTRL_OPCODE_WIDTH) - 1);
+            int op1 = main_instruction_buffer[old_PC][1]
+                & ((1 << CTRL_OPCODE_WIDTH) - 1);
+            auto is_cf = [](int op) {
+                return (op >= CTRL_BNE && op <= CTRL_JUMP)
+                    || op == CTRL_CALL || op == CTRL_RET
+                    || op == CTRL_RETNE;
+            };
+            if (is_cf(op0) && is_cf(op1)
+                && slot0_PC != main_PC) {
+                fprintf(stderr,
+                    "Controller PC=%d diverging branches:"
+                    " slot0->%d slot1->%d\n",
+                    old_PC, slot0_PC, main_PC);
+                exit(-1);
+            }
+            // One branch taken: sync
+            if (is_cf(op0) && slot0_PC != old_PC + 1
+                && !is_cf(op1))
+                main_PC = slot0_PC;
+            if (is_cf(op1) && main_PC != old_PC + 1
+                && !is_cf(op0))
+                ; // main_PC already correct
         }
 
         pe_unit[0]->load_data = store_data;

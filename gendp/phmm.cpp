@@ -72,7 +72,7 @@ int phmm_read_input(phmm *phmm_input, std::string phmm_input_file, unsigned long
     if (fp_phmm_compute_instruction.is_open()) {
         read_index = 0;
         while(getline(fp_phmm_compute_instruction, line)) {
-            phmm_compute_instruction[read_index/2][read_index%2] = std::stol(line, 0, 16);
+            phmm_compute_instruction[read_index/2][read_index%2] = std::stoul(line, 0, 16);
             read_index++;
         }
     } else {
@@ -85,7 +85,7 @@ int phmm_read_input(phmm *phmm_input, std::string phmm_input_file, unsigned long
     if (fp_phmm_main_instruction.is_open()) {
         read_index = 0;
         while(getline(fp_phmm_main_instruction, line)) {
-            phmm_main_instruction[read_index/2][read_index%2] = std::stol(line, 0, 16);
+            phmm_main_instruction[read_index/2][read_index%2] = std::stoul(line, 0, 16);
             read_index++;
         }
     } else {
@@ -99,7 +99,7 @@ int phmm_read_input(phmm *phmm_input, std::string phmm_input_file, unsigned long
         if (fp_phmm_pe_instruction[i].is_open()) {
             read_index = 0;
             while(getline(fp_phmm_pe_instruction[i], line)) {
-                phmm_pe_instruction[i][read_index/2][read_index%2] = std::stol(line, 0, 16);
+                phmm_pe_instruction[i][read_index/2][read_index%2] = std::stoul(line, 0, 16);
                 read_index++;
             }
         } else {
