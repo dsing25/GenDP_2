@@ -800,7 +800,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             gr.st(15, gr.at(6, CTRL_GR_LO) << 1);
             //NOP
 
-            gr.st(11, spm[NODE_INFO_OFF + gr.at(15)]); gr.st(12, spm[NODE_INFO_OFF + gr.at(15) + 1]);    // ts_off, vl (clobbers 12_hi, but we overwrite it later anyway)
+            gr.st(11, spm[NODE_INFO_OFF + gr.at(15)]); gr.st(12, spm[NODE_INFO_OFF + gr.at(15) + 1], CTRL_GR_LO);    // ts_off, vl (preserve 12_hi = intv_n)
 
         m8_skip_node:
             extend(); //call
