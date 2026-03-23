@@ -320,6 +320,26 @@ void gwfa_simulation(
             continue;
         }
 
+        // Check if sequences fit in interleaved SPM
+        {
+            int q_words = (inp.ql + 15) / 16;
+            int gs_total = 0;
+            for (uint32_t v = 0; v < inp.n_vtx; v++) {
+                int end = (int)inp.sub->seq_off[v]
+                    + inp.sub->seq_len[v];
+                if (end > gs_total) gs_total = end;
+            }
+            int gs_words = (gs_total + 15) / 16;
+            if (GWFA_Q_START + q_words > SPM_ADDR_NUM
+                || GWFA_GS_START + gs_words > SPM_ADDR_NUM) {
+                fprintf(stderr, "gwfa: case %d too large "
+                    "for SPM (q=%d gs=%d words), "
+                    "skipping\n", i, q_words, gs_words);
+                printf("qqq -1 qqq\n");
+                continue;
+            }
+        }
+
         // Reset controller state
         pa->buffer_reset(
             pa->main_addressing_register,
