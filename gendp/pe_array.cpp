@@ -522,6 +522,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     ((int)sub.n_arc & 0xFFFF) | (arc_off_s2 << 16);
                 main_addressing_register[16] =
                     (ql & 0xFFFF) | ((int)sub.n_vtx << 16);
+                main_addressing_register[30] = arc_s2;  // S2 base of arc[] data
 
                 // Set MM pointer and base offsets
                 mm = gwfa_get_mm();
@@ -562,6 +563,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             main_addressing_register[26] = 0; // A_tail
             main_addressing_register[27] = 0; // A_count
             main_addressing_register[28] = 0; // intv_buf_n
+            main_addressing_register[31] = 0; // ha_n_dirty
         } else if (magic_id == 5 && va_regfile[0] != 0) {
             // GWFA debug: print wavefront trace at distance gr_lo[12]
             gwfa_debug_step((int16_t)(main_addressing_register[12] & 0xFFFF));
@@ -600,45 +602,72 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     spm[pe_spm + META_OFF + 1] = 0;     // si
                 }
             }
-            // Phase 2: strided MM → S1c (outer=8-word, inner=for pe)
-            gr[5] = 0;                                   // si
-            for (int pe = 0; pe < 4; pe++) {
-                gr[1] = s1c[S1C_TILE_N + pe];           // mv S1c→gr
-                //NOP
-                if (gr[1] > gr[5]) gr[5] = gr[1];       // bge; mv
+            // Phase 2: hoisted peel + mvdq MM → S1c
+            // PE alloc: PE0=gr[1,3,4] PE1=gr[5,6,7] PE2=gr[8,9,10]
+            //           PE3=gr[11,16,17]  gr[13]=peel/flag
+            {
+                // Setup per-PE src (MM), dst (S1c), end
+                for (int pe = 0; pe < 4; pe++) {
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    int &end = (pe==0)?gr[4]:(pe==1)?gr[7]:(pe==2)?gr[10]:gr[17];
+                    // MM src = s_a_off + (cursor + pe*64)*2
+                    gr[13] = gr[14] + pe * DIAGS_PER_PE;  // addi
+                    gr[13] = gr[13] + gr[13];             // add: *2
+                    src = gr[13] + gr[19];                // add: + s_a_off
+                    // end = src + 2*tile_n
+                    gr[13] = s1c[S1C_TILE_N + pe];        // mv: tile_n
+                    //NOP
+                    end = gr[13] + gr[13];                // add: 2*tile_n
+                    //NOP
+                    end = src + end;                       // add: end
+                    dst = pe * S1C_PE_STRIDE;             // si: S1c dst
+                }
+                // Peel (handle tile_n%4 remainder)
+                for (int pe = 0; pe < 4; pe++) {
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    gr[13] = s1c[S1C_TILE_N + pe] & 3;   // andi: n%4
+                    //NOP
+                m7_peel:
+                    if (gr[13] <= 0) goto m7_peel_done;
+                    //NOP
+                    s1c[dst] = mm[src]; s1c[dst+1] = mm[src+1];
+                    src += 2; dst += 2;                   // addi
+                    gr[13] = gr[13] - 1;                   // subi
+                    goto m7_peel;
+                m7_peel_done:
+                    (void)0;
+                }
+                // Main mvdq loop
+            m7_outer:
+                gr[13] = 0;
+                if (gr[1] >= gr[4]) goto m7_pe1;
+                mvdq_copy(&s1c[gr[3]], &mm[gr[1]], 8);
+                gr[1] += 8; gr[3] += 8; gr[13] = 1;
+            m7_pe1:
+                if (gr[5] >= gr[7]) goto m7_pe2;
+                mvdq_copy(&s1c[gr[6]], &mm[gr[5]], 8);
+                gr[5] += 8; gr[6] += 8; gr[13] = 1;
+            m7_pe2:
+                if (gr[8] >= gr[10]) goto m7_pe3;
+                mvdq_copy(&s1c[gr[9]], &mm[gr[8]], 8);
+                gr[8] += 8; gr[9] += 8; gr[13] = 1;
+            m7_pe3:
+                if (gr[11] >= gr[17]) goto m7_check;
+                mvdq_copy(&s1c[gr[16]], &mm[gr[11]], 8);
+                gr[11] += 8; gr[16] += 8; gr[13] = 1;
+            m7_check:
+                if (gr[13] != 0) goto m7_outer;
+            m7_all_done:
+                (void)0;
             }
-            gr[5] = gr[5] + gr[5];                      // add: max_words
-            gr[11] = 0;                                  // si: word ctr
+            // Advance cursor (moved from magic 9 section 6 for overlap)
+            gr[7] = gr[15] - gr[14];                       // sub: remaining
             //NOP
-        m7_outer:
-            if (gr[11] >= gr[5]) goto m7_all_done;       // bge
+            if (gr[7] > 256) gr[7] = 256;                  // blt; si
             //NOP
-            for (int pe = 0; pe < 4; pe++) {
-                gr[10] = s1c[S1C_TILE_N + pe];          // mv S1c→gr
-                //NOP
-                gr[10] = gr[10] + gr[10];               // add: pe_words
-                //NOP
-                if (gr[11] >= gr[10]) continue;          // bge → skip
-                //NOP
-                // mm_src = s_a_off + (cursor+pe*64)*2 + w
-                gr[8] = gr[14] + pe * DIAGS_PER_PE;     // addi
-                gr[8] = gr[8] + gr[8];                  // add: *2
-                gr[8] = gr[8] + gr[19];                 // add: + s_a_off
-                gr[8] = gr[8] + gr[11];                 // add: + w
-                //NOP
-                // s1c dest = pe*128 + w
-                gr[9] = pe * S1C_PE_STRIDE + gr[11];    // addi
-                //NOP
-                // mvdq: 8 words MM → S1c
-                s1c[gr[9]+0]=mm[gr[8]+0]; s1c[gr[9]+1]=mm[gr[8]+1];
-                s1c[gr[9]+2]=mm[gr[8]+2]; s1c[gr[9]+3]=mm[gr[8]+3];
-                s1c[gr[9]+4]=mm[gr[8]+4]; s1c[gr[9]+5]=mm[gr[8]+5];
-                s1c[gr[9]+6]=mm[gr[8]+6]; s1c[gr[9]+7]=mm[gr[8]+7];
-            }
-            gr[11] = gr[11] + 8;                        // addi
-            goto m7_outer;                               // jump
-        m7_all_done:
-            (void)0;
+            gr[14] = gr[14] + gr[7];                       // add (cursor+=)
         } else if (magic_id == 8) {
             // GWFA tile load seq info: S1c → SPM + S2 → SPM
             // ISA-like: all state in gr[]/spm[]/s1c[]/s2[]
@@ -817,15 +846,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 s1c[4 + pe] = gr[8];                       // mv gr→S1c
                 s1c[8 + pe] = gr[9];                       // mv gr→S1c
             }
-            // === Section 3: B diags SPM → MM (strided mvdq) ===
+            // === Section 3: B diags SPM → MM (hoisted peel + mvdq) ===
+            // PE alloc: PE0=gr[1,3,4] PE1=gr[5,6,7] PE2=gr[8,9,10]
+            //           PE3=gr[11,16,17]  gr[13]=peel/flag
             {
-                // Compute max_tb → gr[5]
-                gr[5] = 0;                                  // si
-                for (int pe = 0; pe < 4; pe++) {
-                    gr[7] = s1c[pe];                        // mv S1c→gr
-                    //NOP
-                    if (gr[7] > gr[5]) gr[5] = gr[7];      // bge; mv
-                }
                 // Cumulative B destinations → s1c[12..15]
                 gr[7] = gr[20] + gr[24];                   // add
                 gr[7] = gr[7] + gr[24];                    // add (base+2*s_B_n)
@@ -837,33 +861,62 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[7] = gr[7] + gr[8];                 // add
                     s1c[12 + pe] = gr[7];                  // mv
                 }
-                // Strided copy loop
-                gr[5] = gr[5] + gr[5];                     // add: max_words
-                gr[11] = 0;                                 // si: w
-                //NOP
-            m9_b_outer:
-                if (gr[11] >= gr[5]) goto m9_b_done;       // bge
-                //NOP
+                // Setup per-PE src, dst, end
                 for (int pe = 0; pe < 4; pe++) {
                     int pe_base =
                         pe * SPM_BANK_GROUP_SIZE + buf_base;
-                    gr[10] = s1c[pe];                      // mv (tb_n)
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    int &end = (pe==0)?gr[4]:(pe==1)?gr[7]:(pe==2)?gr[10]:gr[17];
+                    gr[13] = s1c[pe];                      // mv: tb_n
                     //NOP
-                    gr[10] = gr[10] + gr[10];              // add: pe_words
+                    src = pe_base + B_TILE_OFF;            // si: src
+                    end = gr[13] + gr[13];                 // add: 2*n
                     //NOP
-                    if (gr[11] >= gr[10]) continue;         // bge
-                    //NOP
-                    gr[8] = s1c[12 + pe];                  // mv (b_dst)
-                    //NOP
-                    gr[8] = gr[8] + gr[11];                // add: + w
-                    gr[9] = pe_base + B_TILE_OFF + gr[11]; // addi
-                    //NOP
-                    // mvdq: 8 words SPM → MM
-                    mvdq_copy(&mm[gr[8]], &spm[gr[9]],
-                        gr[10] - gr[11]);                   // bounded
+                    end = src + end;                        // add: end
+                    dst = s1c[12 + pe];                    // mv: dst
                 }
-                gr[11] = gr[11] + 8;                       // addi
-                goto m9_b_outer;                            // jump
+                // Phase 1: Peel (handle n%4 remainder via mvd)
+                for (int pe = 0; pe < 4; pe++) {
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    gr[13] = s1c[pe] & 3;                  // andi: n%4
+                    //NOP
+                m9_b_peel:
+                    if (gr[13] <= 0) goto m9_b_peel_done;  // ble
+                    //NOP
+                    mm[dst] = spm[src];                    // mvd
+                    mm[dst+1] = spm[src+1];
+                    src += 2; dst += 2;                    // addi
+                    gr[13] = gr[13] - 1;                    // subi
+                    goto m9_b_peel;                         // jump
+                m9_b_peel_done:
+                    (void)0;
+                }
+                // Phase 2: Main mvdq loop (all PEs 8-word aligned)
+            m9_b_outer:
+                gr[13] = 0;                                // si: any-active
+                if (gr[1] >= gr[4]) goto m9_b_pe1;         // bge: PE0 done
+                mvdq_copy(&mm[gr[3]], &spm[gr[1]], 8);
+                gr[1] += 8; gr[3] += 8;                   // addi
+                gr[13] = 1;                                 // si
+            m9_b_pe1:
+                if (gr[5] >= gr[7]) goto m9_b_pe2;         // bge: PE1 done
+                mvdq_copy(&mm[gr[6]], &spm[gr[5]], 8);
+                gr[5] += 8; gr[6] += 8;                   // addi
+                gr[13] = 1;                                 // si
+            m9_b_pe2:
+                if (gr[8] >= gr[10]) goto m9_b_pe3;        // bge: PE2 done
+                mvdq_copy(&mm[gr[9]], &spm[gr[8]], 8);
+                gr[8] += 8; gr[9] += 8;                   // addi
+                gr[13] = 1;                                 // si
+            m9_b_pe3:
+                if (gr[11] >= gr[17]) goto m9_b_check;     // bge: PE3 done
+                mvdq_copy(&mm[gr[16]], &spm[gr[11]], 8);
+                gr[11] += 8; gr[16] += 8;                 // addi
+                gr[13] = 1;                                 // si
+            m9_b_check:
+                if (gr[13] != 0) goto m9_b_outer;          // bne
             m9_b_done:
                 // Update s_B_n: gr[24] += sum(tb_n)
                 for (int pe = 0; pe < 4; pe++) {
@@ -914,15 +967,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             m9_a_done:
                 (void)0;
             }
-            // === Section 5: Intervals SPM → MM (strided mvdq) ===
+            // === Section 5: Intervals SPM → MM (hoisted peel + mvdq) ===
             {
-                // Compute max_ni → gr[5]
-                gr[5] = 0;                                  // si
-                for (int pe = 0; pe < 4; pe++) {
-                    gr[7] = s1c[8 + pe];                   // mv (n_intv)
-                    //NOP
-                    if (gr[7] > gr[5]) gr[5] = gr[7];      // bge; mv
-                }
                 // Cumulative intv destinations → s1c[16..19]
                 gr[7] = gr[22] + gr[28];                   // add
                 gr[7] = gr[7] + gr[28];                    // add (base+2*n)
@@ -934,34 +980,62 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[7] = gr[7] + gr[8];                 // add
                     s1c[16 + pe] = gr[7];                  // mv
                 }
-                // Strided copy loop
-                gr[5] = gr[5] + gr[5];                     // add: max_words
-                gr[11] = 0;                                 // si: w
-                //NOP
-            m9_i_outer:
-                if (gr[11] >= gr[5]) goto m9_i_done;       // bge
-                //NOP
+                // Setup per-PE src, dst, end
                 for (int pe = 0; pe < 4; pe++) {
                     int pe_base =
                         pe * SPM_BANK_GROUP_SIZE + buf_base;
-                    gr[10] = s1c[8 + pe];                  // mv (n_intv)
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    int &end = (pe==0)?gr[4]:(pe==1)?gr[7]:(pe==2)?gr[10]:gr[17];
+                    gr[13] = s1c[8 + pe];                  // mv: n_intv
                     //NOP
-                    gr[10] = gr[10] + gr[10];              // add
+                    src = pe_base + INTV_TILE_OFF;         // si: src
+                    end = gr[13] + gr[13];                 // add: 2*n
                     //NOP
-                    if (gr[11] >= gr[10]) continue;         // bge
-                    //NOP
-                    gr[8] = s1c[16 + pe];                  // mv (intv_dst)
-                    //NOP
-                    gr[8] = gr[8] + gr[11];                // add: + w
-                    gr[9] = pe_base + INTV_TILE_OFF
-                        + gr[11];                           // addi
-                    //NOP
-                    // mvdq: 8 words SPM → MM
-                    mvdq_copy(&mm[gr[8]], &spm[gr[9]],
-                        gr[10] - gr[11]);                   // bounded
+                    end = src + end;                        // add: end
+                    dst = s1c[16 + pe];                    // mv: dst
                 }
-                gr[11] = gr[11] + 8;                       // addi
-                goto m9_i_outer;                            // jump
+                // Phase 1: Peel (handle n%4 remainder via mvd)
+                for (int pe = 0; pe < 4; pe++) {
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    gr[13] = s1c[8 + pe] & 3;              // andi: n%4
+                    //NOP
+                m9_i_peel:
+                    if (gr[13] <= 0) goto m9_i_peel_done;  // ble
+                    //NOP
+                    mm[dst] = spm[src];                    // mvd
+                    mm[dst+1] = spm[src+1];
+                    src += 2; dst += 2;                    // addi
+                    gr[13] = gr[13] - 1;                    // subi
+                    goto m9_i_peel;                         // jump
+                m9_i_peel_done:
+                    (void)0;
+                }
+                // Phase 2: Main mvdq loop (all PEs 8-word aligned)
+            m9_i_outer:
+                gr[13] = 0;                                // si: any-active
+                if (gr[1] >= gr[4]) goto m9_i_pe1;         // bge: PE0 done
+                mvdq_copy(&mm[gr[3]], &spm[gr[1]], 8);
+                gr[1] += 8; gr[3] += 8;                   // addi
+                gr[13] = 1;                                 // si
+            m9_i_pe1:
+                if (gr[5] >= gr[7]) goto m9_i_pe2;         // bge: PE1 done
+                mvdq_copy(&mm[gr[6]], &spm[gr[5]], 8);
+                gr[5] += 8; gr[6] += 8;                   // addi
+                gr[13] = 1;                                 // si
+            m9_i_pe2:
+                if (gr[8] >= gr[10]) goto m9_i_pe3;        // bge: PE2 done
+                mvdq_copy(&mm[gr[9]], &spm[gr[8]], 8);
+                gr[8] += 8; gr[9] += 8;                   // addi
+                gr[13] = 1;                                 // si
+            m9_i_pe3:
+                if (gr[11] >= gr[17]) goto m9_i_check;     // bge: PE3 done
+                mvdq_copy(&mm[gr[16]], &spm[gr[11]], 8);
+                gr[11] += 8; gr[16] += 8;                 // addi
+                gr[13] = 1;                                 // si
+            m9_i_check:
+                if (gr[13] != 0) goto m9_i_outer;          // bne
             m9_i_done:
                 // Update intv_buf_n: gr[28] += sum(n_intv)
                 for (int pe = 0; pe < 4; pe++) {
@@ -970,12 +1044,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[28] = gr[28] + gr[7];               // add
                 }
             }
-            // === Section 6: Advance cursor ===
-            gr[7] = gr[15] - gr[14];                       // sub: remaining
-            //NOP
-            if (gr[7] > 256) gr[7] = 256;                  // blt; si
-            //NOP
-            gr[14] = gr[14] + gr[7];                       // add (cursor+=)
+            // Section 6 (cursor advance) moved to magic 7 for overlap
         } else if (magic_id == 12) {
             // GWFA FIFO flush: write boundary element to B in MM
             // ISA-like: all state in gr[]/mm[]
@@ -1002,9 +1071,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             constexpr int A_MASK_VAL = (16 << 20) - 1;
             int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
             int *spm = SPM_unit->buffer;
+            int p2_base = (magic_mask & 1) ? GWFA_P2B_BASE : GWFA_P2_BASE;
             gr[2] = 0;                                   // si: total
             for (int pe = 0; pe < 4; pe++) {
-                int pe_base = pe * SPM_BANK_GROUP_SIZE + GWFA_P2_BASE;
+                int pe_base = pe * SPM_BANK_GROUP_SIZE + p2_base;
                 // tile_n = min(A_count, 64)
                 gr[10] = gr[27];                          // mv (A_count)
                 //NOP
@@ -1047,26 +1117,583 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // gr[2] = total > 0 → flag
             if (gr[2] > 0) gr[2] = 1;                   // bgt; si
         } else if (magic_id == 15) {
-            // Phase 2 tile writeback (calls gwfa.c). Sync gr→statics first.
-            gwfa_sync_counters(main_addressing_register[24],
-                (uint32_t)main_addressing_register[25],
-                (uint32_t)main_addressing_register[26],
-                (uint32_t)main_addressing_register[27],
-                main_addressing_register[28]);
-            for (int pe = 0; pe < 4; pe++) {
-                int *pe_spm = SPM_unit->buffer + pe * SPM_BANK_GROUP_SIZE + GWFA_P2_BASE;
-                gwfa_phase2_tile_writeback(pe_spm);
-            }
-            // Refresh gr[] (writeback may push to A/B)
+            // Phase 2 tile writeback — ISA-like register-mapped code.
+            // Processes PE output: pushed diags, intervals, fin0, fin1.
+            constexpr int P2_PUSHED_OFF = 256;
+            constexpr int P2_INTV_OFF   = 640;
+            constexpr int P2_FIN0_OFF   = 768;
+            constexpr int P2_FIN1_OFF   = 896;
+            constexpr int P2_META_OFF   = 1024;
+            constexpr int P2_M_PUSHED = 0, P2_M_INTV = 1;
+            constexpr int P2_M_FIN0 = 2, P2_M_FIN1 = 3;
+            constexpr int A_MASK_VAL = (16 << 20) - 1;
+            constexpr int ARC_META_BASE = 544;
+            int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
+            int *spm = SPM_unit->buffer;
+            int p2_base = (magic_mask & 1) ? GWFA_P2B_BASE : GWFA_P2_BASE;
+
+            // === Section 1: Pushed diags SPM → MM (hoisted peel + mvdq) ===
+            // PE alloc: PE0=gr[1,3,4] PE1=gr[5,6,7] PE2=gr[8,9,10]
+            //           PE3=gr[11,16,17]  gr[13]=peel/flag
             {
-                int32_t B_n; uint32_t Ah, At, Ac; int32_t in;
-                gwfa_read_counters(&B_n, &Ah, &At, &Ac, &in);
-                main_addressing_register[24] = B_n;
-                main_addressing_register[25] = (int)Ah;
-                main_addressing_register[26] = (int)At;
-                main_addressing_register[27] = (int)Ac;
-                main_addressing_register[28] = in;
+                // Read n_pushed per PE from SPM → s1c[0..3]
+                for (int pe = 0; pe < 4; pe++) {
+                    int pe_base = pe * SPM_BANK_GROUP_SIZE + p2_base;
+                    gr[13] = spm[pe_base + P2_META_OFF + P2_M_PUSHED];
+                    //NOP; //NOP
+                    s1c[pe] = gr[13];                    // mv
+                }
+                // Cumulative B destinations → s1c[16..19]
+                gr[7] = gr[20] + gr[24];                 // add
+                gr[7] = gr[7] + gr[24];                  // add (base+2*B_n)
+                s1c[16] = gr[7];                         // mv
+                for (int pe = 1; pe < 4; pe++) {
+                    gr[8] = s1c[pe - 1];                 // mv
+                    //NOP
+                    gr[8] = gr[8] + gr[8];               // add: 2*n_pushed
+                    gr[7] = gr[7] + gr[8];               // add
+                    s1c[16 + pe] = gr[7];                // mv
+                }
+                // Setup per-PE src, dst, end
+                for (int pe = 0; pe < 4; pe++) {
+                    int pe_base = pe * SPM_BANK_GROUP_SIZE + p2_base;
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    int &end = (pe==0)?gr[4]:(pe==1)?gr[7]:(pe==2)?gr[10]:gr[17];
+                    gr[13] = s1c[pe];                    // mv: n_pushed
+                    //NOP
+                    src = pe_base + P2_PUSHED_OFF;       // si: src
+                    end = gr[13] + gr[13];               // add: 2*n
+                    //NOP
+                    end = src + end;                      // add: end
+                    dst = s1c[16 + pe];                  // mv: dst
+                }
+                // Peel
+                for (int pe = 0; pe < 4; pe++) {
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    gr[13] = s1c[pe] & 3;                // andi: n%4
+                    //NOP
+                m15_p_peel:
+                    if (gr[13] <= 0) goto m15_p_peel_done;
+                    //NOP
+                    mm[dst] = spm[src]; mm[dst+1] = spm[src+1];
+                    src += 2; dst += 2;                  // addi
+                    gr[13] = gr[13] - 1;                  // subi
+                    goto m15_p_peel;
+                m15_p_peel_done:
+                    (void)0;
+                }
+                // Main mvdq loop
+            m15_p_outer:
+                gr[13] = 0;
+                if (gr[1] >= gr[4]) goto m15_p_pe1;
+                mvdq_copy(&mm[gr[3]], &spm[gr[1]], 8);
+                gr[1] += 8; gr[3] += 8; gr[13] = 1;
+            m15_p_pe1:
+                if (gr[5] >= gr[7]) goto m15_p_pe2;
+                mvdq_copy(&mm[gr[6]], &spm[gr[5]], 8);
+                gr[5] += 8; gr[6] += 8; gr[13] = 1;
+            m15_p_pe2:
+                if (gr[8] >= gr[10]) goto m15_p_pe3;
+                mvdq_copy(&mm[gr[9]], &spm[gr[8]], 8);
+                gr[8] += 8; gr[9] += 8; gr[13] = 1;
+            m15_p_pe3:
+                if (gr[11] >= gr[17]) goto m15_p_check;
+                mvdq_copy(&mm[gr[16]], &spm[gr[11]], 8);
+                gr[11] += 8; gr[16] += 8; gr[13] = 1;
+            m15_p_check:
+                if (gr[13] != 0) goto m15_p_outer;
+            m15_p_done:
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[7] = s1c[pe];                     // mv
+                    //NOP
+                    gr[24] = gr[24] + gr[7];             // add (B_n+=)
+                }
             }
+
+            // === Section 2: Intervals SPM → MM (hoisted peel + mvdq) ===
+            {
+                // Read n_intv per PE from SPM → s1c[4..7]
+                for (int pe = 0; pe < 4; pe++) {
+                    int pe_base = pe * SPM_BANK_GROUP_SIZE + p2_base;
+                    gr[13] = spm[pe_base + P2_META_OFF + P2_M_INTV];
+                    //NOP; //NOP
+                    s1c[4 + pe] = gr[13];                // mv
+                }
+                // Cumulative intv destinations → s1c[20..23]
+                gr[7] = gr[22] + gr[28];                 // add
+                gr[7] = gr[7] + gr[28];                  // add (base+2*n)
+                s1c[20] = gr[7];                         // mv
+                for (int pe = 1; pe < 4; pe++) {
+                    gr[8] = s1c[4 + pe - 1];             // mv
+                    //NOP
+                    gr[8] = gr[8] + gr[8];               // add: 2*n_intv
+                    gr[7] = gr[7] + gr[8];               // add
+                    s1c[20 + pe] = gr[7];                // mv
+                }
+                // Setup per-PE src, dst, end
+                for (int pe = 0; pe < 4; pe++) {
+                    int pe_base = pe * SPM_BANK_GROUP_SIZE + p2_base;
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    int &end = (pe==0)?gr[4]:(pe==1)?gr[7]:(pe==2)?gr[10]:gr[17];
+                    gr[13] = s1c[4 + pe];                // mv: n_intv
+                    //NOP
+                    src = pe_base + P2_INTV_OFF;         // si: src
+                    end = gr[13] + gr[13];               // add: 2*n
+                    //NOP
+                    end = src + end;                      // add: end
+                    dst = s1c[20 + pe];                  // mv: dst
+                }
+                // Peel
+                for (int pe = 0; pe < 4; pe++) {
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    gr[13] = s1c[4 + pe] & 3;            // andi: n%4
+                    //NOP
+                m15_i_peel:
+                    if (gr[13] <= 0) goto m15_i_peel_done;
+                    //NOP
+                    mm[dst] = spm[src]; mm[dst+1] = spm[src+1];
+                    src += 2; dst += 2;                  // addi
+                    gr[13] = gr[13] - 1;                  // subi
+                    goto m15_i_peel;
+                m15_i_peel_done:
+                    (void)0;
+                }
+                // Main mvdq loop
+            m15_i_outer:
+                gr[13] = 0;
+                if (gr[1] >= gr[4]) goto m15_i_pe1;
+                mvdq_copy(&mm[gr[3]], &spm[gr[1]], 8);
+                gr[1] += 8; gr[3] += 8; gr[13] = 1;
+            m15_i_pe1:
+                if (gr[5] >= gr[7]) goto m15_i_pe2;
+                mvdq_copy(&mm[gr[6]], &spm[gr[5]], 8);
+                gr[5] += 8; gr[6] += 8; gr[13] = 1;
+            m15_i_pe2:
+                if (gr[8] >= gr[10]) goto m15_i_pe3;
+                mvdq_copy(&mm[gr[9]], &spm[gr[8]], 8);
+                gr[8] += 8; gr[9] += 8; gr[13] = 1;
+            m15_i_pe3:
+                if (gr[11] >= gr[17]) goto m15_i_check;
+                mvdq_copy(&mm[gr[16]], &spm[gr[11]], 8);
+                gr[11] += 8; gr[16] += 8; gr[13] = 1;
+            m15_i_check:
+                if (gr[13] != 0) goto m15_i_outer;
+            m15_i_done:
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[7] = s1c[4 + pe];                 // mv
+                    //NOP
+                    gr[28] = gr[28] + gr[7];             // add (intv_n+=)
+                }
+            }
+
+            // === Section 3: Load fin0+fin1 from PE SPM → S1c ===
+            // Layout: all PE fin0 first, then all PE fin1
+            // s1c[24..27]=per-PE fin0 start, s1c[28..31]=n_fin0
+            // s1c[20]=total_fin0, s1c[21]=total_diags
+            {
+                // Read n_fin0, n_fin1 from SPM → s1c[8..15]
+                for (int pe = 0; pe < 4; pe++) {
+                    int pe_base = pe * SPM_BANK_GROUP_SIZE + p2_base;
+                    gr[14] = spm[pe_base + P2_META_OFF + P2_M_FIN0];
+                    gr[13] = spm[pe_base + P2_META_OFF + P2_M_FIN1];
+                    //NOP; //NOP
+                    s1c[8 + pe] = gr[14];                // n_fin0
+                    s1c[12 + pe] = gr[13];               // n_fin1
+                }
+                // Cumulative fin0 destinations in S1c → s1c[24..27]
+                gr[7] = 32;                              // si: base
+                s1c[24] = gr[7];                         // PE0 start
+                s1c[28] = s1c[8];                        // PE0 n_fin0
+                for (int pe = 1; pe < 4; pe++) {
+                    gr[8] = s1c[8 + pe - 1];             // n_fin0[pe-1]
+                    //NOP
+                    gr[8] = gr[8] + gr[8];               // 2*n_fin0
+                    gr[7] = gr[7] + gr[8];               // cumulative
+                    s1c[24 + pe] = gr[7];                // PE start
+                    s1c[28 + pe] = s1c[8 + pe];          // n_fin0
+                }
+                // Setup per-PE src, dst, end for fin0 copy (SPM → S1c)
+                for (int pe = 0; pe < 4; pe++) {
+                    int pe_base = pe * SPM_BANK_GROUP_SIZE + p2_base;
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    int &end = (pe==0)?gr[4]:(pe==1)?gr[7]:(pe==2)?gr[10]:gr[17];
+                    gr[13] = s1c[8 + pe];                // n_fin0
+                    //NOP
+                    src = pe_base + P2_FIN0_OFF;         // SPM src
+                    end = gr[13] + gr[13];               // 2*n
+                    //NOP
+                    end = src + end;                      // end
+                    dst = s1c[24 + pe];                  // S1c dst
+                }
+                // Peel fin0
+                for (int pe = 0; pe < 4; pe++) {
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    gr[13] = s1c[8 + pe] & 3;            // andi
+                    //NOP
+                m15_f0_peel:
+                    if (gr[13] <= 0) goto m15_f0_peel_done;
+                    //NOP
+                    s1c[dst] = spm[src];                 // mvd
+                    s1c[dst+1] = spm[src+1];
+                    src += 2; dst += 2;                  // addi
+                    gr[13] = gr[13] - 1;                   // subi
+                    goto m15_f0_peel;
+                m15_f0_peel_done:
+                    (void)0;
+                }
+                // Main mvdq loop for fin0
+            m15_f0_outer:
+                gr[13] = 0;
+                if (gr[1] >= gr[4]) goto m15_f0_pe1;
+                mvdq_copy(&s1c[gr[3]], &spm[gr[1]], 8);
+                gr[1] += 8; gr[3] += 8; gr[13] = 1;
+            m15_f0_pe1:
+                if (gr[5] >= gr[7]) goto m15_f0_pe2;
+                mvdq_copy(&s1c[gr[6]], &spm[gr[5]], 8);
+                gr[5] += 8; gr[6] += 8; gr[13] = 1;
+            m15_f0_pe2:
+                if (gr[8] >= gr[10]) goto m15_f0_pe3;
+                mvdq_copy(&s1c[gr[9]], &spm[gr[8]], 8);
+                gr[8] += 8; gr[9] += 8; gr[13] = 1;
+            m15_f0_pe3:
+                if (gr[11] >= gr[17]) goto m15_f0_check;
+                mvdq_copy(&s1c[gr[16]], &spm[gr[11]], 8);
+                gr[11] += 8; gr[16] += 8; gr[13] = 1;
+            m15_f0_check:
+                if (gr[13] != 0) goto m15_f0_outer;
+            m15_f0_done:
+                // Compute total_fin0 → s1c[20]
+                gr[7] = 0;                                // si
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[8] = s1c[8 + pe];                  // n_fin0
+                    //NOP
+                    gr[7] = gr[7] + gr[8];                // add
+                }
+                s1c[20] = gr[7];                          // total_fin0
+                // Cumulative fin1 destinations → s1c[16..19]
+                // Use gr[14] as running base (free in magic 15)
+                gr[14] = gr[7] + gr[7];                  // 2*total_fin0
+                //NOP
+                gr[14] = gr[14] + 32;                    // fin1 s1c base
+                s1c[16] = gr[14];                         // PE0 fin1 dst
+                for (int pe = 1; pe < 4; pe++) {
+                    gr[13] = s1c[12 + pe - 1];           // n_fin1[pe-1]
+                    //NOP
+                    gr[13] = gr[13] + gr[13];             // 2*n_fin1
+                    gr[14] = gr[14] + gr[13];             // cumulative
+                    s1c[16 + pe] = gr[14];                // PE fin1 dst
+                }
+                // Setup for fin1 copy (SPM → S1c)
+                for (int pe = 0; pe < 4; pe++) {
+                    int pe_base = pe * SPM_BANK_GROUP_SIZE + p2_base;
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    int &end = (pe==0)?gr[4]:(pe==1)?gr[7]:(pe==2)?gr[10]:gr[17];
+                    gr[13] = s1c[12 + pe];                // n_fin1
+                    //NOP
+                    src = pe_base + P2_FIN1_OFF;          // SPM src
+                    end = gr[13] + gr[13];                // 2*n
+                    //NOP
+                    end = src + end;                       // end
+                    dst = s1c[16 + pe];                   // S1c dst
+                }
+                // Peel fin1
+                for (int pe = 0; pe < 4; pe++) {
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    gr[13] = s1c[12 + pe] & 3;            // andi
+                    //NOP
+                m15_f1_peel:
+                    if (gr[13] <= 0) goto m15_f1_peel_done;
+                    //NOP
+                    s1c[dst] = spm[src];
+                    s1c[dst+1] = spm[src+1];
+                    src += 2; dst += 2;
+                    gr[13] = gr[13] - 1;
+                    goto m15_f1_peel;
+                m15_f1_peel_done:
+                    (void)0;
+                }
+                // Main mvdq loop for fin1
+            m15_f1_outer:
+                gr[13] = 0;
+                if (gr[1] >= gr[4]) goto m15_f1_pe1;
+                mvdq_copy(&s1c[gr[3]], &spm[gr[1]], 8);
+                gr[1] += 8; gr[3] += 8; gr[13] = 1;
+            m15_f1_pe1:
+                if (gr[5] >= gr[7]) goto m15_f1_pe2;
+                mvdq_copy(&s1c[gr[6]], &spm[gr[5]], 8);
+                gr[5] += 8; gr[6] += 8; gr[13] = 1;
+            m15_f1_pe2:
+                if (gr[8] >= gr[10]) goto m15_f1_pe3;
+                mvdq_copy(&s1c[gr[9]], &spm[gr[8]], 8);
+                gr[8] += 8; gr[9] += 8; gr[13] = 1;
+            m15_f1_pe3:
+                if (gr[11] >= gr[17]) goto m15_f1_check;
+                mvdq_copy(&s1c[gr[16]], &spm[gr[11]], 8);
+                gr[11] += 8; gr[16] += 8; gr[13] = 1;
+            m15_f1_check:
+                if (gr[13] != 0) goto m15_f1_outer;
+            m15_f1_done:
+                // Compute total_diags → s1c[21]
+                gr[7] = s1c[20];                          // total_fin0
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[8] = s1c[12 + pe];                 // n_fin1
+                    //NOP
+                    gr[7] = gr[7] + gr[8];
+                }
+                s1c[21] = gr[7];                          // total_diags
+
+                // === Section 4: Prefetch arc_off pairs S2 → S1c ===
+                // s1c[ARC_META+2*d]=arc_off[v], s1c[ARC_META+2*d+1]=arc_off[v+1]
+                gr[13] = (unsigned)gr[18] >> 16;          // shifti_r: arc_off_s2
+                gr[1] = 32;                               // si: data ptr
+                gr[3] = ARC_META_BASE;                    // si: arc_meta ptr
+                gr[14] = s1c[21];                         // total_diags
+                gr[14] = gr[14] + gr[14];                 // 2*total_diags
+                //NOP
+                gr[14] = gr[14] + 32;                     // end ptr
+                //NOP
+            m15_s4_loop:
+                if (gr[1] >= gr[14]) goto m15_s4_done;    // bge
+                //NOP
+                gr[7] = s1c[gr[1]];                       // mv: vd
+                //NOP
+                gr[7] = (unsigned)gr[7] >> 16;            // shifti_r: v
+                //NOP
+                gr[8] = s2->buffer[gr[13] + gr[7]];      // mv S2: arc_off[v]
+                gr[9] = s2->buffer[gr[13] + gr[7] + 1];  // mv S2: arc_off[v+1]
+                //NOP
+                s1c[gr[3]] = gr[8];                       // mv: store lo
+                s1c[gr[3]+1] = gr[9];                     // mv: store hi
+                gr[1] = gr[1] + 2;                        // addi
+                gr[3] = gr[3] + 2;                        // addi
+                goto m15_s4_loop;                          // jump
+            m15_s4_done:
+
+                // === Section 5: Block load arcs S2→S1c, process fin1 ===
+                // Step 1: Load arcs for all diags into S1c
+                gr[1] = ARC_META_BASE;                    // arc_meta read ptr
+                gr[7] = s1c[21];                          // total_diags
+                //NOP
+                gr[14] = gr[7] + gr[7];                   // 2*total_diags
+                //NOP
+                gr[3] = gr[14] + ARC_META_BASE;           // arc data write ptr
+                gr[14] = gr[14] + ARC_META_BASE;          // arc_meta end ptr
+                //NOP
+            m15_s5_load:
+                if (gr[1] >= gr[14]) goto m15_s5_load_done;
+                //NOP
+                gr[7] = s1c[gr[1]];                       // lo = arc_off[v]
+                gr[8] = s1c[gr[1]+1];                     // hi = arc_off[v+1]
+                //NOP
+                gr[9] = gr[8] - gr[7];                    // n_arcs
+                gr[10] = gr[7] + gr[7];                   // 2*lo
+                //NOP
+                gr[10] = gr[10] + gr[30];                 // S2 src base
+                gr[11] = 0;                               // arc counter
+                //NOP
+            m15_s5_arc:
+                if (gr[11] >= gr[9]) goto m15_s5_arc_done;
+                //NOP
+                gr[4] = gr[11] + gr[11];                  // 2*a
+                //NOP
+                s1c[gr[3]] = s2->buffer[gr[10] + gr[4]];          // mvd S2→S1c
+                s1c[gr[3]+1] = s2->buffer[gr[10] + gr[4] + 1];
+                gr[3] = gr[3] + 2;                        // addi
+                gr[11] = gr[11] + 1;                      // addi
+                goto m15_s5_arc;
+            m15_s5_arc_done:
+                gr[1] = gr[1] + 2;                        // next arc_meta
+                goto m15_s5_load;
+            m15_s5_load_done:
+
+                // Step 2: Process fin1 diags — push arcs to B
+                // Skip fin0 arcs to find fin1 arc data start
+                gr[1] = ARC_META_BASE;                    // arc_meta ptr
+                gr[7] = s1c[20];                          // total_fin0
+                //NOP
+                gr[14] = gr[7] + gr[7];                   // 2*total_fin0
+                //NOP
+                gr[14] = gr[14] + ARC_META_BASE;          // fin0 arc_meta end
+                gr[7] = s1c[21];                          // total_diags
+                //NOP
+                gr[11] = gr[7] + gr[7];                   // 2*total_diags
+                //NOP
+                gr[11] = gr[11] + ARC_META_BASE;          // total arc_meta end
+                // Arc data read ptr = arc_data_start
+                gr[7] = s1c[21];                          // total_diags
+                //NOP
+                gr[3] = gr[7] + gr[7];                    // 2*total_diags
+                //NOP
+                gr[3] = gr[3] + ARC_META_BASE;            // arc data base
+                // Skip fin0 arcs
+            m15_s5_skip:
+                if (gr[1] >= gr[14]) goto m15_s5_skip_done;
+                //NOP
+                gr[7] = s1c[gr[1]];                       // lo
+                gr[8] = s1c[gr[1]+1];                     // hi
+                //NOP
+                gr[9] = gr[8] - gr[7];                    // n_arcs
+                gr[9] = gr[9] + gr[9];                    // 2*n_arcs words
+                //NOP
+                gr[3] = gr[3] + gr[9];                    // advance read ptr
+                gr[1] = gr[1] + 2;                        // next arc_meta
+                goto m15_s5_skip;
+            m15_s5_skip_done:
+                // gr[1]=first fin1 arc_meta, gr[3]=first fin1 arc data
+                // Fin1 diag data pointer
+                gr[4] = s1c[20];                          // total_fin0
+                //NOP
+                gr[4] = gr[4] + gr[4];                    // 2*total_fin0
+                //NOP
+                gr[4] = gr[4] + 32;                       // fin1 data ptr
+                //NOP
+            m15_s5_fin1:
+                if (gr[1] >= gr[11]) goto m15_s5_fin1_done;
+                //NOP
+                gr[5] = s1c[gr[4]];                       // vd
+                gr[6] = s1c[gr[4]+1];                     // k
+                //NOP
+                gr[7] = gr[5] & 0xFFFF;                   // andi: vd.lo
+                //NOP
+                gr[7] = gr[7] - GWF_DIAG_SHIFT;           // subi: d_val
+                gr[7] = gr[7] + gr[6];                    // add: i_val
+                // Arc count for this diag
+                gr[8] = s1c[gr[1]];                       // lo
+                gr[9] = s1c[gr[1]+1];                     // hi
+                //NOP
+                gr[10] = gr[9] - gr[8];                   // n_arcs
+                gr[14] = 0;                               // arc counter
+                //NOP
+            m15_s5_fin1_arc:
+                if (gr[14] >= gr[10]) goto m15_s5_fin1_arc_done;
+                //NOP
+                {
+                    // Read arc from S1c (block-loaded)
+                    uint32_t w = (uint32_t)s1c[gr[3]] >> 16;
+                    int ow = s1c[gr[3]+1];
+                    int32_t new_d = gr[7] - ow;
+                    uint32_t new_vd = (w << 16)
+                        | ((GWF_DIAG_SHIFT + new_d) & 0xFFFF);
+                    gr[5] = gr[20] + gr[24];
+                    gr[5] = gr[5] + gr[24];               // B_base + 2*B_n
+                    //NOP
+                    mm[gr[5]] = (int)new_vd;
+                    mm[gr[5] + 1] = ow;
+                    gr[24] = gr[24] + 1;                  // B_n++
+                }
+                gr[3] = gr[3] + 2;                        // next arc
+                gr[14] = gr[14] + 1;                      // addi
+                goto m15_s5_fin1_arc;
+            m15_s5_fin1_arc_done:
+                gr[1] = gr[1] + 2;                        // next arc_meta
+                gr[4] = gr[4] + 2;                        // next diag data
+                goto m15_s5_fin1;
+            m15_s5_fin1_done:
+                (void)0;
+
+                // === Section 6: Fin0 — inline hash dedup ===
+                // Sync counters so gwfa_ha_put can use MM bucket hash.
+                gwfa_sync_counters(gr[24], (uint32_t)gr[25],
+                    (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
+                gwfa_set_ha_n_dirty((uint32_t)gr[31]);
+                int seq_off_s2 = gr[29] & 0xFFFF;
+                for (int pe = 0; pe < 4; pe++) {
+                    int n_fin0_pe = s1c[28 + pe];
+                    int d_base_pe = (s1c[24 + pe] - 32) / 2;
+                    for (int j = 0; j < n_fin0_pe; j++) {
+                        int di = d_base_pe + j;
+                        uint32_t vd = (uint32_t)s1c[32 + 2*di];
+                        int32_t k = s1c[32 + 2*di + 1];
+                        uint32_t v = vd >> 16;
+                        int32_t d_val = (int32_t)(vd & 0xFFFF) - GWF_DIAG_SHIFT;
+                        int32_t i_val = d_val + k;
+                        int a_off = s1c[ARC_META_BASE + 2*di];
+                        // arc_meta stores (lo, hi) pair; nv = hi - lo
+                        int nv = s1c[ARC_META_BASE + 2*di + 1] - a_off;
+                        int32_t n_ext = 0;
+                        for (int a = 0; a < nv; a++) {
+                            int s2_idx = gr[30] + (a_off + a) * 2;
+                            int packed_vw = s2->buffer[s2_idx];
+                            int ow = s2->buffer[s2_idx + 1];
+                            uint32_t w = (uint32_t)packed_vw >> 16;
+                            int absent;
+                            uint32_t hkey = (w << 16) | ((i_val+1) & 0xFFFF);
+                            gwfa_ha_put(hkey, &absent);
+                            // GET_2BIT from interleaved SPM
+                            int q_idx = (i_val + 1) >> 4;
+                            int q_bit = ((i_val + 1) & 0xF) << 1;
+                            int q_w = spm[apply_address_swizzle(GWFA_Q_START + q_idx)];
+                            int q_char = (q_w >> q_bit) & 0x3;
+                            int gs_pos = s2->buffer[seq_off_s2 + (int)w] + ow;
+                            int gs_idx = gs_pos >> 4;
+                            int gs_bit = (gs_pos & 0xF) << 1;
+                            int gs_w = spm[apply_address_swizzle(GWFA_GS_START + gs_idx)];
+                            int gs_char = (gs_w >> gs_bit) & 0x3;
+
+                            if (q_char == gs_char) {
+                                n_ext++;
+                                if (absent) {
+                                    // Match + absent: push to A queue
+                                    int32_t nd = i_val + 1 - ow;
+                                    uint32_t nvd = (w << 16)
+                                        | ((GWF_DIAG_SHIFT + nd) & 0xFFFF);
+                                    gr[7] = gr[26] & A_MASK_VAL;
+                                    gr[7] = gr[7] + gr[7];
+                                    gr[7] = gr[7] + gr[21];
+                                    //NOP
+                                    mm[gr[7]] = (int)nvd;
+                                    mm[gr[7] + 1] = ow;
+                                    gr[26] = gr[26] + 1; // A_tail++
+                                    gr[27] = gr[27] + 1; // A_count++
+                                }
+                            } else if (absent) {
+                                // Mismatch + absent: push sub + ins to B
+                                int32_t sd = i_val - ow;
+                                uint32_t svd = (w << 16)
+                                    | ((GWF_DIAG_SHIFT + sd) & 0xFFFF);
+                                gr[7] = gr[20] + gr[24];
+                                gr[7] = gr[7] + gr[24];
+                                mm[gr[7]] = (int)svd;
+                                mm[gr[7] + 1] = ow;
+                                gr[24] = gr[24] + 1;     // B_n++
+                                int32_t id = i_val + 1 - ow;
+                                uint32_t ivd = (w << 16)
+                                    | ((GWF_DIAG_SHIFT + id) & 0xFFFF);
+                                gr[7] = gr[20] + gr[24];
+                                gr[7] = gr[7] + gr[24];
+                                mm[gr[7]] = (int)ivd;
+                                mm[gr[7] + 1] = ow;
+                                gr[24] = gr[24] + 1;     // B_n++
+                            }
+                        }
+                        // Deletion: if nv==0 || n_ext!=nv
+                        if (nv == 0 || n_ext != nv) {
+                            uint32_t del_vd = (v << 16)
+                                | ((GWF_DIAG_SHIFT + d_val + 1) & 0xFFFF);
+                            gr[7] = gr[20] + gr[24];
+                            gr[7] = gr[7] + gr[24];
+                            mm[gr[7]] = (int)del_vd;
+                            mm[gr[7] + 1] = k;
+                            gr[24] = gr[24] + 1;
+                        }
+                    }
+                }
+                gr[31] = (int)gwfa_get_ha_n_dirty();
+            }
+
+            // === Section 7: Counter sync ===
+            gwfa_sync_counters(gr[24], (uint32_t)gr[25],
+                (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
+            gwfa_set_ha_n_dirty((uint32_t)gr[31]);
         } else if (magic_id == 16) {
             // Phase 2 finalize: sync gr→statics, call
             gwfa_sync_counters(main_addressing_register[24],

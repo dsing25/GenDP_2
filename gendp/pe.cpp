@@ -704,9 +704,8 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //  9    | k                | wavefront offset
             // 10    | (sync)           | sync flag only
             // 11    | ts_off           | text-seq offset for node
-            // 12 lo | vl               | vertex length
-            // 12 hi | intv_n           | interval count
-            // 13    | (free)           | unused
+            // 12    | vl               | vertex length (full reg, clobbered by mvd)
+            // 13    | intv_n           | interval count
             // 14    | ql               | query length (read-only)
             // 15    | tmp1             | scratch
             //
@@ -770,10 +769,10 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             m8_do_intv:
                 {   // gr[4]=vd0, gr[5]=vd0+1 (mvd)
                     gr.st(5, gr.at(4) + 1);                // vd0+1
-                    gr.st(7, gr.at(12, CTRL_GR_HI) << 1);          // 2*intv_n
+                    gr.st(7, gr.at(13) << 1);                       // 2*intv_n
                                                                    //
                     spm[TILE_INTV_OFF + gr.at(7)] = gr.at(4); spm[TILE_INTV_OFF + gr.at(7) + 1] = gr.at(5);
-                    gr.st(12, gr.at(12, CTRL_GR_HI) + 1, CTRL_GR_HI);         // intv_n++
+                    gr.st(13, gr.at(13) + 1);                      // intv_n++
 
                     return;
                 }
@@ -822,7 +821,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
             // === INIT ===
             gr.st(1, spm[META_TILE_N], CTRL_GR_HI);     // tile_n
-            gr.st(12, 0, CTRL_GR_HI);                    // intv_n = 0
+            gr.st(13, 0);                                 // intv_n = 0
                                                          //
             gr.st(1, 0, CTRL_GR_LO);                     // i = 0
             gr.st(3, 0);                                 // tb_n, ta_n = 0
@@ -864,7 +863,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //NOP
 
             //COMP halt
-            gr.st(11, spm[NODE_INFO_OFF + gr.at(15)]); gr.st(12, spm[NODE_INFO_OFF + gr.at(15) + 1]);    // ts_off, vl (clobbers 12_hi, but we overwrite it later anyway)
+            gr.st(11, spm[NODE_INFO_OFF + gr.at(15)]); gr.st(12, spm[NODE_INFO_OFF + gr.at(15) + 1]);    // ts_off, vl (intv_n now in gr[13], safe to clobber)
 
         m8_skip_node:
             extend(); //call
@@ -1048,7 +1047,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //NOP
             spm[META_TA_N]   = gr.at(3, CTRL_GR_HI);    // ta_n
             //NOP
-            spm[META_INTV_N] = gr.at(12, CTRL_GR_HI);   // intv_n
+            spm[META_INTV_N] = gr.at(13);                // intv_n
             //NOP
         m8_done: ;
         } else if (magic_id == 11) {
@@ -1122,8 +1121,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             constexpr int P2_M_TILE_N   = 4;
             int tmp;
 
+            int p2_base = (magic_mask & 1) ? GWFA_P2B_BASE : GWFA_P2_BASE;
             int *spm = &SPM_unit->buffer[
-                id * SPM_BANK_GROUP_SIZE + GWFA_P2_BASE];
+                id * SPM_BANK_GROUP_SIZE + p2_base];
 
             // === INIT ===
             gr.st(1, spm[P2_META_OFF + P2_M_TILE_N], CTRL_GR_HI); // tile_n

@@ -155,7 +155,7 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_COMP_IB 3
 #define CTRL_CTRL_IB 4
 #define CTRL_S1C 4         // Controller scratchpad (repurposed ctrl_ib)
-#define S1C_SIZE 1024
+#define S1C_SIZE 4096
 #define CTRL_IN_BUF 5
 #define CTRL_OUT_BUF 6
 #define CTRL_IN_PORT 7
@@ -181,6 +181,7 @@ inline int get_base_opcode(int opcode) {
 #define GWFA_BUF0_BASE 0
 #define GWFA_BUF1_BASE 1280
 #define GWFA_P2_BASE   2560
+#define GWFA_P2B_BASE  3840
 
 // GWFA graph topology in S2 (controller access)
 #define GRAPH_START 0
