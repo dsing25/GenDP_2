@@ -4,6 +4,9 @@
 #include <cassert>
 #include <algorithm>
 #include "simulator.h"
+extern "C" {
+#include "kernel/Gwfa/gwfa.h"
+}
 #include <iostream>
 
 bool check_legal_mv(int src, int dest) {
@@ -1314,6 +1317,125 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             spm[P2_META_OFF + P2_M_FIN1] = gr.at(6, CTRL_GR_HI);
             //NOP
         m13_done: ;
+        } else if (magic_id == 19) {
+            // PE FIN0: hash check + character match on FIN_0_TILE.
+            // Reads: diags, arc_meta, arcs, HA buckets from FIN0 region.
+            // Writes: A_list, B_list, HA_dirty_list + counts to FIN0.
+            int fin0_base = (magic_mask & 2)
+                ? GWFA_FIN0B_BASE : GWFA_FIN0_BASE;
+            int *fspm = &SPM_unit->buffer[
+                id * SPM_BANK_GROUP_SIZE + fin0_base];
+            int n_diags = fspm[FIN0_META];
+            int n_A = 0, n_B = 0, n_HA = 0;
+            int arc_idx = 0;
+            // GET_2BIT from interleaved SPM (Q and GS sequences)
+            auto mvi2_ld = [&](int base_char_addr, int char_off) -> int {
+                int bp2 = base_char_addr + char_off;
+                int phys = apply_address_swizzle(bp2 >> 4);
+                return (SPM_unit->buffer[phys]
+                    >> ((bp2 & 0xF) << 1)) & 0x3;
+            };
+            int gs_base = GWFA_GS_START * 16;
+            int q_base = GWFA_Q_START * 16;
+
+            for (int d = 0; d < n_diags; d++) {
+                uint32_t vd = (uint32_t)fspm[FIN0_DIAGS + 2*d];
+                int32_t k = fspm[FIN0_DIAGS + 2*d + 1];
+                uint32_t v = vd >> 16;
+                int32_t d_val = (int32_t)(vd & 0xFFFF)
+                    - GWF_DIAG_SHIFT;
+                int32_t i_val = d_val + k;
+                int lo = fspm[FIN0_ARCMETA + 2*d];
+                int hi = fspm[FIN0_ARCMETA + 2*d + 1];
+                int nv = hi - lo;
+                int32_t n_ext = 0;
+
+                for (int a = 0; a < nv; a++) {
+                    int arc_off = FIN0_ARCS
+                        + FIN0_ARC_WORDS * arc_idx;
+                    int packed_vw = fspm[arc_off];
+                    int ow = fspm[arc_off + 1];
+                    int ts_off = fspm[arc_off + 2];
+                    uint32_t w = (uint32_t)packed_vw >> 16;
+
+                    // Hash check: scan bucket for key
+                    uint32_t hkey = (w << 16)
+                        | ((i_val + 1) & 0xFFFF);
+                    int *bkt = &fspm[FIN0_HA + 4*arc_idx];
+                    int absent = -1;
+                    for (int i = 0; i < 4; i++) {
+                        if ((uint32_t)bkt[i] == hkey) {
+                            absent = 0; break;
+                        }
+                        if (bkt[i] == (int)0xFFFFFFFF) {
+                            bkt[i] = (int)hkey;
+                            absent = 1;
+                            if (i == 0) { // first key → record dirty
+                                fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
+                                uint32_t h2 = hkey * 2654435769U
+                                    >> (32 - 22);
+                                fspm[FIN0_OUT_HA + 2*n_HA + 1]
+                                    = (int)((h2 >> 2) & 0xFFFFF);
+                                n_HA++;
+                            }
+                            break;
+                        }
+                    }
+                    if (absent == -1) {
+                        // Bucket full — treat as not-absent
+                        absent = 0;
+                    }
+
+                    // Character match using precomputed ts_off
+                    int q_char = mvi2_ld(q_base, i_val + 1);
+                    int gs_pos = ts_off + ow;
+                    int gs_char = mvi2_ld(gs_base, gs_pos);
+
+                    if (q_char == gs_char) {
+                        n_ext++;
+                        if (absent) {
+                            // Match + absent → output A
+                            int32_t nd = i_val + 1 - ow;
+                            uint32_t nvd = (w << 16)
+                                | ((GWF_DIAG_SHIFT + nd) & 0xFFFF);
+                            fspm[FIN0_OUT + 2*n_A] = (int)nvd;
+                            fspm[FIN0_OUT + 2*n_A + 1] = ow;
+                            n_A++;
+                        }
+                    } else if (absent) {
+                        // Mismatch + absent → output B (sub + ins)
+                        int32_t sd = i_val - ow;
+                        uint32_t svd = (w << 16)
+                            | ((GWF_DIAG_SHIFT + sd) & 0xFFFF);
+                        int bo = FIN0_OUT_SIZE-2-2*n_B;
+                        fspm[FIN0_OUT + bo] = (int)svd;
+                        fspm[FIN0_OUT + bo + 1] = ow;
+                        n_B++;
+                        int32_t id2 = i_val + 1 - ow;
+                        uint32_t ivd = (w << 16)
+                            | ((GWF_DIAG_SHIFT + id2) & 0xFFFF);
+                        bo = FIN0_OUT_SIZE-2-2*n_B;
+                        fspm[FIN0_OUT + bo] = (int)ivd;
+                        fspm[FIN0_OUT + bo + 1] = ow;
+                        n_B++;
+                    }
+                    arc_idx++;
+                }
+                // Deletion: if nv==0 || n_ext!=nv
+                if (nv == 0 || n_ext != nv) {
+                    uint32_t del_vd = (v << 16)
+                        | ((GWF_DIAG_SHIFT + d_val + 1) & 0xFFFF);
+                    int bo = FIN0_OUT_SIZE-2-2*n_B;
+                    fspm[FIN0_OUT + bo] = (int)del_vd;
+                    fspm[FIN0_OUT + bo + 1] = k;
+                    n_B++;
+                }
+            }
+            // Write output counts to metadata
+            fspm[FIN0_META + 2] = n_A;
+            fspm[FIN0_META + 3] = n_B;
+            fspm[FIN0_META + 4] = n_HA;
+        m19_done: ;
         }
         (*PC)++;
     } else if (opcode == 0) {              // add rd rs1 rs2

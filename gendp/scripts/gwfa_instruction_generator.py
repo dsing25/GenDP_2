@@ -11,9 +11,12 @@ PE_BUF1_COMPUTE = 9
 PE_BUF1_SORT    = 13
 PE_P2_BUF0      = 17
 PE_P2_BUF1      = 21
+PE_FIN0_A       = 25
+PE_FIN0_B       = 29
 
 # Magic IDs with mask encoding: (magic_id << 8) | mask
 # mask bit 0 = buffer index (0=buf0, 1=buf1)
+# mask bit 1 = FIN0 buffer index (0=FIN0_A, 2=FIN0_B)
 MAGIC_7_BUF0  = 7
 MAGIC_7_BUF1  = (7 << 8) | 1
 MAGIC_8_BUF0  = 8
@@ -28,6 +31,15 @@ MAGIC_14_BUF0 = 14
 MAGIC_14_BUF1 = (14 << 8) | 1
 MAGIC_15_BUF0 = 15
 MAGIC_15_BUF1 = (15 << 8) | 1
+# mask bit 1 = FIN0 buffer (0=FIN0_A, 2=FIN0_B)
+MAGIC_15_BUF0_F0A = 15
+MAGIC_15_BUF0_F0B = (15 << 8) | 2
+MAGIC_15_BUF1_F0A = (15 << 8) | 1
+MAGIC_15_BUF1_F0B = (15 << 8) | 3
+MAGIC_18_F0A  = 18
+MAGIC_18_F0B  = (18 << 8) | 2
+MAGIC_19_F0A  = 19
+MAGIC_19_F0B  = (19 << 8) | 2
 
 def gwfa_main_instruction():
     f = InstructionWriter("instructions/gwfa/main_instruction.txt")
@@ -201,6 +213,32 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                       # slot1: gr[10]=1
     # PC 24: halt
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot0: halt
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot1: halt
+    # --- FIN0 buf A ---
+    # PC 25: clear sync
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                       # slot1: gr[10]=0
+    # PC 26: FIN0 compute buf A
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(write_magic(MAGIC_19_F0A))                                                             # slot1: magic(19, mask=0)
+    # PC 27: signal done
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                       # slot1: gr[10]=1
+    # PC 28: halt
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot0: halt
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot1: halt
+    # --- FIN0 buf B ---
+    # PC 29: clear sync
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                       # slot1: gr[10]=0
+    # PC 30: FIN0 compute buf B
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(write_magic(MAGIC_19_F0B))                                                             # slot1: magic(19, mask=2)
+    # PC 31: signal done
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                       # slot1: gr[10]=1
+    # PC 32: halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot0: halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot1: halt
     f.close()
