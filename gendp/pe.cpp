@@ -1108,7 +1108,8 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // 12 lo | vl          | vertex length
             // 14    | ql          | query length (read-only)
             // 15    | scratch     |
-            constexpr int P2_INPUT_OFF  = 0;
+            constexpr int P2_VK_OFF     = 0;
+            constexpr int P2_TS_OFF     = 128;
             constexpr int P2_PUSHED_OFF = 256;
             constexpr int P2_INTV_OFF   = 640;
             constexpr int P2_FIN0_OFF   = 768;
@@ -1141,15 +1142,15 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
             // === LOOP ===
         m13_loop:
-            gr.st(7, gr.at(1, CTRL_GR_LO) << 2); // 4*i (paired with branch)
+            gr.st(7, gr.at(1, CTRL_GR_LO) << 1); // 2*i (paired with branch)
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
                 goto m13_wb;
 
-            // load vd, k
-            gr.st(8, spm[P2_INPUT_OFF + gr.at(7)]); gr.st(9, spm[P2_INPUT_OFF + gr.at(7) + 1]);
+            // load vd, k from P2_VK_OFF region
+            gr.st(8, spm[P2_VK_OFF + gr.at(7)]); gr.st(9, spm[P2_VK_OFF + gr.at(7) + 1]);
             //NOP
-            // load ts_off, vl
-            gr.st(11, spm[P2_INPUT_OFF + gr.at(7) + 2]); gr.st(12, spm[P2_INPUT_OFF + gr.at(7) + 3]);
+            // load ts_off, vl from P2_TS_OFF region (same 2*i index)
+            gr.st(11, spm[P2_TS_OFF + gr.at(7)]); gr.st(12, spm[P2_TS_OFF + gr.at(7) + 1]);
             //NOP
 
             extend(); // sets gr[2]=d, updates gr[9]=k

@@ -630,35 +630,57 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[13] = s1c[S1C_TILE_N + pe] & 3;   // andi: n%4
                     //NOP
                 m7_peel:
-                    if (gr[13] <= 0) goto m7_peel_done;
-                    //NOP
+                    if (gr[13] <= 0) goto m7_peel_done; gr[13] -= 1; // bgt; subi (paired)
                     s1c[dst] = mm[src]; s1c[dst+1] = mm[src+1];
                     src += 2; dst += 2;                   // addi
-                    gr[13] = gr[13] - 1;                   // subi
                     goto m7_peel;
                 m7_peel_done:
                     (void)0;
                 }
-                // Main mvdq loop
-            m7_outer:
+                // Second peel: equalize PE counts; then main unmasked loop (1 cycle/iter overhead)
+                gr[23] = gr[4] - gr[1];                        // PE0 remaining
+                gr[13] = gr[7] - gr[5];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE1
+                gr[13] = gr[10] - gr[8];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE2
+                gr[13] = gr[17] - gr[11];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE3 → gr[23]=min_words
+                gr[4] -= gr[23]; gr[7] -= gr[23]; gr[10] -= gr[23]; gr[17] -= gr[23]; // adjust ends
+            m7_sp_outer:
                 gr[13] = 0;
-                if (gr[1] >= gr[4]) goto m7_pe1;
+                if (gr[1] >= gr[4]) goto m7_sp_pe1;
                 mvdq_copy(&s1c[gr[3]], &mm[gr[1]], 8);
                 gr[1] += 8; gr[3] += 8; gr[13] = 1;
-            m7_pe1:
-                if (gr[5] >= gr[7]) goto m7_pe2;
+            m7_sp_pe1:
+                if (gr[5] >= gr[7]) goto m7_sp_pe2;
                 mvdq_copy(&s1c[gr[6]], &mm[gr[5]], 8);
                 gr[5] += 8; gr[6] += 8; gr[13] = 1;
-            m7_pe2:
-                if (gr[8] >= gr[10]) goto m7_pe3;
+            m7_sp_pe2:
+                if (gr[8] >= gr[10]) goto m7_sp_pe3;
                 mvdq_copy(&s1c[gr[9]], &mm[gr[8]], 8);
                 gr[8] += 8; gr[9] += 8; gr[13] = 1;
-            m7_pe3:
-                if (gr[11] >= gr[17]) goto m7_check;
+            m7_sp_pe3:
+                if (gr[11] >= gr[17]) goto m7_sp_check;
                 mvdq_copy(&s1c[gr[16]], &mm[gr[11]], 8);
                 gr[11] += 8; gr[16] += 8; gr[13] = 1;
-            m7_check:
-                if (gr[13] != 0) goto m7_outer;
+            m7_sp_check:
+                if (gr[13] != 0) goto m7_sp_outer;
+                // Convert PE1-3 cursors to deltas for register-offset main loop
+                gr[5] = gr[5] - gr[1];                        // PE1 src delta
+                gr[6] = gr[6] - gr[3];                        // PE1 dst delta
+                gr[8] = gr[8] - gr[1];                        // PE2 src delta
+                gr[9] = gr[9] - gr[3];                        // PE2 dst delta
+                gr[11] = gr[11] - gr[1];                      // PE3 src delta
+                gr[16] = gr[16] - gr[3];                      // PE3 dst delta
+                gr[13] = (unsigned)gr[23] >> 3;                // min_iters = min_words/8
+            m7_main_outer:
+                if (gr[13] <= 0) goto m7_all_done; gr[13] -= 1; // bgt; subi (paired)
+                mvdq_copy(&s1c[gr[3]], &mm[gr[1]], 8);                    // PE0
+                mvdq_copy(&s1c[gr[3]+gr[6]], &mm[gr[1]+gr[5]], 8);       // PE1 (reg offset)
+                mvdq_copy(&s1c[gr[3]+gr[9]], &mm[gr[1]+gr[8]], 8);       // PE2 (reg offset)
+                mvdq_copy(&s1c[gr[3]+gr[16]], &mm[gr[1]+gr[11]], 8);     // PE3 (reg offset)
+                gr[1] += 8; gr[3] += 8;                       // advance PE0 only
+                goto m7_main_outer;
             m7_all_done:
                 (void)0;
             }
@@ -709,33 +731,24 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[11] = 0;                              // si: word offset
                 //NOP
             m8_chunk:
-                if (gr[11] >= gr[1]) goto m8_chunk_done; // bge
-                //NOP
                 // Step 1: mvdq S1c → SPM (8 words)
-                gr[8] = pe_s1c + gr[11];                 // addi: s1c src
+                if (gr[11] >= gr[1]) goto m8_chunk_done; gr[8] = pe_s1c + gr[11]; // bge; addi
                 gr[9] = pe_spm + A_TILE_OFF + gr[11];   // addi: spm dst
-                //NOP
-                spm[gr[9]+0]=s1c[gr[8]+0]; spm[gr[9]+1]=s1c[gr[8]+1];
-                spm[gr[9]+2]=s1c[gr[8]+2]; spm[gr[9]+3]=s1c[gr[8]+3];
-                spm[gr[9]+4]=s1c[gr[8]+4]; spm[gr[9]+5]=s1c[gr[8]+5];
-                spm[gr[9]+6]=s1c[gr[8]+6]; spm[gr[9]+7]=s1c[gr[8]+7];
+                mvdq_copy(&spm[gr[9]], &s1c[gr[8]], 8); // mvdq S1c→SPM
                 // Step 2: scan 4 diags, extract unique vertices
                 gr[3] = 0;                               // si: diag offset in chunk
                 //NOP
             m8_scan:
                 gr[7] = gr[11] + gr[3];                  // add: word pos
                 //NOP
-                if (gr[7] >= gr[1]) goto m8_scan_done;   // bge: past tile end
-                //NOP
-                gr[7] = s1c[pe_s1c + gr[7]];            // mv S1c→gr (vd)
+                if (gr[7] >= gr[1]) goto m8_scan_done; gr[7] = s1c[pe_s1c + gr[7]]; // bge; mv (paired)
                 //NOP
                 gr[7] = (unsigned)gr[7] >> 16;           // shifti_r (v)
                 //NOP
                 if (gr[7] == gr[6]) goto m8_scan_skip;   // beq: same vertex
                 //NOP
-                // Step 3: write vertex to S1c (overwrite consumed data)
-                s1c[gr[5]] = gr[7];                      // mv gr→S1c
-                gr[5] = gr[5] + 1;                       // addi (write_ptr++)
+                // Step 3: write vertex to S1c (overwrite consumed data), auto-increment
+                s1c[gr[5]++] = gr[7];                    // mv gr→S1c, write_ptr++
                 gr[2] = gr[2] + 1;                       // addi (n_nodes++)
                 gr[6] = gr[7];                           // mv (prev_v = v)
             m8_scan_skip:
@@ -758,24 +771,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int pe_spm = pe * SPM_BANK_GROUP_SIZE + buf_base;
                 gr[10] = s1c[S1C_NNODES + pe];          // mv (n_nodes)
                 //NOP
-                if (gr[10] <= 0) goto m8_seq_next;       // bgt → skip
-                //NOP
-                gr[11] = 0;                              // si: node_idx
-                //NOP
+                if (gr[10] <= 0) goto m8_seq_next; gr[11] = 0; // bgt; si (paired)
             m8_seq_loop:
-                if (gr[11] >= gr[10]) goto m8_seq_done;  // bge
-                //NOP
-                gr[7] = s1c[gr[1]];                      // mv S1c→gr (v)
+                if (gr[11] >= gr[10]) goto m8_seq_done; gr[7] = s1c[gr[1]]; // bge; mv (paired)
                 //NOP
                 gr[3] = gr[8] + gr[7];                  // add (seq_off_s2+v)
                 gr[4] = gr[9] + gr[7];                  // add (seq_len_s2+v)
-                gr[3] = s2->buffer[gr[3]];              // mv S2→gr (seq_off)
-                gr[4] = s2->buffer[gr[4]];              // mv S2→gr (seq_len)
-                // write to SPM SEQ_INFO
-                gr[7] = gr[11] + gr[11];                 // add: 2*node_idx
+                // Write directly S2→SPM (no gr intermediate; avoids S2 latency hazard)
+                gr[7] = gr[11] + gr[11];                         // add: 2*node_idx
                 //NOP
-                spm[pe_spm + SEQ_INFO_OFF + gr[7]] = gr[3];     // mv
-                spm[pe_spm + SEQ_INFO_OFF + gr[7] + 1] = gr[4]; // mv
+                spm[pe_spm + SEQ_INFO_OFF + gr[7]] = s2->buffer[gr[3]];     // mv S2→SPM (seq_off)
+                spm[pe_spm + SEQ_INFO_OFF + gr[7] + 1] = s2->buffer[gr[4]]; // mv S2→SPM (seq_len)
                 gr[1] = gr[1] + 1;                       // addi (read_ptr++)
                 gr[11] = gr[11] + 1;                     // addi (node_idx++)
                 goto m8_seq_loop;                         // jump
@@ -810,13 +816,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[7] = spm[pe0_base + META_OFF];          // mv SPM→gr
                 //NOP; //NOP
                 if (gr[7] <= 0) goto m9_s1_write;          // bgt
-                //NOP
                 // compare fifo_vd > B[0].vd (unsigned)
                 gr[8] = spm[pe0_base + B_TILE_OFF];        // mv SPM→gr
                 //NOP; //NOP
                 if ((uint32_t)gr[3] <= (uint32_t)gr[8])
                     goto m9_s1_write;                       // bge unsigned
-                //NOP
                 // swap: gr[3,4] ↔ spm[B_TILE+0,1]
                 gr[9] = spm[pe0_base + B_TILE_OFF + 1];   // mv SPM→gr
                 //NOP; //NOP
@@ -827,10 +831,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             m9_s1_write:
                 // write to MM: mm[s_B_a_base + 2*s_B_n]
                 gr[7] = gr[20] + gr[24];                   // add
-                gr[7] = gr[7] + gr[24];                    // add (2*s_B_n)
                 //NOP
-                mm[gr[7]] = gr[3];                          // mv gr→MM
-                mm[gr[7] + 1] = gr[4];                     // mv gr→MM
+                mm[gr[7] + gr[24]] = gr[3]; mm[gr[7] + gr[24] + 1] = gr[4]; // mvd (register-offset)
                 gr[24] = gr[24] + 1;                        // addi
             m9_s1_skip:
                 gr[2] = fifo_unit[0][0].size() > 0 ? 1 : 0;
@@ -883,40 +885,49 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[13] = s1c[pe] & 3;                  // andi: n%4
                     //NOP
                 m9_b_peel:
-                    if (gr[13] <= 0) goto m9_b_peel_done;  // ble
-                    //NOP
-                    mm[dst] = spm[src];                    // mvd
-                    mm[dst+1] = spm[src+1];
+                    if (gr[13] <= 0) goto m9_b_peel_done; gr[13] -= 1; // bgt; subi (paired)
+                    mm[dst] = spm[src]; mm[dst+1] = spm[src+1]; // mvd
                     src += 2; dst += 2;                    // addi
-                    gr[13] = gr[13] - 1;                    // subi
                     goto m9_b_peel;                         // jump
                 m9_b_peel_done:
                     (void)0;
                 }
-                // Phase 2: Main mvdq loop (all PEs 8-word aligned)
-            m9_b_outer:
-                gr[13] = 0;                                // si: any-active
-                if (gr[1] >= gr[4]) goto m9_b_pe1;         // bge: PE0 done
+                // Second peel: equalize PE counts; then main unmasked loop
+                gr[23] = gr[4] - gr[1];                        // PE0 remaining
+                gr[13] = gr[7] - gr[5];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE1
+                gr[13] = gr[10] - gr[8];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE2
+                gr[13] = gr[17] - gr[11];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE3 → gr[23]=min_words
+                gr[4] -= gr[23]; gr[7] -= gr[23]; gr[10] -= gr[23]; gr[17] -= gr[23]; // adjust ends
+            m9_b_sp_outer:
+                gr[13] = 0;
+                if (gr[1] >= gr[4]) goto m9_b_sp_pe1;
                 mvdq_copy(&mm[gr[3]], &spm[gr[1]], 8);
-                gr[1] += 8; gr[3] += 8;                   // addi
-                gr[13] = 1;                                 // si
-            m9_b_pe1:
-                if (gr[5] >= gr[7]) goto m9_b_pe2;         // bge: PE1 done
+                gr[1] += 8; gr[3] += 8; gr[13] = 1;
+            m9_b_sp_pe1:
+                if (gr[5] >= gr[7]) goto m9_b_sp_pe2;
                 mvdq_copy(&mm[gr[6]], &spm[gr[5]], 8);
-                gr[5] += 8; gr[6] += 8;                   // addi
-                gr[13] = 1;                                 // si
-            m9_b_pe2:
-                if (gr[8] >= gr[10]) goto m9_b_pe3;        // bge: PE2 done
+                gr[5] += 8; gr[6] += 8; gr[13] = 1;
+            m9_b_sp_pe2:
+                if (gr[8] >= gr[10]) goto m9_b_sp_pe3;
                 mvdq_copy(&mm[gr[9]], &spm[gr[8]], 8);
-                gr[8] += 8; gr[9] += 8;                   // addi
-                gr[13] = 1;                                 // si
-            m9_b_pe3:
-                if (gr[11] >= gr[17]) goto m9_b_check;     // bge: PE3 done
+                gr[8] += 8; gr[9] += 8; gr[13] = 1;
+            m9_b_sp_pe3:
+                if (gr[11] >= gr[17]) goto m9_b_sp_check;
                 mvdq_copy(&mm[gr[16]], &spm[gr[11]], 8);
-                gr[11] += 8; gr[16] += 8;                 // addi
-                gr[13] = 1;                                 // si
-            m9_b_check:
-                if (gr[13] != 0) goto m9_b_outer;          // bne
+                gr[11] += 8; gr[16] += 8; gr[13] = 1;
+            m9_b_sp_check:
+                if (gr[13] != 0) goto m9_b_sp_outer;
+                gr[13] = (unsigned)gr[23] >> 3;                // min_iters = min_words/8
+            m9_b_main_outer:
+                if (gr[13] <= 0) goto m9_b_done; gr[13] -= 1;  // bgt; subi (paired)
+                mvdq_copy(&mm[gr[3]], &spm[gr[1]], 8); gr[1] += 8; gr[3] += 8;
+                mvdq_copy(&mm[gr[6]], &spm[gr[5]], 8); gr[5] += 8; gr[6] += 8;
+                mvdq_copy(&mm[gr[9]], &spm[gr[8]], 8); gr[8] += 8; gr[9] += 8;
+                mvdq_copy(&mm[gr[16]], &spm[gr[11]], 8); gr[11] += 8; gr[16] += 8;
+                goto m9_b_main_outer;
             m9_b_done:
                 // Update s_B_n: gr[24] += sum(tb_n)
                 for (int pe = 0; pe < 4; pe++) {
@@ -945,22 +956,18 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         pe * SPM_BANK_GROUP_SIZE + buf_base;
                     gr[10] = s1c[4 + pe];                  // mv (ta_n)
                     //NOP
-                    if (gr[11] >= gr[10]) continue;         // bge
-                    //NOP
-                    // idx = A_tail & A_MASK
+                    gr[8] = gr[11] + gr[11];               // add: 2*j (slot 1 of branch cycle)
+                    if (gr[11] >= gr[10]) continue;         // bge (slot 0, paired with add)
+                    // idx = A_tail & A_MASK (concurrent with mvd)
                     gr[7] = gr[26] & A_MASK_VAL;           // andi
+                    gr[9] = spm[pe_base + A_OUT_OFF + gr[8]]; gr[1] = spm[pe_base + A_OUT_OFF + gr[8] + 1]; // mvd
+
                     gr[7] = gr[7] + gr[7];                 // add: 2*idx
-                    gr[7] = gr[7] + gr[21];                // add: A_base
+                    gr[27] = gr[27] + 1;                   // addi (A_count++)
+
+                    mm[gr[7] + gr[21]] = gr[9]; mm[gr[7] + gr[21] + 1] = gr[1]; // mvd gr→MM (register-offset)
+                    gr[26] = gr[26] + 1;                   // addi (A_tail++)
                     //NOP
-                    gr[8] = gr[11] + gr[11];               // add: 2*j
-                    //NOP
-                    gr[9] = spm[pe_base + A_OUT_OFF + gr[8]];     // mv
-                    gr[1] = spm[pe_base + A_OUT_OFF + gr[8] + 1]; // mv
-                    //NOP; //NOP
-                    mm[gr[7]] = gr[9];                      // mv gr→MM
-                    mm[gr[7] + 1] = gr[1];                  // mv gr→MM
-                    gr[26] = gr[26] + 1;                    // addi (A_tail++)
-                    gr[27] = gr[27] + 1;                    // addi (A_count++)
                 }
                 gr[11] = gr[11] + 1;                       // addi
                 goto m9_a_outer;                            // jump
@@ -1002,40 +1009,49 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[13] = s1c[8 + pe] & 3;              // andi: n%4
                     //NOP
                 m9_i_peel:
-                    if (gr[13] <= 0) goto m9_i_peel_done;  // ble
-                    //NOP
-                    mm[dst] = spm[src];                    // mvd
-                    mm[dst+1] = spm[src+1];
+                    if (gr[13] <= 0) goto m9_i_peel_done; gr[13] -= 1; // bgt; subi (paired)
+                    mm[dst] = spm[src]; mm[dst+1] = spm[src+1]; // mvd
                     src += 2; dst += 2;                    // addi
-                    gr[13] = gr[13] - 1;                    // subi
                     goto m9_i_peel;                         // jump
                 m9_i_peel_done:
                     (void)0;
                 }
-                // Phase 2: Main mvdq loop (all PEs 8-word aligned)
-            m9_i_outer:
-                gr[13] = 0;                                // si: any-active
-                if (gr[1] >= gr[4]) goto m9_i_pe1;         // bge: PE0 done
+                // Second peel: equalize PE counts; then main unmasked loop
+                gr[23] = gr[4] - gr[1];                        // PE0 remaining
+                gr[13] = gr[7] - gr[5];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE1
+                gr[13] = gr[10] - gr[8];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE2
+                gr[13] = gr[17] - gr[11];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE3 → gr[23]=min_words
+                gr[4] -= gr[23]; gr[7] -= gr[23]; gr[10] -= gr[23]; gr[17] -= gr[23]; // adjust ends
+            m9_i_sp_outer:
+                gr[13] = 0;
+                if (gr[1] >= gr[4]) goto m9_i_sp_pe1;
                 mvdq_copy(&mm[gr[3]], &spm[gr[1]], 8);
-                gr[1] += 8; gr[3] += 8;                   // addi
-                gr[13] = 1;                                 // si
-            m9_i_pe1:
-                if (gr[5] >= gr[7]) goto m9_i_pe2;         // bge: PE1 done
+                gr[1] += 8; gr[3] += 8; gr[13] = 1;
+            m9_i_sp_pe1:
+                if (gr[5] >= gr[7]) goto m9_i_sp_pe2;
                 mvdq_copy(&mm[gr[6]], &spm[gr[5]], 8);
-                gr[5] += 8; gr[6] += 8;                   // addi
-                gr[13] = 1;                                 // si
-            m9_i_pe2:
-                if (gr[8] >= gr[10]) goto m9_i_pe3;        // bge: PE2 done
+                gr[5] += 8; gr[6] += 8; gr[13] = 1;
+            m9_i_sp_pe2:
+                if (gr[8] >= gr[10]) goto m9_i_sp_pe3;
                 mvdq_copy(&mm[gr[9]], &spm[gr[8]], 8);
-                gr[8] += 8; gr[9] += 8;                   // addi
-                gr[13] = 1;                                 // si
-            m9_i_pe3:
-                if (gr[11] >= gr[17]) goto m9_i_check;     // bge: PE3 done
+                gr[8] += 8; gr[9] += 8; gr[13] = 1;
+            m9_i_sp_pe3:
+                if (gr[11] >= gr[17]) goto m9_i_sp_check;
                 mvdq_copy(&mm[gr[16]], &spm[gr[11]], 8);
-                gr[11] += 8; gr[16] += 8;                 // addi
-                gr[13] = 1;                                 // si
-            m9_i_check:
-                if (gr[13] != 0) goto m9_i_outer;          // bne
+                gr[11] += 8; gr[16] += 8; gr[13] = 1;
+            m9_i_sp_check:
+                if (gr[13] != 0) goto m9_i_sp_outer;
+                gr[13] = (unsigned)gr[23] >> 3;                // min_iters = min_words/8
+            m9_i_main_outer:
+                if (gr[13] <= 0) goto m9_i_done; gr[13] -= 1;  // bgt; subi (paired)
+                mvdq_copy(&mm[gr[3]], &spm[gr[1]], 8); gr[1] += 8; gr[3] += 8;
+                mvdq_copy(&mm[gr[6]], &spm[gr[5]], 8); gr[5] += 8; gr[6] += 8;
+                mvdq_copy(&mm[gr[9]], &spm[gr[8]], 8); gr[8] += 8; gr[9] += 8;
+                mvdq_copy(&mm[gr[16]], &spm[gr[11]], 8); gr[11] += 8; gr[16] += 8;
+                goto m9_i_main_outer;
             m9_i_done:
                 // Update intv_buf_n: gr[28] += sum(n_intv)
                 for (int pe = 0; pe < 4; pe++) {
@@ -1063,8 +1079,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             if (done) write_spm_magic(32767, 1);
         } else if (magic_id == 14) {
             // Phase 2 tile load: pop A queue (MM) → SPM
-            // ISA-like: all state in gr[]/spm[]/mm[]/s2[]
-            constexpr int P2_INPUT_OFF = 0;
+            // ISA-like: all state in gr[]/spm[]/s1c[]/mm[]/s2[]
+            //
+            // SPM layout per PE (relative to pe_base):
+            //   P2_VK_OFF  =   0: [vd, k] × tile_n      (2 words/entry, ≤64 entries = 128 words)
+            //   P2_TS_OFF  = 128: [ts_off, vl] × tile_n  (2 words/entry, ≤64 entries = 128 words)
+            //   P2_META_OFF = 1024: metadata
+            //
+            // Phase A: batch MM → SPM (vd/k), pe interleaved, then waitLSQ
+            // Phase B: S2 → SPM (ts_off/vl), pe interleaved, then waitLSQ
+            constexpr int P2_VK_OFF   = 0;
+            constexpr int P2_TS_OFF   = 128;
             constexpr int P2_META_OFF = 1024;
             constexpr int P2_M_TILE_N = 4;
             constexpr int P2_TILE_SIZE = 64;
@@ -1072,49 +1097,185 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
             int *spm = SPM_unit->buffer;
             int p2_base = (magic_mask & 1) ? GWFA_P2B_BASE : GWFA_P2_BASE;
-            gr[2] = 0;                                   // si: total
+
+            // Compute tile_n[pe] → s1c[0..3], a_head_start[pe] → s1c[4..7]
+            // gr[2] = remaining A_count, gr[6] = cumulative a_off
+            gr[2] = gr[27];                              // mv (A_count)
+            gr[6] = 0;                                   // si
+            for (int pe = 0; pe < 4; pe++) {
+                gr[13] = gr[2];                          // mv: remaining
+                //NOP
+                if (gr[13] > P2_TILE_SIZE) gr[13] = P2_TILE_SIZE; // blt; si
+                s1c[pe] = gr[13];                        // mv: tile_n[pe]
+                gr[7] = gr[25] + gr[6];                  // add: A_head + a_off
+                s1c[4 + pe] = gr[7];                     // mv: a_head_start[pe]
+                gr[6] = gr[6] + gr[13];                  // add: cumulative a_off
+                gr[2] = gr[2] - gr[13];                  // sub: remaining
+            }
+            gr[25] = gr[25] + gr[6];                     // add: A_head += total
+            gr[27] = gr[27] - gr[6];                     // sub: A_count -= total
+
+            // Compute max_tile_n → gr[10]
+            gr[10] = 0;                                  // si
+            for (int pe = 0; pe < 4; pe++) {
+                gr[13] = s1c[pe];                        // mv
+                //NOP
+                if (gr[13] > gr[10]) gr[10] = gr[13];   // bge; mv
+            }
+
+            // Save max_tile_n (Phase A mvdq will clobber gr[10])
+            s1c[8] = gr[10];                             // mv gr→S1c
+
+            // Phase A: batch MM → SPM (vd/k) via mvdq, pe interleaved
+            {
+                constexpr int A_QUEUE_SIZE = A_MASK_VAL + 1;
+                // Wrap check: does range cross queue boundary? (rare)
+                gr[2] = s1c[4] & A_MASK_VAL;            // andi: masked A_head
+                //NOP
+                gr[2] = gr[2] + gr[6];                  // add: start + total
+                if (gr[2] > A_QUEUE_SIZE) goto m14_a_wrap; // bgt (rare)
+                //NOP
+
+                // No wrap (common): setup per-PE src, dst, end
+                // PE0=gr[1,3,4] PE1=gr[5,6,7] PE2=gr[8,9,10] PE3=gr[11,16,17]
+                for (int pe = 0; pe < 4; pe++) {
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    int &end = (pe==0)?gr[4]:(pe==1)?gr[7]:(pe==2)?gr[10]:gr[17];
+                    int pe_base = pe * SPM_BANK_GROUP_SIZE + p2_base;
+                    gr[13] = s1c[4 + pe] & A_MASK_VAL;  // andi: masked a_head
+                    //NOP
+                    gr[13] = gr[13] + gr[13];            // add: *2 (word offset)
+                    src = gr[13] + gr[21];               // add: A_base + 2*idx
+                    gr[13] = s1c[pe];                    // mv: tile_n
+                    //NOP
+                    end = gr[13] + gr[13];               // add: 2*tile_n (words)
+                    //NOP
+                    end = src + end;                      // add: end addr in MM
+                    dst = pe_base + P2_VK_OFF;           // si: SPM dst
+                }
+                // Peel (tile_n%4 remainder)
+                for (int pe = 0; pe < 4; pe++) {
+                    int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
+                    int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
+                    gr[13] = s1c[pe] & 3;                // andi: n%4
+                    //NOP
+                m14_a_peel:
+                    if (gr[13] <= 0) goto m14_a_peel_done; gr[13] -= 1; // bgt; subi (paired)
+                    spm[dst] = mm[src]; spm[dst+1] = mm[src+1]; // mvd MM→SPM
+                    src += 2; dst += 2;                  // addi
+                    goto m14_a_peel;
+                m14_a_peel_done:
+                    (void)0;
+                }
+                // Second peel: equalize PE counts
+                gr[23] = gr[4] - gr[1];                        // PE0 remaining
+                gr[13] = gr[7] - gr[5];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE1
+                gr[13] = gr[10] - gr[8];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE2
+                gr[13] = gr[17] - gr[11];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE3
+                gr[4] -= gr[23]; gr[7] -= gr[23]; gr[10] -= gr[23]; gr[17] -= gr[23];
+            m14_a_sp_outer:
+                gr[13] = 0;
+                if (gr[1] >= gr[4]) goto m14_a_sp_pe1;
+                mvdq_copy(&spm[gr[3]], &mm[gr[1]], 8);
+                gr[1] += 8; gr[3] += 8; gr[13] = 1;
+            m14_a_sp_pe1:
+                if (gr[5] >= gr[7]) goto m14_a_sp_pe2;
+                mvdq_copy(&spm[gr[6]], &mm[gr[5]], 8);
+                gr[5] += 8; gr[6] += 8; gr[13] = 1;
+            m14_a_sp_pe2:
+                if (gr[8] >= gr[10]) goto m14_a_sp_pe3;
+                mvdq_copy(&spm[gr[9]], &mm[gr[8]], 8);
+                gr[8] += 8; gr[9] += 8; gr[13] = 1;
+            m14_a_sp_pe3:
+                if (gr[11] >= gr[17]) goto m14_a_sp_check;
+                mvdq_copy(&spm[gr[16]], &mm[gr[11]], 8);
+                gr[11] += 8; gr[16] += 8; gr[13] = 1;
+            m14_a_sp_check:
+                if (gr[13] != 0) goto m14_a_sp_outer;
+                gr[13] = (unsigned)gr[23] >> 3;          // min_iters
+            m14_a_main:
+                if (gr[13] <= 0) goto m14_a_done; gr[13] -= 1; // bgt; subi (paired)
+                mvdq_copy(&spm[gr[3]], &mm[gr[1]], 8); gr[1] += 8; gr[3] += 8;
+                mvdq_copy(&spm[gr[6]], &mm[gr[5]], 8); gr[5] += 8; gr[6] += 8;
+                mvdq_copy(&spm[gr[9]], &mm[gr[8]], 8); gr[8] += 8; gr[9] += 8;
+                mvdq_copy(&spm[gr[16]], &mm[gr[11]], 8); gr[11] += 8; gr[16] += 8;
+                goto m14_a_main;
+            m14_a_done:
+                goto m14_a_end;
+
+            m14_a_wrap: {
+                // Wrap (rare): per-PE copy with queue boundary split
+                constexpr int A_Q = A_MASK_VAL + 1;
+                for (int pe = 0; pe < 4; pe++) {
+                    int pe_base = pe * SPM_BANK_GROUP_SIZE + p2_base;
+                    int tn = s1c[pe];
+                    if (tn <= 0) continue;
+                    int si = s1c[4 + pe] & A_MASK_VAL;
+                    int sd = pe_base + P2_VK_OFF;
+                    if (si + tn > A_Q) {
+                        int c1 = A_Q - si;
+                        // Segment 1: start_idx to end of queue
+                        mvdq_copy(&spm[sd], &mm[gr[21] + 2*si], 2*c1);
+                        // Segment 2: queue start to remaining
+                        mvdq_copy(&spm[sd + 2*c1], &mm[gr[21]], 2*(tn - c1));
+                    } else {
+                        mvdq_copy(&spm[sd], &mm[gr[21] + 2*si], 2*tn);
+                    }
+                }
+            }
+            m14_a_end:
+                (void)0;
+            }
+            // Restore max_tile_n for Phase B
+            gr[10] = s1c[8];                             // mv S1c→gr
+            //NOP
+            // waitLSQ: barrier instruction needed here in ISA
+
+            // Phase B: S2 → SPM (ts_off/vl), pe interleaved.
+            // Load v from vd in SPM (safe after barrier), then write S2 → SPM directly.
+            gr[8] = gr[29] & 0xFFFF;                     // andi: seq_off_s2
+            gr[9] = (unsigned)gr[29] >> 16;              // shifti_r: seq_len_s2
+            gr[11] = 0;                                  // si: spm offset
+            gr[1] = 0;                                   // si: i
+        m14_b_outer:
+            if (gr[1] >= gr[10]) goto m14_b_done;        // bge
+            //NOP
             for (int pe = 0; pe < 4; pe++) {
                 int pe_base = pe * SPM_BANK_GROUP_SIZE + p2_base;
-                // tile_n = min(A_count, 64)
-                gr[10] = gr[27];                          // mv (A_count)
+                gr[13] = s1c[pe];                        // mv: tile_n[pe]
                 //NOP
-                if (gr[10] > P2_TILE_SIZE)                // blt
-                    gr[10] = P2_TILE_SIZE;                // si
+                if (gr[1] >= gr[13]) goto m14_b_skip; gr[7] = spm[pe_base + P2_VK_OFF + gr[11]]; // bge; mv (paired)
+                //NOP; //NOP
+                gr[7] = (unsigned)gr[7] >> 16;           // shifti_r: v
                 //NOP
-                gr[11] = 0;                               // si: i
-                //NOP
-            m14_loop:
-                if (gr[11] >= gr[10]) goto m14_done;      // bge
-                //NOP
-                // idx = A_head & A_MASK
-                gr[7] = gr[25] & A_MASK_VAL;             // andi
-                gr[7] = gr[7] + gr[7];                   // add: 2*idx
-                gr[7] = gr[7] + gr[21];                  // add: A_base + 2*idx
-                //NOP
-                gr[8] = mm[gr[7]];                       // mv MM→gr (vd)
-                gr[9] = mm[gr[7] + 1];                   // mv MM→gr (k)
-                gr[25] = gr[25] + 1;                     // addi (A_head++)
-                gr[27] = gr[27] - 1;                     // subi (A_count--)
-                gr[7] = (unsigned)gr[8] >> 16;           // shifti_r (v)
-                //NOP
-                gr[5] = gr[29] & 0xFFFF;                 // andi (seq_off_s2)
-                gr[6] = (unsigned)gr[29] >> 16;          // shifti_r (seq_len_s2)
-                gr[5] = s2->buffer[gr[5] + gr[7]];      // mv S2→gr (ts_off)
-                gr[6] = s2->buffer[gr[6] + gr[7]];      // mv S2→gr (vl)
-                // spm offset: pe_base + 4*i
-                gr[7] = gr[11] << 2;                     // shifti_l
-                //NOP
-                spm[pe_base + P2_INPUT_OFF + gr[7]] = gr[8];      // mv gr→SPM (vd)
-                spm[pe_base + P2_INPUT_OFF + gr[7] + 1] = gr[9];  // mv gr→SPM (k)
-                spm[pe_base + P2_INPUT_OFF + gr[7] + 2] = gr[5];  // mv gr→SPM (ts_off)
-                spm[pe_base + P2_INPUT_OFF + gr[7] + 3] = gr[6];  // mv gr→SPM (vl)
-                gr[11] = gr[11] + 1;                     // addi (i++)
-                goto m14_loop;                            // jump
-            m14_done:
-                spm[pe_base + P2_META_OFF + P2_M_TILE_N] = gr[10]; // si
-                gr[2] = gr[2] + gr[10];                  // add (total)
+                gr[3] = gr[8] + gr[7];                   // add: seq_off_s2 + v
+                gr[4] = gr[9] + gr[7];                   // add: seq_len_s2 + v
+                // Write directly S2 → SPM (no gr intermediate; avoids S2 latency hazard)
+                spm[pe_base + P2_TS_OFF + gr[11]] = s2->buffer[gr[3]];         // mv S2→SPM (ts_off)
+                spm[pe_base + P2_TS_OFF + gr[11] + 1] = s2->buffer[gr[4]];     // mv S2→SPM (vl)
+            m14_b_skip:
+                (void)0;
             }
-            // gr[2] = total > 0 → flag
+            gr[11] = gr[11] + 2;                         // addi: spm offset += 2
+            gr[1] = gr[1] + 1;                           // addi: i++
+            goto m14_b_outer;
+        m14_b_done: {
+            // waitLSQ: barrier instruction needed here in ISA
+        }
+
+            // Write tile_n metadata and compute gr[2] = total > 0 flag
+            gr[2] = 0;                                   // si
+            for (int pe = 0; pe < 4; pe++) {
+                int pe_base = pe * SPM_BANK_GROUP_SIZE + p2_base;
+                gr[13] = s1c[pe];                        // mv: tile_n[pe]
+                //NOP
+                spm[pe_base + P2_META_OFF + P2_M_TILE_N] = gr[13]; // mv gr→SPM
+                gr[2] = gr[2] + gr[13];                  // add: total
+            }
             if (gr[2] > 0) gr[2] = 1;                   // bgt; si
         } else if (magic_id == 15) {
             // Phase 2 tile writeback — ISA-like register-mapped code.
@@ -1175,35 +1336,49 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[13] = s1c[pe] & 3;                // andi: n%4
                     //NOP
                 m15_p_peel:
-                    if (gr[13] <= 0) goto m15_p_peel_done;
-                    //NOP
+                    if (gr[13] <= 0) goto m15_p_peel_done; gr[13] -= 1; // bgt; subi (paired)
                     mm[dst] = spm[src]; mm[dst+1] = spm[src+1];
                     src += 2; dst += 2;                  // addi
-                    gr[13] = gr[13] - 1;                  // subi
                     goto m15_p_peel;
                 m15_p_peel_done:
                     (void)0;
                 }
-                // Main mvdq loop
-            m15_p_outer:
+                // Second peel: equalize PE counts; then main unmasked loop
+                gr[23] = gr[4] - gr[1];                        // PE0 remaining
+                gr[13] = gr[7] - gr[5];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE1
+                gr[13] = gr[10] - gr[8];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE2
+                gr[13] = gr[17] - gr[11];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE3 → gr[23]=min_words
+                gr[4] -= gr[23]; gr[7] -= gr[23]; gr[10] -= gr[23]; gr[17] -= gr[23]; // adjust ends
+            m15_p_sp_outer:
                 gr[13] = 0;
-                if (gr[1] >= gr[4]) goto m15_p_pe1;
+                if (gr[1] >= gr[4]) goto m15_p_sp_pe1;
                 mvdq_copy(&mm[gr[3]], &spm[gr[1]], 8);
                 gr[1] += 8; gr[3] += 8; gr[13] = 1;
-            m15_p_pe1:
-                if (gr[5] >= gr[7]) goto m15_p_pe2;
+            m15_p_sp_pe1:
+                if (gr[5] >= gr[7]) goto m15_p_sp_pe2;
                 mvdq_copy(&mm[gr[6]], &spm[gr[5]], 8);
                 gr[5] += 8; gr[6] += 8; gr[13] = 1;
-            m15_p_pe2:
-                if (gr[8] >= gr[10]) goto m15_p_pe3;
+            m15_p_sp_pe2:
+                if (gr[8] >= gr[10]) goto m15_p_sp_pe3;
                 mvdq_copy(&mm[gr[9]], &spm[gr[8]], 8);
                 gr[8] += 8; gr[9] += 8; gr[13] = 1;
-            m15_p_pe3:
-                if (gr[11] >= gr[17]) goto m15_p_check;
+            m15_p_sp_pe3:
+                if (gr[11] >= gr[17]) goto m15_p_sp_check;
                 mvdq_copy(&mm[gr[16]], &spm[gr[11]], 8);
                 gr[11] += 8; gr[16] += 8; gr[13] = 1;
-            m15_p_check:
-                if (gr[13] != 0) goto m15_p_outer;
+            m15_p_sp_check:
+                if (gr[13] != 0) goto m15_p_sp_outer;
+                gr[13] = (unsigned)gr[23] >> 3;                // min_iters = min_words/8
+            m15_p_main_outer:
+                if (gr[13] <= 0) goto m15_p_done; gr[13] -= 1; // bgt; subi (paired)
+                mvdq_copy(&mm[gr[3]], &spm[gr[1]], 8); gr[1] += 8; gr[3] += 8;
+                mvdq_copy(&mm[gr[6]], &spm[gr[5]], 8); gr[5] += 8; gr[6] += 8;
+                mvdq_copy(&mm[gr[9]], &spm[gr[8]], 8); gr[8] += 8; gr[9] += 8;
+                mvdq_copy(&mm[gr[16]], &spm[gr[11]], 8); gr[11] += 8; gr[16] += 8;
+                goto m15_p_main_outer;
             m15_p_done:
                 for (int pe = 0; pe < 4; pe++) {
                     gr[7] = s1c[pe];                     // mv
@@ -1253,35 +1428,49 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[13] = s1c[4 + pe] & 3;            // andi: n%4
                     //NOP
                 m15_i_peel:
-                    if (gr[13] <= 0) goto m15_i_peel_done;
-                    //NOP
+                    if (gr[13] <= 0) goto m15_i_peel_done; gr[13] -= 1; // bgt; subi (paired)
                     mm[dst] = spm[src]; mm[dst+1] = spm[src+1];
                     src += 2; dst += 2;                  // addi
-                    gr[13] = gr[13] - 1;                  // subi
                     goto m15_i_peel;
                 m15_i_peel_done:
                     (void)0;
                 }
-                // Main mvdq loop
-            m15_i_outer:
+                // Second peel: equalize PE counts; then main unmasked loop
+                gr[23] = gr[4] - gr[1];                        // PE0 remaining
+                gr[13] = gr[7] - gr[5];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE1
+                gr[13] = gr[10] - gr[8];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE2
+                gr[13] = gr[17] - gr[11];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE3 → gr[23]=min_words
+                gr[4] -= gr[23]; gr[7] -= gr[23]; gr[10] -= gr[23]; gr[17] -= gr[23]; // adjust ends
+            m15_i_sp_outer:
                 gr[13] = 0;
-                if (gr[1] >= gr[4]) goto m15_i_pe1;
+                if (gr[1] >= gr[4]) goto m15_i_sp_pe1;
                 mvdq_copy(&mm[gr[3]], &spm[gr[1]], 8);
                 gr[1] += 8; gr[3] += 8; gr[13] = 1;
-            m15_i_pe1:
-                if (gr[5] >= gr[7]) goto m15_i_pe2;
+            m15_i_sp_pe1:
+                if (gr[5] >= gr[7]) goto m15_i_sp_pe2;
                 mvdq_copy(&mm[gr[6]], &spm[gr[5]], 8);
                 gr[5] += 8; gr[6] += 8; gr[13] = 1;
-            m15_i_pe2:
-                if (gr[8] >= gr[10]) goto m15_i_pe3;
+            m15_i_sp_pe2:
+                if (gr[8] >= gr[10]) goto m15_i_sp_pe3;
                 mvdq_copy(&mm[gr[9]], &spm[gr[8]], 8);
                 gr[8] += 8; gr[9] += 8; gr[13] = 1;
-            m15_i_pe3:
-                if (gr[11] >= gr[17]) goto m15_i_check;
+            m15_i_sp_pe3:
+                if (gr[11] >= gr[17]) goto m15_i_sp_check;
                 mvdq_copy(&mm[gr[16]], &spm[gr[11]], 8);
                 gr[11] += 8; gr[16] += 8; gr[13] = 1;
-            m15_i_check:
-                if (gr[13] != 0) goto m15_i_outer;
+            m15_i_sp_check:
+                if (gr[13] != 0) goto m15_i_sp_outer;
+                gr[13] = (unsigned)gr[23] >> 3;                // min_iters = min_words/8
+            m15_i_main_outer:
+                if (gr[13] <= 0) goto m15_i_done; gr[13] -= 1; // bgt; subi (paired)
+                mvdq_copy(&mm[gr[3]], &spm[gr[1]], 8); gr[1] += 8; gr[3] += 8;
+                mvdq_copy(&mm[gr[6]], &spm[gr[5]], 8); gr[5] += 8; gr[6] += 8;
+                mvdq_copy(&mm[gr[9]], &spm[gr[8]], 8); gr[8] += 8; gr[9] += 8;
+                mvdq_copy(&mm[gr[16]], &spm[gr[11]], 8); gr[11] += 8; gr[16] += 8;
+                goto m15_i_main_outer;
             m15_i_done:
                 for (int pe = 0; pe < 4; pe++) {
                     gr[7] = s1c[4 + pe];                 // mv
@@ -1337,36 +1526,49 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[13] = s1c[8 + pe] & 3;            // andi
                     //NOP
                 m15_f0_peel:
-                    if (gr[13] <= 0) goto m15_f0_peel_done;
-                    //NOP
-                    s1c[dst] = spm[src];                 // mvd
-                    s1c[dst+1] = spm[src+1];
+                    if (gr[13] <= 0) goto m15_f0_peel_done; gr[13] -= 1; // bgt; subi (paired)
+                    s1c[dst] = spm[src]; s1c[dst+1] = spm[src+1]; // mvd
                     src += 2; dst += 2;                  // addi
-                    gr[13] = gr[13] - 1;                   // subi
                     goto m15_f0_peel;
                 m15_f0_peel_done:
                     (void)0;
                 }
-                // Main mvdq loop for fin0
-            m15_f0_outer:
+                // Second peel: equalize PE counts; then main unmasked loop
+                gr[23] = gr[4] - gr[1];                        // PE0 remaining
+                gr[13] = gr[7] - gr[5];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE1
+                gr[13] = gr[10] - gr[8];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE2
+                gr[13] = gr[17] - gr[11];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE3 → gr[23]=min_words
+                gr[4] -= gr[23]; gr[7] -= gr[23]; gr[10] -= gr[23]; gr[17] -= gr[23]; // adjust ends
+            m15_f0_sp_outer:
                 gr[13] = 0;
-                if (gr[1] >= gr[4]) goto m15_f0_pe1;
+                if (gr[1] >= gr[4]) goto m15_f0_sp_pe1;
                 mvdq_copy(&s1c[gr[3]], &spm[gr[1]], 8);
                 gr[1] += 8; gr[3] += 8; gr[13] = 1;
-            m15_f0_pe1:
-                if (gr[5] >= gr[7]) goto m15_f0_pe2;
+            m15_f0_sp_pe1:
+                if (gr[5] >= gr[7]) goto m15_f0_sp_pe2;
                 mvdq_copy(&s1c[gr[6]], &spm[gr[5]], 8);
                 gr[5] += 8; gr[6] += 8; gr[13] = 1;
-            m15_f0_pe2:
-                if (gr[8] >= gr[10]) goto m15_f0_pe3;
+            m15_f0_sp_pe2:
+                if (gr[8] >= gr[10]) goto m15_f0_sp_pe3;
                 mvdq_copy(&s1c[gr[9]], &spm[gr[8]], 8);
                 gr[8] += 8; gr[9] += 8; gr[13] = 1;
-            m15_f0_pe3:
-                if (gr[11] >= gr[17]) goto m15_f0_check;
+            m15_f0_sp_pe3:
+                if (gr[11] >= gr[17]) goto m15_f0_sp_check;
                 mvdq_copy(&s1c[gr[16]], &spm[gr[11]], 8);
                 gr[11] += 8; gr[16] += 8; gr[13] = 1;
-            m15_f0_check:
-                if (gr[13] != 0) goto m15_f0_outer;
+            m15_f0_sp_check:
+                if (gr[13] != 0) goto m15_f0_sp_outer;
+                gr[13] = (unsigned)gr[23] >> 3;                // min_iters = min_words/8
+            m15_f0_main_outer:
+                if (gr[13] <= 0) goto m15_f0_done; gr[13] -= 1; // bgt; subi (paired)
+                mvdq_copy(&s1c[gr[3]], &spm[gr[1]], 8); gr[1] += 8; gr[3] += 8;
+                mvdq_copy(&s1c[gr[6]], &spm[gr[5]], 8); gr[5] += 8; gr[6] += 8;
+                mvdq_copy(&s1c[gr[9]], &spm[gr[8]], 8); gr[8] += 8; gr[9] += 8;
+                mvdq_copy(&s1c[gr[16]], &spm[gr[11]], 8); gr[11] += 8; gr[16] += 8;
+                goto m15_f0_main_outer;
             m15_f0_done:
                 // Compute total_fin0 → s1c[20]
                 gr[7] = 0;                                // si
@@ -1410,36 +1612,49 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[13] = s1c[12 + pe] & 3;            // andi
                     //NOP
                 m15_f1_peel:
-                    if (gr[13] <= 0) goto m15_f1_peel_done;
-                    //NOP
-                    s1c[dst] = spm[src];
-                    s1c[dst+1] = spm[src+1];
-                    src += 2; dst += 2;
-                    gr[13] = gr[13] - 1;
+                    if (gr[13] <= 0) goto m15_f1_peel_done; gr[13] -= 1; // bgt; subi (paired)
+                    s1c[dst] = spm[src]; s1c[dst+1] = spm[src+1]; // mvd
+                    src += 2; dst += 2;                  // addi
                     goto m15_f1_peel;
                 m15_f1_peel_done:
                     (void)0;
                 }
-                // Main mvdq loop for fin1
-            m15_f1_outer:
+                // Second peel: equalize PE counts; then main unmasked loop
+                gr[23] = gr[4] - gr[1];                        // PE0 remaining
+                gr[13] = gr[7] - gr[5];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE1
+                gr[13] = gr[10] - gr[8];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE2
+                gr[13] = gr[17] - gr[11];
+                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE3 → gr[23]=min_words
+                gr[4] -= gr[23]; gr[7] -= gr[23]; gr[10] -= gr[23]; gr[17] -= gr[23]; // adjust ends
+            m15_f1_sp_outer:
                 gr[13] = 0;
-                if (gr[1] >= gr[4]) goto m15_f1_pe1;
+                if (gr[1] >= gr[4]) goto m15_f1_sp_pe1;
                 mvdq_copy(&s1c[gr[3]], &spm[gr[1]], 8);
                 gr[1] += 8; gr[3] += 8; gr[13] = 1;
-            m15_f1_pe1:
-                if (gr[5] >= gr[7]) goto m15_f1_pe2;
+            m15_f1_sp_pe1:
+                if (gr[5] >= gr[7]) goto m15_f1_sp_pe2;
                 mvdq_copy(&s1c[gr[6]], &spm[gr[5]], 8);
                 gr[5] += 8; gr[6] += 8; gr[13] = 1;
-            m15_f1_pe2:
-                if (gr[8] >= gr[10]) goto m15_f1_pe3;
+            m15_f1_sp_pe2:
+                if (gr[8] >= gr[10]) goto m15_f1_sp_pe3;
                 mvdq_copy(&s1c[gr[9]], &spm[gr[8]], 8);
                 gr[8] += 8; gr[9] += 8; gr[13] = 1;
-            m15_f1_pe3:
-                if (gr[11] >= gr[17]) goto m15_f1_check;
+            m15_f1_sp_pe3:
+                if (gr[11] >= gr[17]) goto m15_f1_sp_check;
                 mvdq_copy(&s1c[gr[16]], &spm[gr[11]], 8);
                 gr[11] += 8; gr[16] += 8; gr[13] = 1;
-            m15_f1_check:
-                if (gr[13] != 0) goto m15_f1_outer;
+            m15_f1_sp_check:
+                if (gr[13] != 0) goto m15_f1_sp_outer;
+                gr[13] = (unsigned)gr[23] >> 3;                // min_iters = min_words/8
+            m15_f1_main_outer:
+                if (gr[13] <= 0) goto m15_f1_done; gr[13] -= 1; // bgt; subi (paired)
+                mvdq_copy(&s1c[gr[3]], &spm[gr[1]], 8); gr[1] += 8; gr[3] += 8;
+                mvdq_copy(&s1c[gr[6]], &spm[gr[5]], 8); gr[5] += 8; gr[6] += 8;
+                mvdq_copy(&s1c[gr[9]], &spm[gr[8]], 8); gr[8] += 8; gr[9] += 8;
+                mvdq_copy(&s1c[gr[16]], &spm[gr[11]], 8); gr[11] += 8; gr[16] += 8;
+                goto m15_f1_main_outer;
             m15_f1_done:
                 // Compute total_diags → s1c[21]
                 gr[7] = s1c[20];                          // total_fin0
@@ -1462,17 +1677,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[14] = gr[14] + 32;                     // end ptr
                 //NOP
             m15_s4_loop:
-                if (gr[1] >= gr[14]) goto m15_s4_done;    // bge
-                //NOP
-                gr[7] = s1c[gr[1]];                       // mv: vd
+                if (gr[1] >= gr[14]) goto m15_s4_done; gr[7] = s1c[gr[1]]; // bge; mv (paired)
                 //NOP
                 gr[7] = (unsigned)gr[7] >> 16;            // shifti_r: v
                 //NOP
-                gr[8] = s2->buffer[gr[13] + gr[7]];      // mv S2: arc_off[v]
-                gr[9] = s2->buffer[gr[13] + gr[7] + 1];  // mv S2: arc_off[v+1]
-                //NOP
-                s1c[gr[3]] = gr[8];                       // mv: store lo
-                s1c[gr[3]+1] = gr[9];                     // mv: store hi
+                // Write directly S2→S1c (no gr intermediate; avoids S2 latency hazard)
+                s1c[gr[3]] = s2->buffer[gr[13] + gr[7]];       // mv S2→S1c: arc_off[v]
+                s1c[gr[3]+1] = s2->buffer[gr[13] + gr[7] + 1]; // mv S2→S1c: arc_off[v+1]
                 gr[1] = gr[1] + 2;                        // addi
                 gr[3] = gr[3] + 2;                        // addi
                 goto m15_s4_loop;                          // jump
@@ -1489,9 +1700,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[14] = gr[14] + ARC_META_BASE;          // arc_meta end ptr
                 //NOP
             m15_s5_load:
-                if (gr[1] >= gr[14]) goto m15_s5_load_done;
-                //NOP
-                gr[7] = s1c[gr[1]];                       // lo = arc_off[v]
+                if (gr[1] >= gr[14]) goto m15_s5_load_done; gr[7] = s1c[gr[1]]; // bge; mv (paired)
                 gr[8] = s1c[gr[1]+1];                     // hi = arc_off[v+1]
                 //NOP
                 gr[9] = gr[8] - gr[7];                    // n_arcs
@@ -1501,9 +1710,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[11] = 0;                               // arc counter
                 //NOP
             m15_s5_arc:
-                if (gr[11] >= gr[9]) goto m15_s5_arc_done;
-                //NOP
-                gr[4] = gr[11] + gr[11];                  // 2*a
+                gr[4] = gr[11] + gr[11];                  // add: 2*a (slot 1 of branch cycle)
+                if (gr[11] >= gr[9]) goto m15_s5_arc_done; // bge (slot 0, paired with add)
                 //NOP
                 s1c[gr[3]] = s2->buffer[gr[10] + gr[4]];          // mvd S2→S1c
                 s1c[gr[3]+1] = s2->buffer[gr[10] + gr[4] + 1];
@@ -1536,9 +1744,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[3] = gr[3] + ARC_META_BASE;            // arc data base
                 // Skip fin0 arcs
             m15_s5_skip:
-                if (gr[1] >= gr[14]) goto m15_s5_skip_done;
-                //NOP
-                gr[7] = s1c[gr[1]];                       // lo
+                if (gr[1] >= gr[14]) goto m15_s5_skip_done; gr[7] = s1c[gr[1]]; // bge; mv (paired)
                 gr[8] = s1c[gr[1]+1];                     // hi
                 //NOP
                 gr[9] = gr[8] - gr[7];                    // n_arcs
