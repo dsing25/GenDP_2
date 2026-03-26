@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 GWFA Correctness Check - Compare simulator vs golden scores.
-Usage: python3 scripts/gwfa_check_correctness.py <mode>
+Usage: python3 scripts/gwfa_check_correctness.py <mode> [-t N]
   mode 1: fast  (15 iterations)
   mode 2: full  (all iterations)
   mode 3: debug (single iteration, verbose)
+  -t N:  run N simulator processes in parallel
 
 Prereqs:
   - Build sim: make clean && make -j
@@ -15,6 +16,8 @@ import sys
 import os
 import re
 import subprocess
+import tempfile
+import concurrent.futures
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -31,6 +34,13 @@ MODES = {
     '2': {'name': 'full',  'n': -1},
     '3': {'name': 'debug', 'n': 1},
 }
+
+# Files the simulator reads from the input directory (one line per case)
+DATA_FILES = [
+    'ql.txt', 'q.txt', 's_term.txt', 'n_vtx.txt', 'n_arc.txt',
+    'graphSeq.txt', 'seq_off.txt', 'seq_len.txt',
+    'arc_v.txt', 'arc_w.txt', 'arc_ow.txt', 'idx.txt',
+]
 
 
 def load_golden(path, limit=None):
@@ -69,6 +79,83 @@ def run_sim(n, verbose=False):
         for m in re.finditer(r'qqq (-?\d+) qqq',
                              result.stdout)
     ]
+    return scores
+
+
+def load_dataset_lines(path, n):
+    """Load first n lines from each DATA_FILE.
+    Returns {filename: [line0, line1, ...]}."""
+    data = {}
+    for fname in DATA_FILES:
+        lines = []
+        with open(path / fname) as f:
+            for i, line in enumerate(f):
+                if n > 0 and i >= n:
+                    break
+                lines.append(line.rstrip('\n'))
+        data[fname] = lines
+    return data
+
+
+def run_single_case(args):
+    """Run simulator for one case in a temp directory.
+    Returns (case_idx, score or None)."""
+    case_idx, case_lines, verbose = args
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for fname, line in case_lines.items():
+            with open(os.path.join(tmpdir, fname), 'w') as f:
+                f.write(line + '\n')
+        cmd = [
+            str(SIM_PATH), '-k', '7',
+            '-i', tmpdir, '-n', '1',
+        ]
+        stderr_dest = None if verbose else subprocess.DEVNULL
+        try:
+            result = subprocess.run(
+                cmd, cwd=str(REPO_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=stderr_dest,
+                text=True, timeout=3600)
+        except subprocess.TimeoutExpired:
+            print(f"  [{case_idx}] TIMEOUT")
+            return (case_idx, None)
+        if result.returncode != 0:
+            print(f"  [{case_idx}] sim exited with "
+                  f"code {result.returncode}")
+            return (case_idx, None)
+        m = re.search(r'qqq (-?\d+) qqq', result.stdout)
+        if not m:
+            print(f"  [{case_idx}] no score in output")
+            return (case_idx, None)
+        return (case_idx, int(m.group(1)))
+
+
+def run_sim_parallel(n, num_threads, verbose=False):
+    """Run n cases in parallel, return list of scores."""
+    print(f"Loading dataset for {n} cases...")
+    dataset = load_dataset_lines(DUMP_DIR, n)
+    actual_n = len(dataset[DATA_FILES[0]])
+    if n > 0 and actual_n < n:
+        print(f"WARNING: only {actual_n} cases in dataset")
+        n = actual_n
+
+    # Build per-case arg tuples
+    tasks = []
+    for i in range(n):
+        case_lines = {fname: dataset[fname][i] for fname in DATA_FILES}
+        tasks.append((i, case_lines, verbose))
+
+    print(f"Running {n} cases with {num_threads} threads...")
+    scores = [None] * n
+    done = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as pool:
+        futures = {pool.submit(run_single_case, t): t[0] for t in tasks}
+        for fut in concurrent.futures.as_completed(futures):
+            idx, score = fut.result()
+            scores[idx] = score
+            done += 1
+            if done % 10 == 0 or done == n:
+                print(f"  progress: {done}/{n}")
     return scores
 
 
@@ -174,18 +261,37 @@ def check_debug_trace(s_term_dbg=5):
     return failed
 
 
+def parse_args():
+    """Parse mode and optional -t <numThreads>."""
+    mode_key = None
+    num_threads = None
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] == '-t':
+            if i + 1 >= len(args):
+                print("ERROR: -t requires a number")
+                sys.exit(1)
+            num_threads = int(args[i + 1])
+            i += 2
+        else:
+            mode_key = args[i]
+            i += 1
+    return mode_key, num_threads
+
+
 def main():
-    if len(sys.argv) < 2 or \
-       sys.argv[1] not in MODES:
+    mode_key, num_threads = parse_args()
+    if mode_key not in MODES:
         print("Usage: python3 "
               "scripts/gwfa_check_correctness.py "
-              "<1|2|3>")
+              "<1|2|3> [-t N]")
         print("  1: fast (15 iterations)")
         print("  2: full (all iterations)")
         print("  3: debug (1 iteration, verbose)")
+        print("  -t N: parallel with N processes")
         sys.exit(1)
 
-    mode_key = sys.argv[1]
     mode = MODES[mode_key]
     print(f"=== GWFA {mode['name']} mode ===")
 
@@ -210,7 +316,11 @@ def main():
     else:
         n = len(golden)
 
-    sim_scores = run_sim(n, verbose)
+    # Run sim: parallel or single-threaded
+    if num_threads:
+        sim_scores = run_sim_parallel(n, num_threads, verbose)
+    else:
+        sim_scores = run_sim(n, verbose)
 
     if len(sim_scores) != len(golden):
         print(f"ERROR: score count mismatch: "
