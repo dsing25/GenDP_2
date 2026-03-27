@@ -40,6 +40,8 @@ MAGIC_18_F0A  = 18
 MAGIC_18_F0B  = (18 << 8) | 2
 MAGIC_19_F0A  = 19
 MAGIC_19_F0B  = (19 << 8) | 2
+MAGIC_20_F0A  = 20
+MAGIC_20_F0B  = (20 << 8) | 2
 
 def gwfa_main_instruction():
     f = InstructionWriter("instructions/gwfa/main_instruction.txt")
@@ -88,46 +90,58 @@ def gwfa_main_instruction():
     f.write(data_movement_instruction(gr, fifo[0], 0, 0, 3, 0, 0, 0, 0, 0, mv))                  # PC 31: gr[3]=fifo[0]
     f.write(data_movement_instruction(gr, fifo[1], 0, 0, 4, 0, 0, 0, 0, 0, mv))                  # PC 32: gr[4]=fifo[1]
     f.write(write_magic(12))                                                                       # PC 33: flush to s_B_a
-    # === PHASE 2 PROLOGUE (bufA, no prev writeback) ===
-    f.write(write_magic(MAGIC_14_BUF0))                                                            # PC 34: p2 tile load bufA
-    f.write(data_movement_instruction(0, 0, 0, 0, 20, 0, 0, 0, 0, 2, beq))                       # PC 35: beq gr[2]==0 → +20 (PC 55: P2_FINAL)
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_P2_BUF0, 0, 0, 0, 0, 0, set_PC))            # PC 36: set_PC p2 bufA
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 37: spin gr[13]
-    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))          # PC 38: gr[1]=SPM[32767]
-    f.write(data_movement_instruction(0, 0, 0, 0, 25, 0, 0, 0, 0, 1, bne))                       # PC 39: bne gr[1]!=0 → +25 (PC 64: SCORE)
-    # === PHASE 2 STEADY STATE: bufB half ===
-    # Writeback bufA FIRST (pushes to A queue), then load+compute bufB
-    f.write(write_magic(MAGIC_15_BUF0))                                                            # PC 40: writeback bufA → A queue
-    f.write(write_magic(MAGIC_14_BUF1))                                                            # PC 41: p2 tile load bufB
-    f.write(data_movement_instruction(0, 0, 0, 0, 13, 0, 0, 0, 0, 2, beq))                       # PC 42: beq gr[2]==0 → +13 (PC 55: P2_FINAL)
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_P2_BUF1, 0, 0, 0, 0, 0, set_PC))            # PC 43: set_PC p2 bufB
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 44: spin gr[13]
-    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))          # PC 45: gr[1]=SPM[32767]
-    f.write(data_movement_instruction(0, 0, 0, 0, 18, 0, 0, 0, 0, 1, bne))                       # PC 46: bne gr[1]!=0 → +18 (PC 64: SCORE)
-    # === PHASE 2 STEADY STATE: bufA half ===
-    # Writeback bufB FIRST (pushes to A queue), then load+compute bufA
-    f.write(write_magic(MAGIC_15_BUF1))                                                            # PC 47: writeback bufB → A queue
-    f.write(write_magic(MAGIC_14_BUF0))                                                            # PC 48: p2 tile load bufA
-    f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 0, 0, 0, 2, beq))                        # PC 49: beq gr[2]==0 → +6 (PC 55: P2_FINAL)
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_P2_BUF0, 0, 0, 0, 0, 0, set_PC))            # PC 50: set_PC p2 bufA
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 51: spin gr[13]
-    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))          # PC 52: gr[1]=SPM[32767]
-    f.write(data_movement_instruction(0, 0, 0, 0, 11, 0, 0, 0, 0, 1, bne))                       # PC 53: bne gr[1]!=0 → +11 (PC 64: SCORE)
-    f.write(data_movement_instruction(0, 0, 0, 0, -14, 0, 0, 0, 0, 0, jump))                     # PC 54: jump -14 → PC 40 (P2_SS_BUFB)
-    # === PHASE 2 DONE ===
-    f.write(write_magic(16))                                                                       # PC 55: P2_FINAL: finalize
-    f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 12, 0, 0, 0, 1, 12, addi))             # PC 56: gr_lo[12]++ (s++)
-    f.write(write_magic(5))                                                                        # PC 57: debug
-    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))          # PC 58: gr[1]=SPM[32767]
-    f.write(data_movement_instruction(0, 0, 0, 0, 5, 0, 0, 0, 0, 1, bne))                        # PC 59: bne gr[1]!=0 → +5 (PC 64: SCORE)
-    f.write(data_movement_instruction(gr, gr_hi, 0, 0, 5, 0, 0, 0, 12, 0, mv))                   # PC 60: gr[5]=gr_hi[12] (s_term)
-    f.write(data_movement_instruction(gr, gr_lo, 0, 0, 6, 0, 0, 0, 12, 0, mv))                   # PC 61: gr[6]=gr_lo[12] (s)
-    f.write(data_movement_instruction(0, 0, 0, 0, -60, 0, 1, 0, 5, 6, bge))                      # PC 62: bge s_term>=s → -60 (PC 2: STEP_LOOP)
-    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 0, 0, 0, 0, jump))                       # PC 63: jump +2 → PC 65 (PRINT_SCORE)
-    # === FINISH ===
-    f.write(write_magic(17))                                                                       # PC 64: SCORE: set score
-    f.write(write_magic(3))                                                                        # PC 65: PRINT_SCORE: print score
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # PC 66: halt
+        # === PHASE 2 (non-overlapped) ===
+    f.write(write_magic(MAGIC_14_BUF0))
+    f.write(data_movement_instruction(0, 0, 0, 0, 38, 0, 0, 0, 0, 2, beq))
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_P2_BUF0, 0, 0, 0, 0, 0, set_PC))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))
+    f.write(data_movement_instruction(0, 0, 0, 0, 43, 0, 0, 0, 0, 1, bne))
+    f.write(write_magic(MAGIC_15_BUF0_F0A))
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_A, 0, 0, 0, 0, 0, set_PC))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))
+    f.write(write_magic(MAGIC_18_F0A))
+    f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 0, 0, 0, 2, beq))
+    f.write(write_magic(MAGIC_20_F0A))
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_A, 0, 0, 0, 0, 0, set_PC))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))
+    f.write(write_magic(MAGIC_18_F0A))
+    f.write(data_movement_instruction(0, 0, 0, 0, -5, 0, 0, 0, 0, 0, jump))
+    f.write(write_magic(MAGIC_14_BUF1))
+    f.write(data_movement_instruction(0, 0, 0, 0, 22, 0, 0, 0, 0, 2, beq))
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_P2_BUF1, 0, 0, 0, 0, 0, set_PC))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))
+    f.write(data_movement_instruction(0, 0, 0, 0, 27, 0, 0, 0, 0, 1, bne))
+    f.write(write_magic(MAGIC_15_BUF1_F0A))
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_A, 0, 0, 0, 0, 0, set_PC))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))
+    f.write(write_magic(MAGIC_18_F0A))
+    f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 0, 0, 0, 2, beq))
+    f.write(write_magic(MAGIC_20_F0A))
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_A, 0, 0, 0, 0, 0, set_PC))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))
+    f.write(write_magic(MAGIC_18_F0A))
+    f.write(data_movement_instruction(0, 0, 0, 0, -5, 0, 0, 0, 0, 0, jump))
+    f.write(write_magic(MAGIC_14_BUF0))
+    f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 0, 0, 0, 2, beq))
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_P2_BUF0, 0, 0, 0, 0, 0, set_PC))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))
+    f.write(data_movement_instruction(0, 0, 0, 0, 11, 0, 0, 0, 0, 1, bne))
+    f.write(data_movement_instruction(0, 0, 0, 0, -32, 0, 0, 0, 0, 0, jump))
+    f.write(write_magic(16))
+    f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 12, 0, 0, 0, 1, 12, addi))
+    f.write(write_magic(5))
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))
+    f.write(data_movement_instruction(0, 0, 0, 0, 5, 0, 0, 0, 0, 1, bne))
+    f.write(data_movement_instruction(gr, gr_hi, 0, 0, 5, 0, 0, 0, 12, 0, mv))
+    f.write(data_movement_instruction(gr, gr_lo, 0, 0, 6, 0, 0, 0, 12, 0, mv))
+    f.write(data_movement_instruction(0, 0, 0, 0, -78, 0, 1, 0, 5, 6, bge))
+    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 0, 0, 0, 0, jump))
+    f.write(write_magic(17))
+    f.write(write_magic(3))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
     f.close()
 
 def gwfa_compute():

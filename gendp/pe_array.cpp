@@ -353,6 +353,151 @@ inline int pe_array_read_gr(int *gr, int src, int idx) {
     return val;
 }
 
+// Load one batch of fin0 diags into FIN_0_TILE.
+// Multi-pass state in s1c[22]=n_done, s1c[24..31]=diag_done bitmap.
+// Returns true if more passes needed.
+bool pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
+    int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
+    int *spm = SPM_unit->buffer;
+    constexpr int ARC_META_BASE = 544;
+    int total_fin0 = s1c[20];
+    int ha_off = gwfa_get_mm_ha_off();
+    int seq_off_s2 = gr[29] & 0xFFFF;
+    int n_done = s1c[22];
+
+    // Read diag_done bitmap from s1c[24..31]
+    auto is_done = [&](int di) -> bool {
+        return (s1c[24 + (di >> 5)] >> (di & 31)) & 1;
+    };
+    auto mark_done = [&](int di) {
+        s1c[24 + (di >> 5)] |= (1 << (di & 31));
+    };
+
+    // Greedy assign with per-PE arc/diag caps
+    int pe_nd[4]={0,0,0,0}, pe_na[4]={0,0,0,0};
+    int diag_pe[256];
+    int pe_dlist[4][FIN0_N_MAX_DIAGS];
+    for (int di = 0; di < total_fin0; di++)
+        diag_pe[di] = -1;
+    for (int di = 0; di < total_fin0; di++) {
+        if (is_done(di)) continue;
+        int nv = s1c[ARC_META_BASE + 2*di + 1]
+            - s1c[ARC_META_BASE + 2*di];
+        int best = -1;
+        for (int p = 0; p < 4; p++) {
+            if (pe_nd[p] >= FIN0_N_MAX_DIAGS) continue;
+            if (pe_na[p] + nv > FIN0_N_MAX_ARCS) continue;
+            if (best < 0 || pe_na[p] < pe_na[best]) best = p;
+        }
+        if (best < 0) continue;
+        diag_pe[di] = best;
+        pe_dlist[best][pe_nd[best]] = di;
+        pe_na[best] += nv;
+        pe_nd[best]++;
+    }
+
+    // Round-robin load steps 1-4
+    int max_d = 0;
+    for (int p = 0; p < 4; p++)
+        if (pe_nd[p] > max_d) max_d = pe_nd[p];
+
+    // Pre-compute s1c arc data offset per diag
+    int diag_arc_off[256];
+    {
+        int off = s1c[21]*2 + ARC_META_BASE;
+        for (int di = 0; di < total_fin0; di++) {
+            diag_arc_off[di] = off;
+            int nv = s1c[ARC_META_BASE+2*di+1]
+                - s1c[ARC_META_BASE+2*di];
+            off += 2*nv;
+        }
+    }
+
+    // Step 1: Arc metadata
+    for (int d = 0; d < max_d; d++)
+        for (int pe = 0; pe < 4; pe++) {
+            if (d >= pe_nd[pe]) continue;
+            int di = pe_dlist[pe][d];
+            int ps = pe*SPM_BANK_GROUP_SIZE + fin0_base;
+            spm[ps+FIN0_ARCMETA+2*d] = s1c[ARC_META_BASE+2*di];
+            spm[ps+FIN0_ARCMETA+2*d+1] = s1c[ARC_META_BASE+2*di+1];
+        }
+
+    // Step 2: Arcs + ts_off
+    {
+        int pao[4] = {0,0,0,0};
+        for (int d = 0; d < max_d; d++)
+            for (int pe = 0; pe < 4; pe++) {
+                if (d >= pe_nd[pe]) continue;
+                int di = pe_dlist[pe][d];
+                int ps = pe*SPM_BANK_GROUP_SIZE + fin0_base;
+                int nv = s1c[ARC_META_BASE+2*di+1] - s1c[ARC_META_BASE+2*di];
+                int adp = diag_arc_off[di];
+                for (int a = 0; a < nv; a++) {
+                    int dst = ps + FIN0_ARCS + FIN0_ARC_WORDS*pao[pe];
+                    int pvw = s1c[adp]; int ow = s1c[adp+1];
+                    uint32_t w = (uint32_t)pvw >> 16;
+                    spm[dst] = pvw; spm[dst+1] = ow;
+                    spm[dst+2] = s2->buffer[seq_off_s2 + (int)w];
+                    adp += 2; pao[pe]++;
+                }
+            }
+    }
+
+    // Step 3: HA buckets
+    {
+        int pai[4] = {0,0,0,0};
+        for (int d = 0; d < max_d; d++)
+            for (int pe = 0; pe < 4; pe++) {
+                if (d >= pe_nd[pe]) continue;
+                int di = pe_dlist[pe][d];
+                int ps = pe*SPM_BANK_GROUP_SIZE + fin0_base;
+                uint32_t vd = (uint32_t)s1c[32+2*di];
+                int32_t i_v = (int32_t)(vd&0xFFFF) - GWF_DIAG_SHIFT + s1c[32+2*di+1];
+                int nv = s1c[ARC_META_BASE+2*di+1] - s1c[ARC_META_BASE+2*di];
+                for (int a = 0; a < nv; a++) {
+                    int as = ps + FIN0_ARCS + FIN0_ARC_WORDS*pai[pe];
+                    uint32_t w = (uint32_t)spm[as] >> 16;
+                    uint32_t hk = (w<<16) | ((i_v+1) & 0xFFFF);
+                    uint32_t h = hk*2654435769U >> (32-22);
+                    uint32_t b = (h>>2) & 0xFFFFF;
+                    int hd = ps + FIN0_HA + 4*pai[pe];
+                    int ms = ha_off + (int)(b*4);
+                    spm[hd]=mm[ms]; spm[hd+1]=mm[ms+1];
+                    spm[hd+2]=mm[ms+2]; spm[hd+3]=mm[ms+3];
+                    pai[pe]++;
+                }
+            }
+    }
+
+    // Step 4: Diags
+    for (int d = 0; d < max_d; d++)
+        for (int pe = 0; pe < 4; pe++) {
+            if (d >= pe_nd[pe]) continue;
+            int di = pe_dlist[pe][d];
+            int ps = pe*SPM_BANK_GROUP_SIZE + fin0_base;
+            spm[ps+FIN0_DIAGS+2*d] = s1c[32+2*di];
+            spm[ps+FIN0_DIAGS+2*d+1] = s1c[32+2*di+1];
+        }
+
+    // Step 5: Metadata
+    for (int pe = 0; pe < 4; pe++) {
+        int ps = pe*SPM_BANK_GROUP_SIZE + fin0_base;
+        spm[ps+FIN0_META] = pe_nd[pe];
+        spm[ps+FIN0_META+1] = pe_na[pe];
+        spm[ps+FIN0_META+2] = 0;
+        spm[ps+FIN0_META+3] = 0;
+        spm[ps+FIN0_META+4] = 0;
+    }
+
+    // Mark processed diags, update n_done
+    for (int di = 0; di < total_fin0; di++)
+        if (diag_pe[di] >= 0) { mark_done(di); n_done++; }
+    s1c[22] = n_done;
+
+    return n_done < total_fin0; // true = more passes needed
+}
+
 int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting) {
 #ifdef PROFILE
     // printf("main j=%d\t", main_addressing_register[12]);
@@ -1586,281 +1731,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             m15_s5_fin1_done:
                 (void)0;
 
-                // === Section 6: Multi-pass FIN0 processing ===
-                // 15a loads data → FIN_0_TILE, PE computes hash+match,
-                // 15b writes results to MM. Repeats if arcs overflow.
+                // === Section 6 (15a): Init + load first FIN0 batch ===
+                // Multi-pass state in s1c[22]=n_done, s1c[24..31]=bitmap.
+                // gr[2] = 1 if more passes needed, 0 if done.
+                // ISA flow handles: set_PC FIN0 → spin → magic 18 → loop.
                 {
                     int fin0_base = (magic_mask & 2)
                         ? GWFA_FIN0B_BASE : GWFA_FIN0_BASE;
-                    int total_fin0 = s1c[20];
-                    int ha_off = gwfa_get_mm_ha_off();
-                    int ha_dirty_off = gwfa_get_mm_ha_dirty_off();
-                    int seq_off_s2 = gr[29] & 0xFFFF;
-                    bool diag_done[256] = {};
-                    int n_done = 0;
-
-                while (n_done < total_fin0) {
-                    // --- 15a: assign + load batch ---
-                    int prev_done = n_done;
-                    int pe_nd[4]={0,0,0,0}, pe_na[4]={0,0,0,0};
-                    int diag_pe[256];
-                    for (int di = 0; di < total_fin0; di++)
-                        diag_pe[di] = -1;
-                    // Greedy assign: fewest-arcs-first, cap per PE
-                    // Build per-PE diag lists for round-robin loading
-                    int pe_dlist[4][FIN0_N_MAX_DIAGS];
-                    for (int di = 0; di < total_fin0; di++) {
-                        if (diag_done[di]) continue;
-                        int nv = s1c[ARC_META_BASE + 2*di + 1]
-                            - s1c[ARC_META_BASE + 2*di];
-                        int best = -1;
-                        for (int p = 0; p < 4; p++) {
-                            if (pe_nd[p] >= FIN0_N_MAX_DIAGS)
-                                continue;
-                            if (pe_na[p] + nv > FIN0_N_MAX_ARCS)
-                                continue;
-                            if (best < 0
-                                || pe_na[p] < pe_na[best])
-                                best = p;
-                        }
-                        if (best < 0) continue; // defer
-                        diag_pe[di] = best;
-                        pe_dlist[best][pe_nd[best]] = di;
-                        pe_na[best] += nv;
-                        pe_nd[best]++;
-                    }
-                    // Steps 1-4: Load data into FIN_0_TILE.
-                    // Round-robin across PEs for bank group rotation.
-                    {
-                        int max_d = 0;
-                        for (int p = 0; p < 4; p++)
-                            if (pe_nd[p] > max_d) max_d = pe_nd[p];
-
-                        // Step 1: Arc metadata → FIN0_ARCMETA
-                        for (int d = 0; d < max_d; d++) {
-                            for (int pe = 0; pe < 4; pe++) {
-                                if (d >= pe_nd[pe]) continue;
-                                int di = pe_dlist[pe][d];
-                                int ps = pe*SPM_BANK_GROUP_SIZE
-                                    + fin0_base;
-                                spm[ps+FIN0_ARCMETA+2*d]
-                                    = s1c[ARC_META_BASE+2*di];
-                                spm[ps+FIN0_ARCMETA+2*d+1]
-                                    = s1c[ARC_META_BASE+2*di+1];
-                            }
-                        }
-
-                        // Pre-compute s1c arc data offset per diag
-                        // (arcs in s1c are contiguous by diag order)
-                        int diag_arc_off[256];
-                        {
-                            int off = s1c[21]*2 + ARC_META_BASE;
-                            for (int di = 0; di < total_fin0; di++) {
-                                diag_arc_off[di] = off;
-                                int nv = s1c[ARC_META_BASE+2*di+1]
-                                    - s1c[ARC_META_BASE+2*di];
-                                off += 2*nv;
-                            }
-                        }
-
-                        // Step 2: Arcs + ts_off → FIN0_ARCS
-                        {
-                            int pao[4] = {0,0,0,0};
-                            for (int d = 0; d < max_d; d++) {
-                                for (int pe = 0; pe < 4; pe++) {
-                                    if (d >= pe_nd[pe]) continue;
-                                    int di = pe_dlist[pe][d];
-                                    int ps = pe*SPM_BANK_GROUP_SIZE
-                                        + fin0_base;
-                                    int nv = s1c[ARC_META_BASE+2*di+1]
-                                        - s1c[ARC_META_BASE+2*di];
-                                    int adp = diag_arc_off[di];
-                                    for (int a = 0; a < nv; a++) {
-                                        int dst = ps + FIN0_ARCS
-                                            + FIN0_ARC_WORDS*pao[pe];
-                                        int pvw = s1c[adp];
-                                        int ow = s1c[adp+1];
-                                        uint32_t w = (uint32_t)pvw>>16;
-                                        spm[dst] = pvw;
-                                        spm[dst+1] = ow;
-                                        spm[dst+2] = s2->buffer[
-                                            seq_off_s2+(int)w];
-                                        adp += 2;
-                                        pao[pe]++;
-                                    }
-                                }
-                            }
-                        }
-
-                        // Step 3: HA buckets → FIN0_HA
-                        {
-                            int pai[4] = {0,0,0,0};
-                            for (int d = 0; d < max_d; d++) {
-                                for (int pe = 0; pe < 4; pe++) {
-                                    if (d >= pe_nd[pe]) continue;
-                                    int di = pe_dlist[pe][d];
-                                    int ps = pe*SPM_BANK_GROUP_SIZE
-                                        + fin0_base;
-                                    uint32_t vd=(uint32_t)s1c[32+2*di];
-                                    int32_t k_v = s1c[32+2*di+1];
-                                    int32_t d_v = (int32_t)(vd&0xFFFF)
-                                        - GWF_DIAG_SHIFT;
-                                    int32_t i_v = d_v + k_v;
-                                    int nv = s1c[ARC_META_BASE+2*di+1]
-                                        - s1c[ARC_META_BASE+2*di];
-                                    for (int a = 0; a < nv; a++) {
-                                        int as = ps + FIN0_ARCS
-                                            + FIN0_ARC_WORDS*pai[pe];
-                                        uint32_t w = (uint32_t)spm[as]
-                                            >> 16;
-                                        uint32_t hk = (w<<16)
-                                            | ((i_v+1) & 0xFFFF);
-                                        uint32_t h = hk*2654435769U
-                                            >> (32-22);
-                                        uint32_t b = (h>>2) & 0xFFFFF;
-                                        int hd = ps + FIN0_HA
-                                            + 4*pai[pe];
-                                        int ms = ha_off + (int)(b*4);
-                                        spm[hd]=mm[ms];
-                                        spm[hd+1]=mm[ms+1];
-                                        spm[hd+2]=mm[ms+2];
-                                        spm[hd+3]=mm[ms+3];
-                                        pai[pe]++;
-                                    }
-                                }
-                            }
-                        }
-
-                        // Step 4: Diags → FIN0_DIAGS
-                        for (int d = 0; d < max_d; d++) {
-                            for (int pe = 0; pe < 4; pe++) {
-                                if (d >= pe_nd[pe]) continue;
-                                int di = pe_dlist[pe][d];
-                                int ps = pe*SPM_BANK_GROUP_SIZE
-                                    + fin0_base;
-                                spm[ps+FIN0_DIAGS+2*d]
-                                    = s1c[32+2*di];
-                                spm[ps+FIN0_DIAGS+2*d+1]
-                                    = s1c[32+2*di+1];
-                            }
-                        }
-                    }
-                    // Step 5: Metadata
-                    for (int pe = 0; pe < 4; pe++) {
-                        int ps = pe*SPM_BANK_GROUP_SIZE+fin0_base;
-                        spm[ps+FIN0_META] = pe_nd[pe];
-                        spm[ps+FIN0_META+1] = pe_na[pe];
-                        spm[ps+FIN0_META+2] = 0;
-                        spm[ps+FIN0_META+3] = 0;
-                        spm[ps+FIN0_META+4] = 0;
-                    }
-                    // --- Inline PE FIN0 compute (magic 19) ---
-                    for (int pi = 0; pi < 4; pi++) {
-                        int fs = pi*SPM_BANK_GROUP_SIZE+fin0_base;
-                        int nd=spm[fs+FIN0_META];
-                        int nA=0,nB=0,nH=0,ai=0;
-                        for (int dd=0; dd<nd; dd++) {
-                            uint32_t vdf=(uint32_t)spm[fs+FIN0_DIAGS+2*dd];
-                            int32_t kf=spm[fs+FIN0_DIAGS+2*dd+1];
-                            uint32_t vf=vdf>>16;
-                            int32_t dvf=(int32_t)(vdf&0xFFFF)-GWF_DIAG_SHIFT;
-                            int32_t ivf=dvf+kf;
-                            int nv=spm[fs+FIN0_ARCMETA+2*dd+1]-spm[fs+FIN0_ARCMETA+2*dd];
-                            int32_t nex=0;
-                            for (int af=0; af<nv; af++) {
-                                int ao=fs+FIN0_ARCS+FIN0_ARC_WORDS*ai;
-                                int pvw=spm[ao], owf=spm[ao+1], tsf=spm[ao+2];
-                                uint32_t wf=(uint32_t)pvw>>16;
-                                uint32_t hk=(wf<<16)|((ivf+1)&0xFFFF);
-                                int *bk=&spm[fs+FIN0_HA+4*ai];
-                                int ab=-1;
-                                for (int ii=0;ii<4;ii++) {
-                                    if ((uint32_t)bk[ii]==hk) {ab=0;break;}
-                                    if (bk[ii]==(int)0xFFFFFFFF) {
-                                        bk[ii]=(int)hk; ab=1;
-                                        if (ii==0) { // first key → record dirty
-                                            spm[fs+FIN0_OUT_HA+2*nH]=ai;
-                                            uint32_t h2=hk*2654435769U>>(32-22);
-                                            spm[fs+FIN0_OUT_HA+2*nH+1]=(int)((h2>>2)&0xFFFFF);
-                                            nH++;
-                                        }
-                                        break;
-                                    }
-                                }
-                                if (ab==-1) ab=0;
-                                int qp=ivf+1;
-                                int qc=(spm[apply_address_swizzle(GWFA_Q_START+(qp>>4))]>>((qp&0xF)<<1))&3;
-                                int gp=tsf+owf;
-                                int gc=(spm[apply_address_swizzle(GWFA_GS_START+(gp>>4))]>>((gp&0xF)<<1))&3;
-                                if (qc==gc) {
-                                    nex++;
-                                    if (ab) {
-                                        uint32_t nv2=(wf<<16)|((GWF_DIAG_SHIFT+ivf+1-owf)&0xFFFF);
-                                        spm[fs+FIN0_OUT+2*nA]=(int)nv2;
-                                        spm[fs+FIN0_OUT+2*nA+1]=owf; nA++;
-                                    }
-                                } else if (ab) {
-                                    uint32_t sv=(wf<<16)|((GWF_DIAG_SHIFT+ivf-owf)&0xFFFF);
-                                    int bo=FIN0_OUT_SIZE-2-2*nB;
-                                    spm[fs+FIN0_OUT+bo]=(int)sv; spm[fs+FIN0_OUT+bo+1]=owf; nB++;
-                                    uint32_t iv=(wf<<16)|((GWF_DIAG_SHIFT+ivf+1-owf)&0xFFFF);
-                                    bo=FIN0_OUT_SIZE-2-2*nB;
-                                    spm[fs+FIN0_OUT+bo]=(int)iv; spm[fs+FIN0_OUT+bo+1]=owf; nB++;
-                                }
-                                ai++;
-                            }
-                            if (nv==0||nex!=nv) {
-                                uint32_t dv=(vf<<16)|((GWF_DIAG_SHIFT+dvf+1)&0xFFFF);
-                                int bo=FIN0_OUT_SIZE-2-2*nB;
-                                spm[fs+FIN0_OUT+bo]=(int)dv; spm[fs+FIN0_OUT+bo+1]=kf; nB++;
-                            }
-                        }
-                        spm[fs+FIN0_META+2]=nA; spm[fs+FIN0_META+3]=nB; spm[fs+FIN0_META+4]=nH;
-                    }
-                    // --- Inline 15b writeback ---
-                    for (int pi = 0; pi < 4; pi++) {
-                        int ws=pi*SPM_BANK_GROUP_SIZE+fin0_base;
-                        int nA=spm[ws+FIN0_META+2], nB=spm[ws+FIN0_META+3], nH=spm[ws+FIN0_META+4];
-                        for (int i=0;i<nA;i++) {
-                            gr[7]=gr[26]&A_MASK_VAL; gr[7]=gr[7]+gr[7]; gr[7]=gr[7]+gr[21];
-                            mm[gr[7]]=spm[ws+FIN0_OUT+2*i]; mm[gr[7]+1]=spm[ws+FIN0_OUT+2*i+1];
-                            gr[26]+=1; gr[27]+=1;
-                        }
-                        for (int i=0;i<nB;i++) {
-                            int bo=528-2-2*i;
-                            gr[7]=gr[20]+gr[24]; gr[7]=gr[7]+gr[24];
-                            mm[gr[7]]=spm[ws+FIN0_OUT+bo]; mm[gr[7]+1]=spm[ws+FIN0_OUT+bo+1];
-                            gr[24]+=1;
-                        }
-                        for (int i=0;i<nH;i++) {
-                            int ai2=spm[ws+FIN0_OUT_HA+2*i], bi2=spm[ws+FIN0_OUT_HA+2*i+1];
-                            int hs=ws+FIN0_HA+4*ai2, md=ha_off+bi2*4;
-                            mm[md]=spm[hs]; mm[md+1]=spm[hs+1]; mm[md+2]=spm[hs+2]; mm[md+3]=spm[hs+3];
-                            mm[ha_dirty_off+gr[31]]=bi2; gr[31]+=1;
-                        }
-                    }
-                    gwfa_sync_counters(gr[24], (uint32_t)gr[25],
-                        (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
-                    gwfa_set_ha_n_dirty((uint32_t)gr[31]);
-                    // Mark processed diags
-                    for (int di = 0; di < total_fin0; di++)
-                        if (diag_pe[di] >= 0) {
-                            diag_done[di] = true;
-                            n_done++;
-                        }
-                    if (n_done == prev_done) {
-                        fprintf(stderr, "FIN0 multi-pass stuck:"
-                            " n_done=%d total_fin0=%d\n",
-                            n_done, total_fin0);
-                        // Dump unprocessed diag arc counts
-                        for (int di = 0; di < total_fin0; di++)
-                            if (!diag_done[di])
-                                fprintf(stderr, "  di=%d nv=%d\n",
-                                    di, s1c[ARC_META_BASE+2*di+1]
-                                    - s1c[ARC_META_BASE+2*di]);
-                        exit(-1);
-                    }
-                } // end multi-pass while
+                    s1c[22] = 0;
+                    for (int i = 24; i < 32; i++) s1c[i] = 0;
+                    bool more = fin0_load_batch(fin0_base, magic_mask);
+                    gr[2] = more ? 1 : 0;
                 }
             }
 
@@ -1868,6 +1749,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             gwfa_sync_counters(gr[24], (uint32_t)gr[25],
                 (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
             gwfa_set_ha_n_dirty((uint32_t)gr[31]);
+        } else if (magic_id == 20) {
+            // Magic 20: FIN0 subsequent batch load (15a-only).
+            // Resumes multi-pass state from s1c, loads next batch.
+            // gr[2] = 1 if more passes needed, 0 if done.
+            int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
+            int fin0_base = (magic_mask & 2)
+                ? GWFA_FIN0B_BASE : GWFA_FIN0_BASE;
+            bool more = fin0_load_batch(fin0_base, magic_mask);
+            gr[2] = more ? 1 : 0;
         } else if (magic_id == 18) {
             // Magic 15b: FIN0 writeback — read PE output from
             // FIN_0_TILE, write A/B queues and HA buckets to MM.
@@ -1885,6 +1775,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int n_A = spm[pe_spm + FIN0_META + 2];
                 int n_B = spm[pe_spm + FIN0_META + 3];
                 int n_HA = spm[pe_spm + FIN0_META + 4];
+                if (n_A > 0 || n_B > 0)
 
                 // Write A_list → MM A queue
                 for (int i = 0; i < n_A; i++) {
@@ -1930,6 +1821,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     mm[ha_dirty_off + gr[31]] = b;
                     gr[31] = gr[31] + 1;
                 }
+                // Clear output metadata so delayed writeback is a no-op
+                spm[pe_spm + FIN0_META + 2] = 0;
+                spm[pe_spm + FIN0_META + 3] = 0;
+                spm[pe_spm + FIN0_META + 4] = 0;
             }
 
             // Counter sync

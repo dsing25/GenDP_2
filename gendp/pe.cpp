@@ -1370,7 +1370,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                         if (bkt[i] == (int)0xFFFFFFFF) {
                             bkt[i] = (int)hkey;
                             absent = 1;
-                            if (i == 0) { // first key → record dirty
+                            if (i == 0) { // first key in bucket
                                 fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
                                 uint32_t h2 = hkey * 2654435769U
                                     >> (32 - 22);
