@@ -686,6 +686,16 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         };
 
         if (magic_id == 8) {
+#if 0   // Reference implementation (for debugging only)
+            {
+                int buf_base = (magic_mask & 1)
+                    ? GWFA_BUF1_BASE : GWFA_BUF0_BASE;
+                int *spm_pe = &SPM_unit->buffer[
+                    id * SPM_BANK_GROUP_SIZE + buf_base];
+                extern void gwfa_tile_compute(int *spm);
+                gwfa_tile_compute(spm_pe);
+            }
+#else
             // Register-mapped magic 8: gwfa extend+emit per tile.
             // All values in gr[]/reg[]/SPM, each op = one ISA instruction.
             //
@@ -892,7 +902,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //COMP (speculative if not last emit
             {
                 gr.st(2, gr.at(1, CTRL_GR_LO) + gr.at(1, CTRL_GR_LO));                  // 2*i
-                gr.st(15, reg[9] + 1);                        // prev_vd+1
+                gr.st(15, gr.at(8) + 1);                      // vd+1 (for seq check)
             }
             // === SEQUENTIAL CHECK ===
             // If branching to last_emits, skip reg moves — last_emits
@@ -950,11 +960,10 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 goto m8_seq_last_swap;
 
 
-            reg[2] = gr.at(9);
+            reg[1] = reg[2];                      // pk = old ppk (before overwrite)
+            reg[2] = gr.at(9);                    // ppk = prev extended k
             gr.st(8, spm[TILE_A_OFF + gr.at(2)]); gr.st(9, spm[TILE_A_OFF + gr.at(2) + 1]);
-            
-            //Be careful of ordering when we update these. We should get old val of reg2  on ld
-            reg[1] = reg[2];
+
             gr.st(15, reg[9] + 1);
 
             if (gr.at(8) != gr.at(15))
@@ -988,6 +997,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 //set PC comp
                 
             }
+            reg[9] = gr.at(8);                    // prev_vd = current vd
             gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO);
             goto m8_seq_while;
 
@@ -1053,6 +1063,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             spm[META_INTV_N] = gr.at(13);                // intv_n
             //NOP
         m8_done: ;
+#endif // reference vs PE implementation
         } else if (magic_id == 11) {
             // Boundary sort: compare-and-swap last B of this PE with first B of next PE
             // Ping-pong: mask bit 0 selects buffer half
