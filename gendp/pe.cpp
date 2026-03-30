@@ -1382,14 +1382,15 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                         if (bkt[i] == (int)0xFFFFFFFF) {
                             bkt[i] = (int)hkey;
                             absent = 1;
-                            if (i == 0) { // first key in bucket
-                                fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
-                                uint32_t h2 = hkey * 2654435769U
-                                    >> (32 - 22);
-                                fspm[FIN0_OUT_HA + 2*n_HA + 1]
-                                    = (int)((h2 >> 2) & 0xFFFFF);
-                                n_HA++;
-                            }
+                            // Always record modified bucket for writeback
+                            fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
+                            uint32_t h2 = hkey * 2654435769U
+                                >> (32 - 22);
+                            uint32_t b = (h2 >> 2) & 0xFFFFF;
+                            // Bit 20 = new-bucket flag (first key in bucket)
+                            if (i == 0) b |= (1u << 20);
+                            fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
+                            n_HA++;
                             break;
                         }
                     }

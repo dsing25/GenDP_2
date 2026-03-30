@@ -24,6 +24,7 @@ PerfCounter lsqFullStalls = 0;
 PerfCounter peHalted = 0;
 PerfCounter forwardableBankConflict = 0;
 PerfCounter controllerSpinCycles = 0;
+PerfCounter fin0DupDiags = 0;
 
 pe_array::pe_array(int input_size, int output_size) {
 
@@ -1797,6 +1798,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
                 s1c[21] = gr[7];                          // total_diags
 
+                // --- Non-ISA performance counter: duplicate fin0 diags ---
+                {
+                    int tf = s1c[20];
+                    for (int i = 0; i < tf; i++)
+                        for (int j = i + 1; j < tf; j++)
+                            if (s1c[32+2*i] == s1c[32+2*j] &&
+                                s1c[32+2*i+1] == s1c[32+2*j+1])
+                                fin0DupDiags++;
+                }
+                // --- End non-ISA performance counter ---
+
                 // === Section 4: Prefetch arc_off pairs S2 → S1c ===
                 // s1c[ARC_META+2*d]=arc_off[v], s1c[ARC_META+2*d+1]=arc_off[v+1]
                 gr[13] = (unsigned)gr[18] >> 16;          // shifti_r: arc_off_s2
@@ -2010,22 +2022,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
                 // Write HA dirty buckets back to MM
                 for (int i = 0; i < n_HA; i++) {
-                    int bucket_idx = spm[pe_spm + FIN0_OUT_HA + 2*i];
-                    // The PE wrote the modified bucket in-place in
-                    // FIN0_HA. Read 4 words and write to MM.
-                    // bucket_idx encodes which arc's bucket slot.
-                    int arc_idx = bucket_idx;
+                    int arc_idx = spm[pe_spm + FIN0_OUT_HA + 2*i];
                     int ha_spm = pe_spm + FIN0_HA + 4*arc_idx;
-                    // The second word stores the MM bucket index
-                    int b = spm[pe_spm + FIN0_OUT_HA + 2*i + 1];
+                    int b_raw = spm[pe_spm + FIN0_OUT_HA + 2*i + 1];
+                    int b = b_raw & 0xFFFFF;            // bucket index
+                    int new_bucket = b_raw & (1 << 20); // new-bucket flag
                     int mm_dst = ha_off + b * 4;
+                    // Always write modified bucket back to MM
                     mm[mm_dst]   = spm[ha_spm];
                     mm[mm_dst+1] = spm[ha_spm+1];
                     mm[mm_dst+2] = spm[ha_spm+2];
                     mm[mm_dst+3] = spm[ha_spm+3];
-                    // Record dirty bucket
-                    mm[ha_dirty_off + gr[31]] = b;
-                    gr[31] = gr[31] + 1;
+                    // Only record in dirty list for newly-allocated buckets
+                    if (new_bucket) {
+                        mm[ha_dirty_off + gr[31]] = b;
+                        gr[31] = gr[31] + 1;
+                    }
                 }
                 // Clear output metadata so delayed writeback is a no-op
                 spm[pe_spm + FIN0_META + 2] = 0;
@@ -3393,6 +3405,7 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     printf("LsqFullStalls: %d\n", lsqFullStalls);
     printf("PeHalted: %d\n", peHalted);
     printf("SyncSpinBNEs: %d\n", controllerSpinCycles);
+    printf("Fin0DupDiags: %d\n", fin0DupDiags);
 
     // fprintf(stderr, "Finish simulation.\n");
 }
