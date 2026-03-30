@@ -354,8 +354,10 @@ inline int pe_array_read_gr(int *gr, int src, int idx) {
     return val;
 }
 
-// Load one batch of fin0 diags into FIN_0_TILE.
+// Load one batch of fin0 diags into FIN_0_TILE (ISA-style).
+// Single-pass assign+copy, then batched S2 and MM loads.
 // Multi-pass state in s1c[22]=n_done, s1c[24..31]=diag_done bitmap.
+// s1c[0..3]=nd, s1c[4..7]=na, s1c[8..11]=pe_spm_base, s1c[12..15]=pai
 // Returns true if more passes needed.
 bool pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
@@ -363,138 +365,245 @@ bool pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     constexpr int ARC_META_BASE = 544;
     int total_fin0 = s1c[20];
     int ha_off = gwfa_get_mm_ha_off();
-    int seq_off_s2 = gr[29] & 0xFFFF;
     int n_done = s1c[22];
 
-    // Read diag_done bitmap from s1c[24..31]
-    auto is_done = [&](int di) -> bool {
-        return (s1c[24 + (di >> 5)] >> (di & 31)) & 1;
-    };
-    auto mark_done = [&](int di) {
-        s1c[24 + (di >> 5)] |= (1 << (di & 31));
-    };
-
-    // Greedy assign with per-PE arc/diag caps
-    int pe_nd[4]={0,0,0,0}, pe_na[4]={0,0,0,0};
-    int diag_pe[256];
-    int pe_dlist[4][FIN0_N_MAX_DIAGS];
-    for (int di = 0; di < total_fin0; di++)
-        diag_pe[di] = -1;
-    for (int di = 0; di < total_fin0; di++) {
-        if (is_done(di)) continue;
-        int nv = s1c[ARC_META_BASE + 2*di + 1]
-            - s1c[ARC_META_BASE + 2*di];
-        int best = -1;
-        for (int p = 0; p < 4; p++) {
-            if (pe_nd[p] >= FIN0_N_MAX_DIAGS) continue;
-            if (pe_na[p] + nv > FIN0_N_MAX_ARCS) continue;
-            if (best < 0 || pe_na[p] < pe_na[best]) best = p;
-        }
-        if (best < 0) continue;
-        diag_pe[di] = best;
-        pe_dlist[best][pe_nd[best]] = di;
-        pe_na[best] += nv;
-        pe_nd[best]++;
-    }
-
-    // Round-robin load steps 1-4
-    int max_d = 0;
-    for (int p = 0; p < 4; p++)
-        if (pe_nd[p] > max_d) max_d = pe_nd[p];
-
-    // Pre-compute s1c arc data offset per diag
-    int diag_arc_off[256];
-    {
-        int off = s1c[21]*2 + ARC_META_BASE;
-        for (int di = 0; di < total_fin0; di++) {
-            diag_arc_off[di] = off;
-            int nv = s1c[ARC_META_BASE+2*di+1]
-                - s1c[ARC_META_BASE+2*di];
-            off += 2*nv;
-        }
-    }
-
-    // Step 1: Arc metadata
-    for (int d = 0; d < max_d; d++)
-        for (int pe = 0; pe < 4; pe++) {
-            if (d >= pe_nd[pe]) continue;
-            int di = pe_dlist[pe][d];
-            int ps = pe*SPM_BANK_GROUP_SIZE + fin0_base;
-            spm[ps+FIN0_ARCMETA+2*d] = s1c[ARC_META_BASE+2*di];
-            spm[ps+FIN0_ARCMETA+2*d+1] = s1c[ARC_META_BASE+2*di+1];
-        }
-
-    // Step 2: Arcs + ts_off
-    {
-        int pao[4] = {0,0,0,0};
-        for (int d = 0; d < max_d; d++)
-            for (int pe = 0; pe < 4; pe++) {
-                if (d >= pe_nd[pe]) continue;
-                int di = pe_dlist[pe][d];
-                int ps = pe*SPM_BANK_GROUP_SIZE + fin0_base;
-                int nv = s1c[ARC_META_BASE+2*di+1] - s1c[ARC_META_BASE+2*di];
-                int adp = diag_arc_off[di];
-                for (int a = 0; a < nv; a++) {
-                    int dst = ps + FIN0_ARCS + FIN0_ARC_WORDS*pao[pe];
-                    int pvw = s1c[adp]; int ow = s1c[adp+1];
-                    uint32_t w = (uint32_t)pvw >> 16;
-                    spm[dst] = pvw; spm[dst+1] = ow;
-                    spm[dst+2] = s2->buffer[seq_off_s2 + (int)w];
-                    adp += 2; pao[pe]++;
-                }
-            }
-    }
-
-    // Step 3: HA buckets
-    {
-        int pai[4] = {0,0,0,0};
-        for (int d = 0; d < max_d; d++)
-            for (int pe = 0; pe < 4; pe++) {
-                if (d >= pe_nd[pe]) continue;
-                int di = pe_dlist[pe][d];
-                int ps = pe*SPM_BANK_GROUP_SIZE + fin0_base;
-                uint32_t vd = (uint32_t)s1c[32+2*di];
-                int32_t i_v = (int32_t)(vd&0xFFFF) - GWF_DIAG_SHIFT + s1c[32+2*di+1];
-                int nv = s1c[ARC_META_BASE+2*di+1] - s1c[ARC_META_BASE+2*di];
-                for (int a = 0; a < nv; a++) {
-                    int as = ps + FIN0_ARCS + FIN0_ARC_WORDS*pai[pe];
-                    uint32_t w = (uint32_t)spm[as] >> 16;
-                    uint32_t hk = (w<<16) | ((i_v+1) & 0xFFFF);
-                    uint32_t h = hk*2654435769U >> (32-22);
-                    uint32_t b = (h>>2) & 0xFFFFF;
-                    int hd = ps + FIN0_HA + 4*pai[pe];
-                    int ms = ha_off + (int)(b*4);
-                    spm[hd]=mm[ms]; spm[hd+1]=mm[ms+1];
-                    spm[hd+2]=mm[ms+2]; spm[hd+3]=mm[ms+3];
-                    pai[pe]++;
-                }
-            }
-    }
-
-    // Step 4: Diags
-    for (int d = 0; d < max_d; d++)
-        for (int pe = 0; pe < 4; pe++) {
-            if (d >= pe_nd[pe]) continue;
-            int di = pe_dlist[pe][d];
-            int ps = pe*SPM_BANK_GROUP_SIZE + fin0_base;
-            spm[ps+FIN0_DIAGS+2*d] = s1c[32+2*di];
-            spm[ps+FIN0_DIAGS+2*d+1] = s1c[32+2*di+1];
-        }
-
-    // Step 5: Metadata
+    // === Pass 1: Greedy assign + copy S1C → SPM ===
+    // Iterates all fin0 diags. For each unprocessed diag, finds
+    // best PE (least arcs with capacity), copies arc_meta, arcs
+    // (pvw,ow only), and diag data from S1C to that PE's FIN0 tile.
+    // ts_off and HA slots are filled by Passes 2 and 3.
     for (int pe = 0; pe < 4; pe++) {
-        int ps = pe*SPM_BANK_GROUP_SIZE + fin0_base;
-        spm[ps+FIN0_META] = pe_nd[pe];
-        spm[ps+FIN0_META+1] = pe_na[pe];
-        spm[ps+FIN0_META+2] = 0;
-        spm[ps+FIN0_META+3] = 0;
-        spm[ps+FIN0_META+4] = 0;
+        s1c[pe] = 0;                                     // si: nd=0
+        s1c[4 + pe] = 0;                                // si: na=0
+        s1c[8 + pe] = pe * SPM_BANK_GROUP_SIZE + fin0_base; // si
+    }
+    // Arc data read pointer (advances linearly through S1C)
+    gr[11] = s1c[21];                                     // mv: total_diags
+    //NOP
+    gr[11] = gr[11] + gr[11];                            // add: 2*total_diags
+    //NOP
+    gr[11] = gr[11] + ARC_META_BASE;                     // addi: arc_data_start
+    gr[2] = total_fin0;                                  // mv
+    gr[14] = 0;                                          // si: di=0
+    //NOP
+f0b_p1:
+    if (gr[14] >= gr[2]) goto f0b_p1_done;               // bge
+    //NOP
+    // Read nv (always, to advance arc_data_ptr)
+    gr[9] = gr[14] + gr[14];                             // add: 2*di
+    //NOP
+    gr[10] = s1c[ARC_META_BASE + gr[9] + 1];            // mv: hi
+    gr[1] = s1c[ARC_META_BASE + gr[9]];                 // mv: lo
+    //NOP
+    gr[10] = gr[10] - gr[1];                             // sub: nv
+    // Check done bitmap
+    gr[7] = gr[14] >> 5;                                 // shifti_r
+    gr[8] = gr[14] & 31;                                 // andi
+    //NOP
+    gr[7] = s1c[24 + gr[7]];                            // mv: word
+    //NOP
+    gr[7] = (unsigned)gr[7] >> gr[8];                    // shift_r
+    gr[7] = gr[7] & 1;                                  // andi
+    //NOP
+    if (gr[7] != 0) goto f0b_p1_advance;                // bne: done
+    //NOP
+    // Find best PE (least arcs, has capacity)
+    gr[3] = -1;                                          // si: best=-1
+    gr[4] = 0x7FFFFFFF;                                  // si: best_na
+    for (int pe = 0; pe < 4; pe++) {
+        gr[7] = s1c[pe];                                 // mv: nd[pe]
+        gr[8] = s1c[4 + pe];                             // mv: na[pe]
+        //NOP
+        if (gr[7] >= FIN0_N_MAX_DIAGS) continue;         // bge: full
+        gr[7] = gr[8] + gr[10];                          // add: na+nv
+        //NOP
+        if (gr[7] > FIN0_N_MAX_ARCS) continue;           // bgt: overflow
+        if (gr[8] >= gr[4]) continue;                    // bge: not better
+        gr[3] = pe;                                      // mv: best=pe
+        gr[4] = gr[8];                                   // mv: best_na
+    }
+    //NOP
+    if (gr[3] < 0) goto f0b_p1_advance;                 // blt: no fit
+    //NOP
+    {
+        // gr[3]=best, gr[10]=nv, gr[9]=2*di, gr[11]=arc_data_ptr
+        int best = gr[3];
+        gr[5] = s1c[8 + best];                          // mv: pe_spm
+        gr[6] = s1c[best];                               // mv: nd
+        gr[7] = gr[6] + gr[6];                          // add: 2*nd
+        //NOP
+        // Arc metadata → SPM
+        spm[gr[5]+FIN0_ARCMETA+gr[7]]   = s1c[ARC_META_BASE+gr[9]];     // mvd
+        spm[gr[5]+FIN0_ARCMETA+gr[7]+1] = s1c[ARC_META_BASE+gr[9]+1];   // mvd
+        // Diag data → SPM
+        spm[gr[5]+FIN0_DIAGS+gr[7]]   = s1c[32+gr[9]];                  // mvd
+        spm[gr[5]+FIN0_DIAGS+gr[7]+1] = s1c[32+gr[9]+1];                // mvd
+        // Arcs (pvw, ow) → SPM; ts_off slot left for Pass 2
+        gr[8] = s1c[4 + best];                          // mv: na
+        gr[1] = gr[11];                                  // mv: arc_data_ptr
+        gr[4] = 0;                                       // si: a=0
+        //NOP
+    f0b_p1_arcs:
+        if (gr[4] >= gr[10]) goto f0b_p1_arcs_done;     // bge
+        //NOP
+        gr[7] = gr[8] + gr[8];                          // add: 2*na
+        gr[7] = gr[7] + gr[8];                          // add: 3*na
+        //NOP
+        gr[7] = gr[5] + FIN0_ARCS + gr[7];             // add: spm dst
+        //NOP
+        spm[gr[7]]   = s1c[gr[1]];                      // mv: pvw
+        spm[gr[7]+1] = s1c[gr[1]+1];                    // mv: ow
+        gr[8] = gr[8] + 1;                              // addi: na++
+        gr[1] = gr[1] + 2;                              // addi: ptr+=2
+        gr[4] = gr[4] + 1;                              // addi: a++
+        goto f0b_p1_arcs;
+    f0b_p1_arcs_done:
+        s1c[4 + best] = gr[8];                          // mv: na
+        s1c[best] = gr[6] + 1;                          // addi: nd++
+        // Mark done bitmap
+        gr[7] = gr[14] >> 5;                            // shifti_r
+        gr[8] = gr[14] & 31;                            // andi
+        //NOP
+        gr[9] = 1 << gr[8];                             // shift_l
+        //NOP
+        s1c[24 + gr[7]] = s1c[24 + gr[7]] | gr[9];     // or
+        n_done++;
+    }
+f0b_p1_advance:
+    gr[7] = gr[10] + gr[10];                            // add: 2*nv
+    //NOP
+    gr[11] = gr[11] + gr[7];                            // add: arc_data_ptr
+    gr[14] = gr[14] + 1;                                // addi: di++
+    goto f0b_p1;
+f0b_p1_done:
+    s1c[22] = n_done;                                   // mv: update
+
+    // === Pass 2: Batch S2 loads for ts_off (PE-inner) ===
+    {
+        gr[5] = 0;                                       // si: max_na
+        for (int pe = 0; pe < 4; pe++) {
+            gr[7] = s1c[4 + pe];                         // mv
+            //NOP
+            if (gr[7] > gr[5]) gr[5] = gr[7];
+        }
+        gr[14] = gr[29] & 0xFFFF;                       // andi: seq_off_s2
+        gr[11] = 0;                                      // si: a=0
+        //NOP
+    f0b_p2:
+        if (gr[11] >= gr[5]) goto f0b_p2_done;          // bge
+        //NOP
+        for (int pe = 0; pe < 4; pe++) {
+            gr[10] = s1c[4 + pe];                        // mv: na[pe]
+            //NOP
+            if (gr[11] >= gr[10]) continue;               // bge: skip
+            gr[7] = s1c[8 + pe];                         // mv: pe_spm
+            gr[8] = gr[11] + gr[11];                     // add: 2*a
+            gr[8] = gr[8] + gr[11];                      // add: 3*a
+            //NOP
+            gr[8] = gr[7] + FIN0_ARCS + gr[8];          // add: arc addr
+            //NOP
+            gr[9] = (unsigned)spm[gr[8]] >> 16;          // shifti_r: w
+            //NOP
+            spm[gr[8]+2] = s2->buffer[gr[14] + gr[9]];  // mv: ts_off
+        }
+        gr[11] = gr[11] + 1;                            // addi
+        goto f0b_p2;
+    f0b_p2_done:
+        // waitLSQ
+        (void)0;
     }
 
-    // Mark processed diags, update n_done
-    for (int di = 0; di < total_fin0; di++)
-        if (diag_pe[di] >= 0) { mark_done(di); n_done++; }
-    s1c[22] = n_done;
+    // === Pass 3: Batch MM loads for HA (diag-outer, PE-inner) ===
+    {
+        gr[2] = 0;                                       // si: max_nd
+        for (int pe = 0; pe < 4; pe++) {
+            gr[7] = s1c[pe];                             // mv
+            //NOP
+            if (gr[7] > gr[2]) gr[2] = gr[7];
+        }
+        s1c[12]=0; s1c[13]=0; s1c[14]=0; s1c[15]=0;    // pai[0..3]=0
+        gr[14] = 0;                                      // si: d=0
+        //NOP
+    f0b_p3_d:
+        if (gr[14] >= gr[2]) goto f0b_p3_done;          // bge
+        //NOP
+        for (int pe = 0; pe < 4; pe++) {
+            gr[13] = s1c[pe];                            // mv: nd[pe]
+            //NOP
+            if (gr[14] >= gr[13]) continue;               // bge: skip
+            gr[7] = s1c[8 + pe];                         // mv: pe_spm
+            gr[9] = gr[14] + gr[14];                     // add: 2*d
+            //NOP
+            // Read diag from SPM for i_val
+            gr[3] = spm[gr[7] + FIN0_DIAGS + gr[9]];     // mv: vd
+            gr[4] = spm[gr[7] + FIN0_DIAGS + gr[9] + 1]; // mv: k
+            //NOP
+            gr[5] = gr[3] & 0xFFFF;                      // andi: vd.lo
+            //NOP
+            gr[5] = gr[5] - GWF_DIAG_SHIFT;              // subi
+            //NOP
+            gr[5] = gr[5] + gr[4];                       // add: i_val
+            // Arc count from SPM arcmeta
+            gr[8] = spm[gr[7] + FIN0_ARCMETA + gr[9]];   // mv: lo
+            gr[13] = spm[gr[7] + FIN0_ARCMETA + gr[9]+1]; // mv: hi
+            //NOP
+            gr[10] = gr[13] - gr[8];                      // sub: nv
+            gr[1] = 0;                                   // si: a=0
+            //NOP
+        f0b_p3_a:
+            if (gr[1] >= gr[10]) goto f0b_p3_a_done;    // bge
+            //NOP
+            {
+                gr[8] = s1c[12 + pe];                    // mv: pai
+                //NOP
+                gr[9] = gr[8] + gr[8];                   // add: 2*pai
+                gr[9] = gr[9] + gr[8];                   // add: 3*pai
+                //NOP
+                gr[9] = gr[7] + FIN0_ARCS + gr[9];      // add: arc addr
+                //NOP
+                gr[3] = (unsigned)spm[gr[9]] >> 16;      // shifti_r: w
+                gr[4] = gr[5] + 1;                       // addi: i_val+1
+                // non-ISA: hash multiply
+                uint32_t hk = ((uint32_t)gr[3] << 16)
+                    | ((uint32_t)gr[4] & 0xFFFF);
+                uint32_t h = hk * 2654435769U >> (32-22);
+                uint32_t b = (h >> 2) & 0xFFFFF;
+                // 4*pai for HA addr
+                gr[9] = gr[8] + gr[8];                   // add: 2*pai
+                gr[9] = gr[9] + gr[9];                   // add: 4*pai
+                //NOP
+                gr[9] = gr[7] + FIN0_HA + gr[9];        // add: ha addr
+                int ms = ha_off + (int)(b * 4);
+                spm[gr[9]]   = mm[ms];                   // mvd: bucket
+                spm[gr[9]+1] = mm[ms+1];
+                spm[gr[9]+2] = mm[ms+2];
+                spm[gr[9]+3] = mm[ms+3];
+                s1c[12 + pe] = gr[8] + 1;               // addi: pai++
+            }
+            gr[1] = gr[1] + 1;                          // addi
+            goto f0b_p3_a;
+        f0b_p3_a_done:
+            (void)0;
+        }
+        gr[14] = gr[14] + 1;                            // addi
+        goto f0b_p3_d;
+    f0b_p3_done:
+        // waitLSQ
+        (void)0;
+    }
+
+    // === Pass 4: Write metadata ===
+    for (int pe = 0; pe < 4; pe++) {
+        gr[7] = s1c[8 + pe];                            // mv: pe_spm
+        gr[8] = s1c[pe];                                 // mv: nd
+        gr[9] = s1c[4 + pe];                            // mv: na
+        //NOP
+        spm[gr[7] + FIN0_META]     = gr[8];              // mv: n_diags
+        spm[gr[7] + FIN0_META + 1] = gr[9];              // mv: n_arcs
+        spm[gr[7] + FIN0_META + 2] = 0;                  // si
+        spm[gr[7] + FIN0_META + 3] = 0;                  // si
+        spm[gr[7] + FIN0_META + 4] = 0;                  // si
+    }
 
     return n_done < total_fin0; // true = more passes needed
 }
