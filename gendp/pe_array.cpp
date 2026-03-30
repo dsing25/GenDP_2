@@ -1977,9 +1977,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             bool more = fin0_load_batch(fin0_base, magic_mask);
             gr[2] = more ? 1 : 0;
         } else if (magic_id == 18) {
-            // Magic 15b: FIN0 writeback — read PE output from
+            // Magic 18: FIN0 writeback — read PE output from
             // FIN_0_TILE, write A/B queues and HA buckets to MM.
-            // mask bit 1 selects FIN0 ping-pong buffer to read.
+            // Element-outer, PE-inner pattern.
             constexpr int A_MASK_VAL = (16 << 20) - 1;
             int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
             int *spm = SPM_unit->buffer;
@@ -1988,61 +1988,160 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int ha_off = gwfa_get_mm_ha_off();
             int ha_dirty_off = gwfa_get_mm_ha_dirty_off();
 
+            // --- Phase 1: Read metadata from all 4 PEs ---
             for (int pe = 0; pe < 4; pe++) {
-                int pe_spm = pe * SPM_BANK_GROUP_SIZE + fin0_base;
-                int n_A = spm[pe_spm + FIN0_META + 2];
-                int n_B = spm[pe_spm + FIN0_META + 3];
-                int n_HA = spm[pe_spm + FIN0_META + 4];
-                if (n_A > 0 || n_B > 0)
+                gr[7] = pe * SPM_BANK_GROUP_SIZE + fin0_base; // si
+                s1c[12 + pe] = gr[7];                    // mv: pe_spm_base
+                //NOP; //NOP
+                s1c[pe] = spm[gr[7] + FIN0_META + 2];    // mv: n_A
+                s1c[4 + pe] = spm[gr[7] + FIN0_META + 3]; // mv: n_B
+                s1c[8 + pe] = spm[gr[7] + FIN0_META + 4]; // mv: n_HA
+            }
 
-                // Write A_list → MM A queue
-                for (int i = 0; i < n_A; i++) {
-                    int vd = spm[pe_spm + FIN0_OUT + 2*i];
-                    int ow = spm[pe_spm + FIN0_OUT + 2*i + 1];
-                    gr[7] = gr[26] & A_MASK_VAL;
-                    gr[7] = gr[7] + gr[7];
-                    gr[7] = gr[7] + gr[21];
-                    mm[gr[7]] = vd;
-                    mm[gr[7] + 1] = ow;
-                    gr[26] = gr[26] + 1;                  // A_tail++
-                    gr[27] = gr[27] + 1;                  // A_count++
+            // --- Phase 2: A writeback SPM → MM (circular A queue) ---
+            {
+                gr[5] = 0;                                // si: max_nA
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[7] = s1c[pe];                      // mv: n_A
+                    //NOP
+                    if (gr[7] > gr[5]) gr[5] = gr[7];    // max
                 }
+                // Per-PE forward src ptrs → s1c[16..19]
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[7] = s1c[12 + pe];                 // mv: pe_spm
+                    //NOP
+                    s1c[16 + pe] = gr[7] + FIN0_OUT;      // addi: src
+                }
+                gr[11] = 0;                               // si: i
+                //NOP
+            m18_a_outer:
+                if (gr[11] >= gr[5]) goto m18_a_done;     // bge
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[10] = s1c[pe];                     // mv: n_A[pe]
+                    //NOP
+                    if (gr[11] >= gr[10]) continue;        // bge: skip
+                    gr[7] = s1c[16 + pe];                 // mv: src
+                    //NOP
+                    gr[9] = spm[gr[7]];                   // mv: vd
+                    gr[1] = spm[gr[7]+1];                 // mv: ow
+                    gr[3] = gr[26] & A_MASK_VAL;          // andi: masked tail
+                    //NOP
+                    gr[3] = gr[3] + gr[3];                // add: 2*idx
+                    gr[3] = gr[3] + gr[21];               // add: + A_base
+                    //NOP
+                    mm[gr[3]] = gr[9];                    // mv: vd → MM
+                    mm[gr[3]+1] = gr[1];                  // mv: ow → MM
+                    gr[26] = gr[26] + 1;                  // addi: A_tail++
+                    gr[27] = gr[27] + 1;                  // addi: A_count++
+                    gr[7] = gr[7] + 2;                    // addi: src+=2
+                    s1c[16 + pe] = gr[7];                 // mv: update src
+                }
+                gr[11] = gr[11] + 1;                      // addi
+                goto m18_a_outer;
+            m18_a_done:
+                (void)0;
+            }
 
-                // Write B_list → MM B queue (B stored at end of FIN0_OUT)
-                for (int i = 0; i < n_B; i++) {
-                    int bo = FIN0_OUT_SIZE - 2 - 2*i;
-                    int vd = spm[pe_spm + FIN0_OUT + bo];
-                    int k_or_ow = spm[pe_spm + FIN0_OUT + bo + 1];
-                    gr[7] = gr[20] + gr[24];
-                    gr[7] = gr[7] + gr[24];
-                    mm[gr[7]] = vd;
-                    mm[gr[7] + 1] = k_or_ow;
-                    gr[24] = gr[24] + 1;                  // B_n++
+            // --- Phase 3: B writeback SPM → MM (backward read) ---
+            {
+                gr[5] = 0;                                // si: max_nB
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[7] = s1c[4 + pe];                  // mv: n_B
+                    //NOP
+                    if (gr[7] > gr[5]) gr[5] = gr[7];    // max
                 }
+                // Per-PE backward src ptrs → s1c[16..19]
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[7] = s1c[12 + pe];                 // mv: pe_spm
+                    //NOP
+                    s1c[16 + pe] = gr[7] + (FIN0_OUT + FIN0_OUT_SIZE - 2);
+                }
+                gr[11] = 0;                               // si: i
+                //NOP
+            m18_b_outer:
+                if (gr[11] >= gr[5]) goto m18_b_done;     // bge
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[10] = s1c[4 + pe];                 // mv: n_B[pe]
+                    //NOP
+                    if (gr[11] >= gr[10]) continue;        // bge: skip
+                    gr[7] = s1c[16 + pe];                 // mv: src
+                    //NOP
+                    gr[9] = spm[gr[7]];                   // mv: vd
+                    gr[1] = spm[gr[7]+1];                 // mv: k_or_ow
+                    gr[3] = gr[20] + gr[24];              // add
+                    gr[3] = gr[3] + gr[24];               // add: B_base+2*B_n
+                    //NOP
+                    mm[gr[3]] = gr[9];                    // mv: vd → MM
+                    mm[gr[3]+1] = gr[1];                  // mv: k_or_ow → MM
+                    gr[24] = gr[24] + 1;                  // addi: B_n++
+                    gr[7] = gr[7] - 2;                    // subi: backward
+                    s1c[16 + pe] = gr[7];                 // mv: update src
+                }
+                gr[11] = gr[11] + 1;                      // addi
+                goto m18_b_outer;
+            m18_b_done:
+                (void)0;
+            }
 
-                // Write HA dirty buckets back to MM
-                for (int i = 0; i < n_HA; i++) {
-                    int arc_idx = spm[pe_spm + FIN0_OUT_HA + 2*i];
-                    int ha_spm = pe_spm + FIN0_HA + 4*arc_idx;
-                    int b_raw = spm[pe_spm + FIN0_OUT_HA + 2*i + 1];
-                    int b = b_raw & 0xFFFFF;            // bucket index
-                    int new_bucket = b_raw & (1 << 20); // new-bucket flag
-                    int mm_dst = ha_off + b * 4;
-                    // Always write modified bucket back to MM
-                    mm[mm_dst]   = spm[ha_spm];
-                    mm[mm_dst+1] = spm[ha_spm+1];
-                    mm[mm_dst+2] = spm[ha_spm+2];
-                    mm[mm_dst+3] = spm[ha_spm+3];
-                    // Only record in dirty list for newly-allocated buckets
-                    if (new_bucket) {
-                        mm[ha_dirty_off + gr[31]] = b;
-                        gr[31] = gr[31] + 1;
-                    }
+            // --- Phase 4: HA writeback SPM → MM (conditional dirty) ---
+            {
+                gr[5] = 0;                                // si: max_nHA
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[7] = s1c[8 + pe];                  // mv: n_HA
+                    //NOP
+                    if (gr[7] > gr[5]) gr[5] = gr[7];    // max
                 }
-                // Clear output metadata so delayed writeback is a no-op
-                spm[pe_spm + FIN0_META + 2] = 0;
-                spm[pe_spm + FIN0_META + 3] = 0;
-                spm[pe_spm + FIN0_META + 4] = 0;
+                gr[11] = 0;                               // si: i
+                //NOP
+            m18_ha_outer:
+                if (gr[11] >= gr[5]) goto m18_ha_done;    // bge
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[10] = s1c[8 + pe];                 // mv: n_HA[pe]
+                    //NOP
+                    if (gr[11] >= gr[10]) continue;        // bge: skip
+                    gr[7] = s1c[12 + pe];                 // mv: pe_spm
+                    gr[8] = gr[11] + gr[11];              // add: 2*i
+                    //NOP
+                    gr[9] = spm[gr[7] + FIN0_OUT_HA + gr[8]];     // mv: arc_idx
+                    gr[1] = spm[gr[7] + FIN0_OUT_HA + gr[8] + 1]; // mv: b_raw
+                    //NOP
+                    gr[3] = gr[1] & 0xFFFFF;              // andi: bucket idx
+                    gr[4] = gr[1] & (1 << 20);            // andi: new_bucket
+                    // HA SPM addr: pe_spm + FIN0_HA + 4*arc_idx
+                    gr[8] = gr[9] + gr[9];                // add: 2*arc_idx
+                    gr[8] = gr[8] + gr[8];                // add: 4*arc_idx
+                    //NOP
+                    gr[8] = gr[7] + FIN0_HA + gr[8];      // add: ha_spm
+                    // MM dest: ha_off + b*4
+                    gr[9] = gr[3] + gr[3];                // add: 2*b
+                    gr[9] = gr[9] + gr[9];                // add: 4*b
+                    //NOP
+                    gr[9] = gr[9] + ha_off;               // add: mm_dst
+                    //NOP
+                    mm[gr[9]]   = spm[gr[8]];             // mvd: bucket → MM
+                    mm[gr[9]+1] = spm[gr[8]+1];
+                    mm[gr[9]+2] = spm[gr[8]+2];
+                    mm[gr[9]+3] = spm[gr[8]+3];
+                    if (gr[4] == 0) continue;              // beq: skip dirty
+                    mm[ha_dirty_off + gr[31]] = gr[3];    // mv: record bucket
+                    gr[31] = gr[31] + 1;                  // addi: dirty_n++
+                }
+                gr[11] = gr[11] + 1;                      // addi
+                goto m18_ha_outer;
+            m18_ha_done:
+                (void)0;
+            }
+
+            // --- Phase 5: Clear output metadata ---
+            for (int pe = 0; pe < 4; pe++) {
+                gr[7] = s1c[12 + pe];                     // mv: pe_spm
+                //NOP
+                spm[gr[7] + FIN0_META + 2] = 0;          // si: n_A=0
+                spm[gr[7] + FIN0_META + 3] = 0;          // si: n_B=0
+                spm[gr[7] + FIN0_META + 4] = 0;          // si: n_HA=0
             }
 
             // Counter sync
