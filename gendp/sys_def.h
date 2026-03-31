@@ -155,7 +155,7 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_COMP_IB 3
 #define CTRL_CTRL_IB 4
 #define CTRL_S1C 4         // Controller scratchpad (repurposed ctrl_ib)
-#define S1C_SIZE 4096
+#define S1C_SIZE 8192
 #define CTRL_IN_BUF 5
 #define CTRL_OUT_BUF 6
 #define CTRL_IN_PORT 7
@@ -178,10 +178,30 @@ inline int get_base_opcode(int opcode) {
 #define GWFA_GS_START 25088  // 98KB
 
 // GWFA ping-pong buffer bases (per-PE SPM offsets)
-#define GWFA_BUF0_BASE 0
-#define GWFA_BUF1_BASE 1280
-#define GWFA_P2_BASE   2560
-#define GWFA_P2B_BASE  3840
+// Phase 1 and phase 2 compute tiles alias the same addresses
+// (phases don't overlap, so no conflict)
+#define GWFA_BUF0_BASE  0
+#define GWFA_BUF1_BASE  1280
+#define GWFA_P2_BASE    0       // aliases BUF0 during phase 2
+#define GWFA_P2B_BASE   1280    // aliases BUF1 during phase 2
+#define GWFA_FIN0_BASE  2560    // fin0 hash dedup tile A
+#define GWFA_FIN0B_BASE 4288    // fin0 hash dedup tile B (each 1728w)
+
+// FIN0_TILE layout (static offsets within each FIN0 region per PE)
+// N_MAX_DIAGS=64, N_MAX_ARCS=100. Shared A/B output.
+// Total: 8+128+128+300+400+528+200 = 1692w (36 spare of 1728)
+#define FIN0_META       0       // 8w: n_diags, n_arcs, n_A, n_B, n_HA
+#define FIN0_DIAGS      8       // 128w: (vd, k) × 64
+#define FIN0_ARCMETA    136     // 128w: (lo, hi) × 64
+#define FIN0_ARCS       264     // 300w: (packed_vw, ow, ts_off) × 100
+#define FIN0_HA         564     // 400w: HA buckets (4 words) × 100
+#define FIN0_OUT        964     // 528w: combined A+B output
+#define FIN0_OUT_SIZE   528     // A forward from 0, B backward from end
+#define FIN0_OUT_HA     1492    // 200w: HA dirty × 100
+#define FIN0_N_MAX_ARCS  100
+#define FIN0_N_MAX_DIAGS 64
+#define FIN0_ARC_WORDS   3      // words per arc: packed_vw, ow, ts_off
+// FIN0_OUT: A from start, B from end. Max = 2*100+64 = 264 entries.
 
 // GWFA graph topology in S2 (controller access)
 #define GRAPH_START 0

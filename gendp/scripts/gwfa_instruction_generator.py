@@ -11,9 +11,12 @@ PE_BUF1_COMPUTE = 9
 PE_BUF1_SORT    = 13
 PE_P2_BUF0      = 17
 PE_P2_BUF1      = 21
+PE_FIN0_A       = 25
+PE_FIN0_B       = 29
 
 # Magic IDs with mask encoding: (magic_id << 8) | mask
 # mask bit 0 = buffer index (0=buf0, 1=buf1)
+# mask bit 1 = FIN0 buffer index (0=FIN0_A, 2=FIN0_B)
 MAGIC_7_BUF0  = 7
 MAGIC_7_BUF1  = (7 << 8) | 1
 MAGIC_8_BUF0  = 8
@@ -28,10 +31,21 @@ MAGIC_14_BUF0 = 14
 MAGIC_14_BUF1 = (14 << 8) | 1
 MAGIC_15_BUF0 = 15
 MAGIC_15_BUF1 = (15 << 8) | 1
+# mask bit 1 = FIN0 buffer (0=FIN0_A, 2=FIN0_B)
+MAGIC_15_BUF0_F0A = 15
+MAGIC_15_BUF0_F0B = (15 << 8) | 2
+MAGIC_15_BUF1_F0A = (15 << 8) | 1
+MAGIC_15_BUF1_F0B = (15 << 8) | 3
+MAGIC_18_F0A  = 18
+MAGIC_18_F0B  = (18 << 8) | 2
+MAGIC_19_F0A  = 19
+MAGIC_19_F0B  = (19 << 8) | 2
+MAGIC_20_F0A  = 20
+MAGIC_20_F0B  = (20 << 8) | 2
 
 # Sort phase magic IDs
-MAGIC_18_BUF0 = 18
-MAGIC_18_BUF1 = (18 << 8) | 1
+MAGIC_34_BUF0 = 34
+MAGIC_34_BUF1 = (34 << 8) | 1
 MAGIC_19      = 19
 MAGIC_24_BUF0 = 24
 MAGIC_24_BUF1 = (24 << 8) | 1
@@ -40,10 +54,10 @@ MAGIC_25_BUF1 = (25 << 8) | 1
 MAGIC_32      = 32
 
 # PE sort code locations
-PE_SORT_BIN_COUNT_PING = 25
-PE_SORT_BIN_COUNT_PONG = 29
-PE_SORT_SCATTER_PING   = 33
-PE_SORT_SCATTER_PONG   = 37
+PE_SORT_BIN_COUNT_PING = 33
+PE_SORT_BIN_COUNT_PONG = 37
+PE_SORT_SCATTER_PING   = 41
+PE_SORT_SCATTER_PONG   = 45
 
 # PE magic IDs for sort
 MAGIC_20_BUF0 = 20
@@ -63,8 +77,8 @@ MAGIC_31_BUF1 = (31 << 8) | 1
 MAGIC_32      = 32
 
 # PE dedup code locations
-PE_DEDUP_PING = 41
-PE_DEDUP_PONG = 45
+PE_DEDUP_PING = 49
+PE_DEDUP_PONG = 53
 
 # PE magic IDs for dedup
 MAGIC_23_BUF0 = 23
@@ -75,14 +89,14 @@ def emit_sort_loop(f):
     Caller must set gr[1]=0 before calling. Uses gr[1..7,24], s1c[], SPM."""
     # --- BIN COUNT PHASE ---
     f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si))                       # +0: gr[2]=0 (cursor=0)
-    f.write(write_magic(MAGIC_18_BUF0))                                                            # +1: load tile→PING
+    f.write(write_magic(MAGIC_34_BUF0))                                                            # +1: load tile→PING
     f.write(data_movement_instruction(0, 0, 0, 0, PE_SORT_BIN_COUNT_PING, 0, 0, 0, 0, 0, set_PC)) # +2: set_PC bin count PING
     f.write(data_movement_instruction(0, 0, 0, 0, 12, 0, 1, 0, 2, 6, bge))                      # +3: bge cursor>=nape → +12 (+15)
-    f.write(write_magic(MAGIC_18_BUF1))                                                            # +4: SS_PONG
+    f.write(write_magic(MAGIC_34_BUF1))                                                            # +4: SS_PONG
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # +5: spin
     f.write(data_movement_instruction(0, 0, 0, 0, PE_SORT_BIN_COUNT_PONG, 0, 0, 0, 0, 0, set_PC)) # +6: set_PC bin count PONG
     f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 1, 0, 2, 6, bge))                       # +7: bge → +6 (+13)
-    f.write(write_magic(MAGIC_18_BUF0))                                                            # +8: SS_PING
+    f.write(write_magic(MAGIC_34_BUF0))                                                            # +8: SS_PING
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # +9: spin
     f.write(data_movement_instruction(0, 0, 0, 0, PE_SORT_BIN_COUNT_PING, 0, 0, 0, 0, 0, set_PC)) # +10: set_PC bin count PING
     f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 1, 0, 2, 6, bge))                       # +11: bge → +4 (+15)
@@ -166,88 +180,130 @@ def gwfa_main_instruction():
     f.write(data_movement_instruction(gr, fifo[0], 0, 0, 3, 0, 0, 0, 0, 0, mv))                  # PC 31: gr[3]=fifo[0]
     f.write(data_movement_instruction(gr, fifo[1], 0, 0, 4, 0, 0, 0, 0, 0, mv))                  # PC 32: gr[4]=fifo[1]
     f.write(write_magic(12))                                                                       # PC 33: flush to s_B_a
-    # === PHASE 2 PROLOGUE (bufA, no prev writeback) ===
-    f.write(write_magic(MAGIC_14_BUF0))                                                            # PC 34: p2 tile load bufA
-    f.write(data_movement_instruction(0, 0, 0, 0, 20, 0, 0, 0, 0, 2, beq))                       # PC 35: beq gr[2]==0 → +20 (PC 55: P2_FINAL)
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_P2_BUF0, 0, 0, 0, 0, 0, set_PC))            # PC 36: set_PC p2 bufA
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 37: spin gr[13]
-    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))          # PC 38: gr[1]=SPM[32767]
-    f.write(data_movement_instruction(0, 0, 0, 0, 137, 0, 0, 0, 0, 1, bne))                      # PC 39: bne gr[1]!=0 -> +137 (PC 176: SCORE)
-    # === PHASE 2 STEADY STATE: bufB half ===
-    # Writeback bufA FIRST (pushes to A queue), then load+compute bufB
-    f.write(write_magic(MAGIC_15_BUF0))                                                            # PC 40: writeback bufA → A queue
-    f.write(write_magic(MAGIC_14_BUF1))                                                            # PC 41: p2 tile load bufB
-    f.write(data_movement_instruction(0, 0, 0, 0, 13, 0, 0, 0, 0, 2, beq))                       # PC 42: beq gr[2]==0 → +13 (PC 55: P2_FINAL)
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_P2_BUF1, 0, 0, 0, 0, 0, set_PC))            # PC 43: set_PC p2 bufB
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 44: spin gr[13]
-    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))          # PC 45: gr[1]=SPM[32767]
-    f.write(data_movement_instruction(0, 0, 0, 0, 130, 0, 0, 0, 0, 1, bne))                      # PC 46: bne gr[1]!=0 -> +130 (PC 176: SCORE)
-    # === PHASE 2 STEADY STATE: bufA half ===
-    # Writeback bufB FIRST (pushes to A queue), then load+compute bufA
-    f.write(write_magic(MAGIC_15_BUF1))                                                            # PC 47: writeback bufB → A queue
-    f.write(write_magic(MAGIC_14_BUF0))                                                            # PC 48: p2 tile load bufA
-    f.write(data_movement_instruction(0, 0, 0, 0, 6, 0, 0, 0, 0, 2, beq))                        # PC 49: beq gr[2]==0 → +6 (PC 55: P2_FINAL)
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_P2_BUF0, 0, 0, 0, 0, 0, set_PC))            # PC 50: set_PC p2 bufA
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 51: spin gr[13]
-    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))          # PC 52: gr[1]=SPM[32767]
-    f.write(data_movement_instruction(0, 0, 0, 0, 123, 0, 0, 0, 0, 1, bne))                      # PC 53: bne gr[1]!=0 -> +123 (PC 176: SCORE)
-    f.write(data_movement_instruction(0, 0, 0, 0, -14, 0, 0, 0, 0, 0, jump))                     # PC 54: jump -14 → PC 40 (P2_SS_BUFB)
-    # === PHASE 2 DONE → INTV SORT → INTV MERGE → DIAG SORT → DEDUP ===
-    # magic 16: sync counters, filter next_intv, setup intv sort state
-    f.write(write_magic(16))                                                                       # PC 55: P2_FINAL: intv sort setup
-    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 0, 0, si))                       # PC 56: gr[1]=0 (pass=0)
-    # === SORT LOOP 1: intv sort (PCs 57-98, 42 instructions) ===
-    emit_sort_loop(f)
-    # === INTV MERGE + DIAG SORT SETUP ===
-    f.write(write_magic(MAGIC_26))                                                                  # PC 99: intv merge + diag sort setup
-    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 0, 0, si))                       # PC 100: gr[1]=0 (pass=0)
-    # === SORT LOOP 2: diag sort (PCs 101-142, 42 instructions) ===
-    emit_sort_loop(f)
-    # === DEDUP LOOP ===
-    f.write(write_magic(MAGIC_29))                                                                  # PC 143: split search + intv preload
-    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si))                       # PC 144: gr[2]=0 (dedup cursor)
-    # --- DEDUP PROLOGUE: load PING tile ---
-    f.write(write_magic(MAGIC_30_BUF0))                                                            # PC 145: load tile->PING, gr[2]+=DEDUP_TILE
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PING, 0, 0, 0, 0, 0, set_PC))         # PC 146: set_PC PE dedup PING
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 147: spin gr[13]
-    f.write(data_movement_instruction(0, 0, 0, 0, 17, 0, 1, 0, 2, 6, bge))                      # PC 148: bge cursor>=niter -> +17 (PC 165: DEPIL_A)
-    # --- SS_PONG: load PONG, spin for PING, writeback PING ---
-    f.write(write_magic(MAGIC_30_BUF1))                                                            # PC 149: SS_PONG
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 150: spin gr[13]
-    f.write(write_magic(MAGIC_31_BUF0))                                                            # PC 151: writeback PING
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PONG, 0, 0, 0, 0, 0, set_PC))         # PC 152: set_PC PE dedup PONG
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 153: spin gr[13]
-    f.write(data_movement_instruction(0, 0, 0, 0, 8, 0, 1, 0, 2, 6, bge))                       # PC 154: bge cursor>=niter -> +8 (PC 162: DEPIL_B)
-    # --- SS_PING: load PING, spin for PONG, writeback PONG ---
-    f.write(write_magic(MAGIC_30_BUF0))                                                            # PC 155: SS_PING
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 156: spin gr[13]
-    f.write(write_magic(MAGIC_31_BUF1))                                                            # PC 157: writeback PONG
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PING, 0, 0, 0, 0, 0, set_PC))         # PC 158: set_PC PE dedup PING
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 159: spin gr[13]
-    f.write(data_movement_instruction(0, 0, 0, 0, 5, 0, 1, 0, 2, 6, bge))                       # PC 160: bge cursor>=niter -> +5 (PC 165: DEPIL_A)
-    f.write(data_movement_instruction(0, 0, 0, 0, -12, 0, 0, 0, 0, 0, jump))                     # PC 161: jump -12 -> PC 149 (SS_PONG)
-    # --- DEPIL_B: last PONG tile ---
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 162: DEPIL_B: spin gr[13]
-    f.write(write_magic(MAGIC_31_BUF1))                                                            # PC 163: writeback last PONG output
-    f.write(data_movement_instruction(0, 0, 0, 0, 3, 0, 0, 0, 0, 0, jump))                       # PC 164: jump +3 -> PC 167 (DEDUP_DONE)
-    # --- DEPIL_A: last PING tile ---
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 165: DEPIL_A: spin gr[13]
-    f.write(write_magic(MAGIC_31_BUF0))                                                            # PC 166: writeback last PING output
-    # fallthrough to DEDUP_DONE
-    f.write(write_magic(MAGIC_32))                                                                  # PC 167: DEDUP_DONE: gather + finalize
+    # === PHASE 2 (overlapped: magic18+magic15 during PE_P2, magic14 during PE_FIN0) ===
+    # --- Prologue: load both buffers, compute BUF1 to seed HALF_A ---
+    prologue_start = f.write_count
+    f.write(write_magic(MAGIC_14_BUF0))                                                              # load first tiles
+    br_p2exit = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 2, beq))                          # beq gr[2]==0 → P2_EXIT
+    f.write(write_magic(MAGIC_14_BUF1))                                                              # load second tiles
+    br_single = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 2, beq))                          # beq gr[2]==0 → SINGLE
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_P2_BUF1, 0, 0, 0, 0, 0, set_PC))              # PE_P2_BUF1
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))            # drain check
+    br_drain_pro = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 1, bne))                          # bne → DRAIN_EXIT
+    # --- HALF_A: PE_P2_BUF0 || magic18+magic15, PE_FIN0_A || magic14 ---
+    half_a = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_P2_BUF0, 0, 0, 0, 0, 0, set_PC))              # set_PC PE_P2_BUF0
+    f.write(write_magic(MAGIC_18_F0B))                                                               # magic18 FIN0_B [OVERLAP]
+    f.write(write_magic(MAGIC_15_BUF1_F0A))                                                          # magic15 BUF1→FIN0_A [OVERLAP]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin PE_P2
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))            # drain check
+    br_drain_ha = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 1, bne))                          # bne → DRAIN_EXIT
+    # Multipass intermediate passes (if any) — serial
+    br_skip_mp_a = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 2, beq))                          # beq gr[2]==0 → skip_mp
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_A, 0, 0, 0, 0, 0, set_PC))               # set_PC PE_FIN0_A
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin
+    f.write(write_magic(MAGIC_18_F0A))                                                               # magic18 writeback
+    f.write(write_magic(MAGIC_20_F0A))                                                               # magic20 load next, sets gr[2]
+    f.write(data_movement_instruction(0, 0, 0, 0, -4, 0, 0, 0, 0, 2, bne))                         # bne gr[2]!=0 → loop (-4)
+    # Final/only FIN0 pass — overlapped with magic14
+    f.patch_imm0(br_skip_mp_a, f.write_count - br_skip_mp_a)
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_A, 0, 0, 0, 0, 0, set_PC))               # set_PC PE_FIN0_A
+    f.write(write_magic(MAGIC_14_BUF1))                                                              # magic14 BUF1 [OVERLAP]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin PE_FIN0
+    br_drainA = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 2, beq))                          # beq gr[2]==0 → DRAIN_AFTER_A
+    # --- HALF_B: PE_P2_BUF1 || magic18+magic15, PE_FIN0_B || magic14 ---
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_P2_BUF1, 0, 0, 0, 0, 0, set_PC))              # set_PC PE_P2_BUF1
+    f.write(write_magic(MAGIC_18_F0A))                                                               # magic18 FIN0_A [OVERLAP]
+    f.write(write_magic(MAGIC_15_BUF0_F0B))                                                          # magic15 BUF0→FIN0_B [OVERLAP]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin PE_P2
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))            # drain check
+    br_drain_hb = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 1, bne))                          # bne → DRAIN_EXIT
+    # Multipass intermediate passes (if any) — serial
+    br_skip_mp_b = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 2, beq))                          # beq gr[2]==0 → skip_mp
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_B, 0, 0, 0, 0, 0, set_PC))               # set_PC PE_FIN0_B
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin
+    f.write(write_magic(MAGIC_18_F0B))                                                               # magic18 writeback
+    f.write(write_magic(MAGIC_20_F0B))                                                               # magic20 load next, sets gr[2]
+    f.write(data_movement_instruction(0, 0, 0, 0, -4, 0, 0, 0, 0, 2, bne))                         # bne gr[2]!=0 → loop (-4)
+    # Final/only FIN0 pass — overlapped with magic14
+    f.patch_imm0(br_skip_mp_b, f.write_count - br_skip_mp_b)
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_B, 0, 0, 0, 0, 0, set_PC))               # set_PC PE_FIN0_B
+    f.write(write_magic(MAGIC_14_BUF0))                                                              # magic14 BUF0 [OVERLAP]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin PE_FIN0
+    br_drainB = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 2, beq))                          # beq gr[2]==0 → DRAIN_AFTER_B
+    f.write(data_movement_instruction(0, 0, 0, 0, half_a - f.write_count, 0, 0, 0, 0, 0, jump))    # jump → HALF_A
+    # --- DRAIN_AFTER_A: flush deferred FIN0_A, writeback P2_BUF0 → FIN0_B drain ---
+    f.patch_imm0(br_drainA, f.write_count - br_drainA)
+    f.write(write_magic(MAGIC_18_F0A))                                                               # magic18 FIN0_A (flush deferred)
+    f.write(write_magic(MAGIC_15_BUF0_F0B))                                                          # magic15 BUF0→FIN0_B
+    # SHARED_FIN0_B_DRAIN (multipass → re-check via PROLOGUE)
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_B, 0, 0, 0, 0, 0, set_PC))               # set_PC PE_FIN0_B
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin
+    f.write(write_magic(MAGIC_18_F0B))                                                               # magic18 FIN0_B
+    f.write(data_movement_instruction(0, 0, 0, 0, prologue_start - f.write_count, 0, 0, 0, 0, 2, beq))  # beq gr[2]==0 → PROLOGUE
+    f.write(write_magic(MAGIC_20_F0B))                                                               # magic20 FIN0_B
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_B, 0, 0, 0, 0, 0, set_PC))               # set_PC PE_FIN0_B
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin
+    f.write(write_magic(MAGIC_18_F0B))                                                               # magic18 FIN0_B
+    f.write(data_movement_instruction(0, 0, 0, 0, -5, 0, 0, 0, 0, 0, jump))                        # jump -5
+    # --- DRAIN_AFTER_B: flush deferred FIN0_B, writeback P2_BUF1 → FIN0_A drain ---
+    f.patch_imm0(br_drainB, f.write_count - br_drainB)
+    f.write(write_magic(MAGIC_18_F0B))                                                               # magic18 FIN0_B (flush deferred)
+    f.write(write_magic(MAGIC_15_BUF1_F0A))                                                          # magic15 BUF1→FIN0_A
+    # SHARED_FIN0_A_DRAIN (multipass → re-check via PROLOGUE)
+    shared_fin0a_drain = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_A, 0, 0, 0, 0, 0, set_PC))               # set_PC PE_FIN0_A
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin
+    f.write(write_magic(MAGIC_18_F0A))                                                               # magic18 FIN0_A
+    f.write(data_movement_instruction(0, 0, 0, 0, prologue_start - f.write_count, 0, 0, 0, 0, 2, beq))  # beq gr[2]==0 → PROLOGUE
+    f.write(write_magic(MAGIC_20_F0A))                                                               # magic20 FIN0_A
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_A, 0, 0, 0, 0, 0, set_PC))               # set_PC PE_FIN0_A
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin
+    f.write(write_magic(MAGIC_18_F0A))                                                               # magic18 FIN0_A
+    f.write(data_movement_instruction(0, 0, 0, 0, -5, 0, 0, 0, 0, 0, jump))                        # jump -5
+    # --- P2_SINGLE_BUF0: only BUF0 loaded, no overlap ---
+    f.patch_imm0(br_single, f.write_count - br_single)
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_P2_BUF0, 0, 0, 0, 0, 0, set_PC))              # set_PC PE_P2_BUF0
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))            # drain check
+    br_drain_sg = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 1, bne))                          # bne → DRAIN_EXIT
+    f.write(write_magic(MAGIC_15_BUF0_F0A))                                                          # magic15 BUF0→FIN0_A
+    f.write(data_movement_instruction(0, 0, 0, 0, shared_fin0a_drain - f.write_count, 0, 0, 0, 0, 0, jump))  # jump → FIN0_A_DRAIN
+    # === POST-PHASE 2: INTV SORT → INTV MERGE → DIAG SORT → DEDUP ===
+    p2_exit = f.write_count
+    f.patch_imm0(br_p2exit, p2_exit - br_p2exit)
+    f.write(write_magic(16))                                                                          # TEMP: finalize only
     # === STEP DONE ===
-    f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 12, 0, 0, 0, 1, 12, addi))             # PC 168: gr_lo[12]++ (s++)
-    f.write(write_magic(5))                                                                        # PC 169: debug
-    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))          # PC 170: gr[1]=SPM[32767]
-    f.write(data_movement_instruction(0, 0, 0, 0, 5, 0, 0, 0, 0, 1, bne))                        # PC 171: bne gr[1]!=0 -> +5 (PC 176: SCORE)
-    f.write(data_movement_instruction(gr, gr_hi, 0, 0, 5, 0, 0, 0, 12, 0, mv))                   # PC 172: gr[5]=gr_hi[12] (s_term)
-    f.write(data_movement_instruction(gr, gr_lo, 0, 0, 6, 0, 0, 0, 12, 0, mv))                   # PC 173: gr[6]=gr_lo[12] (s)
-    f.write(data_movement_instruction(0, 0, 0, 0, -172, 0, 1, 0, 5, 6, bge))                     # PC 174: bge s_term>=s -> -172 (PC 2: STEP_LOOP)
-    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 0, 0, 0, 0, jump))                       # PC 175: jump +2 -> PC 177 (PRINT_SCORE)
-    # === FINISH ===
-    f.write(write_magic(17))                                                                       # PC 176: SCORE: set score
-    f.write(write_magic(3))                                                                        # PC 177: PRINT_SCORE: print score
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # PC 178: halt
+    f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 12, 0, 0, 0, 1, 12, addi))               # gr_lo[12]++
+    f.write(write_magic(5))                                                                           # magic5
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 1, 0, 0, 0, LAST_SPM_ADDR, 0, mv))            # drain check
+    br_drain_post = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 1, bne))                          # bne → DRAIN_EXIT
+    f.write(data_movement_instruction(gr, gr_hi, 0, 0, 5, 0, 0, 0, 12, 0, mv))                     # gr[5]=gr_hi[12]
+    f.write(data_movement_instruction(gr, gr_lo, 0, 0, 6, 0, 0, 0, 12, 0, mv))                     # gr[6]=gr_lo[12]
+    begin_step = 2
+    f.write(data_movement_instruction(0, 0, 0, 0, begin_step - f.write_count, 0, 1, 0, 5, 6, bge)) # bge → step loop
+    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 0, 0, 0, 0, jump))                         # jump +2 → END
+    drain_exit = f.write_count
+    f.patch_imm0(br_drain_pro, drain_exit - br_drain_pro)
+    f.patch_imm0(br_drain_ha, drain_exit - br_drain_ha)
+    f.patch_imm0(br_drain_hb, drain_exit - br_drain_hb)
+    f.patch_imm0(br_drain_sg, drain_exit - br_drain_sg)
+    f.patch_imm0(br_drain_post, drain_exit - br_drain_post)
+    f.write(write_magic(17))                                                                          # magic17 (drain)
+    f.write(write_magic(3))                                                                           # magic3 (end)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                         # halt
     f.close()
 
 def gwfa_compute():
@@ -335,33 +391,59 @@ def pe_instruction(pe_id):
     # PC 24: halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot0: halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot1: halt
-    # --- Sort bin count PING (PE_SORT_BIN_COUNT_PING = 25) ---
+    # --- FIN0 buf A (PE_FIN0_A = 25) ---
     # PC 25: clear sync
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                       # slot1: gr[10]=0
-    # PC 26: bin count PING
+    # PC 26: FIN0 compute buf A
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
-    f.write(write_magic(MAGIC_20_BUF0))                                                            # slot1: magic(20, mask=0)
+    f.write(write_magic(MAGIC_19_F0A))                                                             # slot1: magic(19, mask=0)
     # PC 27: signal done
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                       # slot1: gr[10]=1
     # PC 28: halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot0: halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot1: halt
-    # --- Sort bin count PONG (PE_SORT_BIN_COUNT_PONG = 29) ---
+    # --- FIN0 buf B (PE_FIN0_B = 29) ---
     # PC 29: clear sync
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                       # slot1: gr[10]=0
-    # PC 30: bin count PONG
+    # PC 30: FIN0 compute buf B
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
-    f.write(write_magic(MAGIC_20_BUF1))                                                            # slot1: magic(20, mask=1)
+    f.write(write_magic(MAGIC_19_F0B))                                                             # slot1: magic(19, mask=2)
     # PC 31: signal done
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                       # slot1: gr[10]=1
     # PC 32: halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot0: halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot1: halt
-    # --- Sort scatter PING (PE_SORT_SCATTER_PING = 33) ---
+    # --- Sort bin count PING (PE_SORT_BIN_COUNT_PING = 33) ---
+    # PC 33: clear sync
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                       # slot1: gr[10]=0
+    # PC 34: bin count PING
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(write_magic(MAGIC_20_BUF0))                                                            # slot1: magic(20, mask=0)
+    # PC 35: signal done
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                       # slot1: gr[10]=1
+    # PC 36: halt
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot0: halt
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot1: halt
+    # --- Sort bin count PONG (PE_SORT_BIN_COUNT_PONG = 37) ---
+    # PC 37: clear sync
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                       # slot1: gr[10]=0
+    # PC 38: bin count PONG
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(write_magic(MAGIC_20_BUF1))                                                            # slot1: magic(20, mask=1)
+    # PC 39: signal done
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                       # slot1: gr[10]=1
+    # PC 40: halt
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot0: halt
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot1: halt
+    # --- Sort scatter PING (PE_SORT_SCATTER_PING = 41) ---
     # PC 33: clear sync
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                       # slot1: gr[10]=0
