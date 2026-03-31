@@ -1314,7 +1314,100 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             spm[P2_META_OFF + P2_M_FIN1] = gr.at(6, CTRL_GR_HI);
             //NOP
         m13_done: ;
-        }
+        } else if (magic_id == 20) {
+            // Sort bin count: accumulate bin_counts[16] in META across tiles.
+            // mask bit 0 = which TILE_BUF (0=TILE_BUF0, 1=TILE_BUF1)
+            int tile_buf_off = (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
+            int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+            int tile_n = spm[SORT_META + 32];
+            int shift  = spm[SORT_META + 33];
+            int *tile   = &spm[tile_buf_off];
+            int *counts = &spm[SORT_META];          // bin_counts[0..15]
+            for (int i = 0; i < tile_n; i++) {
+                int bin = ((uint32_t)tile[i * 2] >> shift) & 0xF;
+                counts[bin]++;
+            }
+        } else if (magic_id == 21) {
+            // Sort scatter: scatter tile elements into BIN_REGIONS; write tile_bin_counts.
+            // mask bit 0 = which TILE_BUF / BIN_REG (0=ping, 1=pong)
+            int tile_buf_off = (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
+            int bin_reg_off  = (magic_mask & 1) ? SORT_BIN_REG1  : SORT_BIN_REG0;
+            int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+            int tile_n = spm[SORT_META + 32];
+            int shift  = spm[SORT_META + 33];
+            int *tile            = &spm[tile_buf_off];
+            int *tile_bin_counts = &spm[SORT_META + 16];   // [16..31]
+            int bin_cursors[SORT_RADIX_BINS] = {};
+            for (int b = 0; b < SORT_RADIX_BINS; b++) tile_bin_counts[b] = 0;
+            for (int i = 0; i < tile_n; i++) {
+                int vd  = tile[i * 2];
+                int k   = tile[i * 2 + 1];
+                int bin = ((uint32_t)vd >> shift) & 0xF;
+                int off = bin * SORT_BIN_REGION_SIZE * 2 + bin_cursors[bin] * 2;
+                spm[bin_reg_off + off]     = vd;
+                spm[bin_reg_off + off + 1] = k;
+                bin_cursors[bin]++;
+                tile_bin_counts[bin]++;
+            }
+        } else if (magic_id == 23) {
+            // Dedup: max-k per vd group + intv filter (simple linear scan).
+            int diag_buf_off = (magic_mask & 1) ? DEDUP_BUF1 : DEDUP_BUF0;
+            int out_buf_off  = (magic_mask & 1) ? DEDUP_OUT1  : DEDUP_OUT0;
+            int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+            int tile_n       = spm[DEDUP_META + 4];
+            int is_last_diag = spm[DEDUP_META + 5];
+            int intv_n_pe    = spm[DEDUP_META + 6];
+            uint32_t pending_vd = (uint32_t)spm[DEDUP_META + 0];
+            int      pending_k  = spm[DEDUP_META + 1];
+            int      out_n      = 0;
+            int      ii         = spm[DEDUP_META + 3];
+            int *diag = &spm[diag_buf_off];
+            int *out  = &spm[out_buf_off];
+            int *intv = &spm[DEDUP_INTV];
+            for (int i = 0; i < tile_n; i++) {
+                uint32_t vd = (uint32_t)diag[i * 2];
+                int      k  = diag[i * 2 + 1];
+                if (pending_vd != 0xFFFFFFFFU && vd == pending_vd) {
+                    if (k > pending_k) pending_k = k;
+                } else {
+                    if (pending_vd != 0xFFFFFFFFU) {
+                        // Advance intv scan past pending_vd
+                        while (ii < intv_n_pe
+                               && (uint32_t)intv[ii*2+1] <= pending_vd)
+                            ii++;
+                        bool forbidden = (ii < intv_n_pe
+                            && (uint32_t)intv[ii*2] <= pending_vd
+                            && pending_vd < (uint32_t)intv[ii*2+1]);
+                        if (!forbidden) {
+                            out[out_n*2]   = (int)pending_vd;
+                            out[out_n*2+1] = pending_k;
+                            out_n++;
+                        }
+                    }
+                    pending_vd = vd;
+                    pending_k  = k;
+                }
+            }
+            // Flush pending on last diag tile
+            if (is_last_diag && pending_vd != 0xFFFFFFFFU) {
+                while (ii < intv_n_pe
+                       && (uint32_t)intv[ii*2+1] <= pending_vd)
+                    ii++;
+                bool forbidden = (ii < intv_n_pe
+                    && (uint32_t)intv[ii*2] <= pending_vd
+                    && pending_vd < (uint32_t)intv[ii*2+1]);
+                if (!forbidden) {
+                    out[out_n*2]   = (int)pending_vd;
+                    out[out_n*2+1] = pending_k;
+                    out_n++;
+                }
+                pending_vd = 0xFFFFFFFF;
+            }
+            spm[DEDUP_META + 0] = (int)pending_vd;
+            spm[DEDUP_META + 1] = pending_k;
+            spm[DEDUP_META + 2] = out_n;
+            spm[DEDUP_META + 3] = ii;
+        } // end magic_id == 23
         (*PC)++;
     } else if (opcode == 0) {              // add rd rs1 rs2
         rd = reg_imm_0;

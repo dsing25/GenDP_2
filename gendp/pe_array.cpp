@@ -1055,7 +1055,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             mm[gr[7]] = gr[3];                 // mv MM ← gr (fifo_vd)
             mm[gr[7] + 1] = gr[4];             // mv MM ← gr (fifo_k)
             gr[24] = gr[24] + 1;               // addi (s_B_n++)
-            //NOP
         } else if (magic_id == 10) {
             // GWFA phase 2: cross-node propagation, update n_a in gr[15]
             int done = gwfa_phase2(main_addressing_register[12]);
@@ -1695,19 +1694,521 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
             gwfa_set_ha_n_dirty((uint32_t)gr[31]);
         } else if (magic_id == 16) {
-            // Phase 2 finalize: sync gr→statics, call
-            gwfa_sync_counters(main_addressing_register[24],
-                (uint32_t)main_addressing_register[25],
-                (uint32_t)main_addressing_register[26],
-                (uint32_t)main_addressing_register[27],
-                main_addressing_register[28]);
-            int err = gwfa_phase2_finalize();
-            main_addressing_register[15] = gwfa_get_n_a();
-            if (err) write_spm_magic(32767, 1);
+            // Sync counters, filter next_intv, setup intv sort state.
+            // After this, ISA sort loop 1 sorts next_intv by vd0.
+            auto &gr = main_addressing_register;
+            gwfa_sync_counters(gr[24], (uint32_t)gr[25],
+                (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
+            int *mm = gwfa_get_mm();
+            constexpr int DIAG_CAP_V  = (16 << 20);
+            constexpr int INTV_CAP_V  = (1 << 21);
+            constexpr int MM_INTV     = DIAG_CAP_V * 6;
+            constexpr int MM_NEXT_INTV = MM_INTV + INTV_CAP_V * 2;
+            constexpr int MM_SWAP     = MM_NEXT_INTV + INTV_CAP_V * 2;
+            int next_intv_n = gr[28];
+            // Filter invalid next_intv entries (vd1 != vd0 + 1)
+            { int v = 0;
+            for (int i = 0; i < next_intv_n; i++) {
+                uint32_t v0 = (uint32_t)mm[MM_NEXT_INTV + 2*i];
+                uint32_t v1 = (uint32_t)mm[MM_NEXT_INTV + 2*i + 1];
+                if (v0 < v1 && v1 == v0 + 1) {
+                    if (v != i) {
+                        mm[MM_NEXT_INTV + 2*v] = mm[MM_NEXT_INTV + 2*i];
+                        mm[MM_NEXT_INTV + 2*v+1] = mm[MM_NEXT_INTV + 2*i+1];
+                    }
+                    v++;
+                }
+            }
+            next_intv_n = v; }
+            // Save state for magic 26 (after intv sort completes)
+            s1c[144] = gr[20];  // diag_base
+            s1c[145] = gr[24];  // n_a
+            s1c[146] = (int)gwfa_get_intv_n();  // old intv_n
+            // Setup intv sort: gr[3]=src, gr[4]=dst, gr[6]=nape, gr[24]=n
+            gr[3]  = MM_NEXT_INTV;
+            gr[4]  = MM_SWAP;
+            gr[6]  = (next_intv_n + 3) / 4;
+            gr[24] = next_intv_n;
         } else if (magic_id == 17) {
             // Set score = gr_lo[12] (current edit distance, packed)
             gwfa_set_score(
                 (int16_t)(main_addressing_register[12] & 0xFFFF));
+        } else if (magic_id == 18) {
+            // Sort bin-count tile load: MM → SPM TILE_BUF for all 4 PEs.
+            // gr[1]=pass, gr[2]=cursor (tile offset in each PE's section, diag units),
+            // gr[3]=src MM base (words), gr[24]=n_a.
+            // mask bit 0 = ping/pong (0=TILE_BUF0, 1=TILE_BUF1).
+            // Advances gr[2] by SORT_TILE. If cursor==0, zeros bin_counts in META.
+            {
+                int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
+                int *mm = gwfa_get_mm();
+                int tile_buf_off = (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
+                int n_a = gr[24];
+                int cursor = gr[2];
+                int shift = gr[1] * 4;
+                int n_a_per_pe = (n_a + 3) / 4;
+                bool first_tile = (cursor == 0);
+                for (int pe = 0; pe < 4; pe++) {
+                    int pe_start = pe * n_a_per_pe;
+                    int pe_remain = std::min(n_a_per_pe, n_a - pe_start);
+                    int remaining = std::max(0, pe_remain - cursor);
+                    int tile_n = std::min(SORT_TILE, remaining);
+                    int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
+                    int mm_src = gr[3] + (pe_start + cursor) * 2;
+                    for (int j = 0; j < tile_n * 2; j++)
+                        spm[tile_buf_off + j] = mm[mm_src + j];
+                    spm[SORT_META + 32] = tile_n;
+                    spm[SORT_META + 33] = shift;
+                    if (first_tile)
+                        for (int b = 0; b < SORT_RADIX_BINS; b++) spm[SORT_META + b] = 0;
+                }
+                gr[2] = cursor + SORT_TILE;
+            }
+        } else if (magic_id == 19) {
+            // Sort prefix-sum: read per-PE bin_counts, compute global prefix sums,
+            // per-PE start offsets, and running offsets; store in s1c[].
+            // s1c[0..15]  = global prefix sums (diag units)
+            // s1c[16..79] = pe_start_in_bin[pe][b] = s1c[16+pe*16+b]
+            // s1c[80..143]= tile_cumulative[pe][b] = 0 (reset; updated by magic 25)
+            // Also resets bin_counts in META for all PEs (ready for next pass).
+            {
+                // Step 1: save per-PE bin counts into s1c[16..79]
+                for (int pe = 0; pe < 4; pe++) {
+                    int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
+                    for (int b = 0; b < SORT_RADIX_BINS; b++)
+                        s1c[16 + pe * SORT_RADIX_BINS + b] = spm[SORT_META + b];
+                }
+                // Step 2: global totals in s1c[0..15]
+                for (int b = 0; b < SORT_RADIX_BINS; b++) {
+                    s1c[b] = 0;
+                    for (int pe = 0; pe < 4; pe++) s1c[b] += s1c[16 + pe * SORT_RADIX_BINS + b];
+                }
+                // Step 3: convert per-PE counts to per-PE start offsets within each bin
+                for (int b = 0; b < SORT_RADIX_BINS; b++) {
+                    int cumsum = 0;
+                    for (int pe = 0; pe < 4; pe++) {
+                        int cnt = s1c[16 + pe * SORT_RADIX_BINS + b];
+                        s1c[16 + pe * SORT_RADIX_BINS + b] = cumsum;
+                        cumsum += cnt;
+                    }
+                }
+                // Step 4: global prefix sums in s1c[0..15]
+                int total = 0;
+                for (int b = 0; b < SORT_RADIX_BINS; b++) {
+                    int cnt = s1c[b]; s1c[b] = total; total += cnt;
+                }
+                // Step 5: zero running offsets for scatter writeback
+                for (int i = 0; i < 64; i++) s1c[80 + i] = 0;
+                // Step 6: reset bin_counts in META for all PEs
+                for (int pe = 0; pe < 4; pe++) {
+                    int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
+                    for (int b = 0; b < SORT_RADIX_BINS; b++) spm[SORT_META + b] = 0;
+                }
+            }
+        } else if (magic_id == 24) {
+            // Sort scatter tile load: MM → SPM TILE_BUF (same as magic 18, no bin_count reset).
+            // gr[1]=pass, gr[2]=cursor, gr[3]=src MM base, gr[24]=n_a.
+            // mask bit 0 = ping/pong. Advances gr[2] by SORT_TILE.
+            {
+                int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
+                int *mm = gwfa_get_mm();
+                int tile_buf_off = (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
+                int n_a = gr[24];
+                int cursor = gr[2];
+                int shift = gr[1] * 4;
+                int n_a_per_pe = (n_a + 3) / 4;
+                for (int pe = 0; pe < 4; pe++) {
+                    int pe_start = pe * n_a_per_pe;
+                    int pe_remain = std::min(n_a_per_pe, n_a - pe_start);
+                    int remaining = std::max(0, pe_remain - cursor);
+                    int tile_n = std::min(SORT_TILE, remaining);
+                    int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
+                    int mm_src = gr[3] + (pe_start + cursor) * 2;
+                    for (int j = 0; j < tile_n * 2; j++)
+                        spm[tile_buf_off + j] = mm[mm_src + j];
+                    spm[SORT_META + 32] = tile_n;
+                    spm[SORT_META + 33] = shift;
+                }
+                gr[2] = cursor + SORT_TILE;
+            }
+        } else if (magic_id == 25) {
+            // Sort scatter writeback: SPM BIN_REGIONS → MM dst.
+            // gr[4]=dst MM base, s1c[0..15]=prefix sums, s1c[16..79]=pe_start_in_bin,
+            // s1c[80..143]=tile_cumulative (updated here). mask bit 0 = which BIN_REG.
+            {
+                int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
+                int *mm = gwfa_get_mm();
+                int bin_reg_off = (magic_mask & 1) ? SORT_BIN_REG1 : SORT_BIN_REG0;
+                for (int pe = 0; pe < 4; pe++) {
+                    int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
+                    int *tbc = &spm[SORT_META + 16];  // tile_bin_counts[16]
+                    for (int b = 0; b < SORT_RADIX_BINS; b++) {
+                        int n = tbc[b];
+                        if (n == 0) continue;
+                        int diag_off = s1c[b] + s1c[16 + pe * SORT_RADIX_BINS + b]
+                                       + s1c[80 + pe * SORT_RADIX_BINS + b];
+                        int mm_dst = gr[4] + diag_off * 2;
+                        int spm_src = pe * SPM_BANK_GROUP_SIZE + bin_reg_off
+                                      + b * SORT_BIN_REGION_SIZE * 2;
+                        for (int j = 0; j < n * 2; j++)
+                            mm[mm_dst + j] = SPM_unit->buffer[spm_src + j];
+                        s1c[80 + pe * SORT_RADIX_BINS + b] += n;
+                    }
+                }
+            }
+        } else if (magic_id == 26) {
+            // Intv merge + diag sort setup.
+            // Inputs: sorted next_intv at MM_NEXT_INTV (from ISA sort loop 1),
+            //         gr[24]=next_intv_n, s1c[144..146]=saved diag_base,n_a,intv_n.
+            // Outputs: merged intv at MM_INTV, gr[3..6,24,28] for diag sort loop.
+            {
+                auto &gr = main_addressing_register;
+                int *mm = gwfa_get_mm();
+                constexpr int DIAG_CAP_V  = (16 << 20);
+                constexpr int INTV_CAP_V  = (1 << 21);
+                constexpr int MM_INTV     = DIAG_CAP_V * 6;
+                constexpr int MM_NEXT_INTV = MM_INTV + INTV_CAP_V * 2;
+                constexpr int MM_SWAP     = MM_NEXT_INTV + INTV_CAP_V * 2;
+                constexpr int MM_SORT_BUF = MM_SWAP + INTV_CAP_V * 2;
+                int diag_base   = s1c[144];
+                int n_a         = s1c[145];
+                int intv_n      = s1c[146];
+                int next_intv_n = gr[24];
+                // === Merge old intv + sorted next_intv ===
+                if (intv_n + next_intv_n > 0) {
+                    for (int i = 0; i < intv_n * 2; i++)
+                        mm[MM_SWAP + i] = mm[MM_INTV + i];
+                    int ai = 0, bi = 0, k = 0;
+                    while (ai < intv_n && bi < next_intv_n) {
+                        if ((uint32_t)mm[MM_SWAP + 2*ai]
+                            <= (uint32_t)mm[MM_NEXT_INTV + 2*bi]) {
+                            mm[MM_INTV + 2*k] = mm[MM_SWAP + 2*ai];
+                            mm[MM_INTV + 2*k+1] = mm[MM_SWAP + 2*ai+1];
+                            ai++; k++;
+                        } else {
+                            mm[MM_INTV + 2*k] = mm[MM_NEXT_INTV + 2*bi];
+                            mm[MM_INTV + 2*k+1] = mm[MM_NEXT_INTV + 2*bi+1];
+                            bi++; k++;
+                        }
+                    }
+                    while (ai < intv_n) {
+                        mm[MM_INTV + 2*k] = mm[MM_SWAP + 2*ai];
+                        mm[MM_INTV + 2*k+1] = mm[MM_SWAP + 2*ai+1];
+                        ai++; k++;
+                    }
+                    while (bi < next_intv_n) {
+                        mm[MM_INTV + 2*k] = mm[MM_NEXT_INTV + 2*bi];
+                        mm[MM_INTV + 2*k+1] = mm[MM_NEXT_INTV + 2*bi+1];
+                        bi++; k++;
+                    }
+                    // Filter invalid entries (vd0 >= vd1)
+                    { int valid = 0;
+                    for (int i = 0; i < k; i++) {
+                        if ((uint32_t)mm[MM_INTV + 2*i]
+                            < (uint32_t)mm[MM_INTV + 2*i + 1]) {
+                            if (valid != i) {
+                                mm[MM_INTV + 2*valid] = mm[MM_INTV + 2*i];
+                                mm[MM_INTV + 2*valid+1] = mm[MM_INTV+2*i+1];
+                            }
+                            valid++;
+                        }
+                    }
+                    k = valid; }
+                    // Merge adjacent/overlapping intervals
+                    if (k > 0) {
+                        int m = 0;
+                        for (int i = 1; i < k; i++) {
+                            if ((uint32_t)mm[MM_INTV + 2*i]
+                                <= (uint32_t)mm[MM_INTV + 2*m + 1]) {
+                                if ((uint32_t)mm[MM_INTV + 2*i + 1]
+                                    > (uint32_t)mm[MM_INTV + 2*m + 1])
+                                    mm[MM_INTV + 2*m + 1] =
+                                        mm[MM_INTV + 2*i + 1];
+                            } else {
+                                m++;
+                                mm[MM_INTV + 2*m] = mm[MM_INTV + 2*i];
+                                mm[MM_INTV + 2*m+1] = mm[MM_INTV + 2*i+1];
+                            }
+                        }
+                        intv_n = m + 1;
+                    } else {
+                        intv_n = 0;
+                    }
+                }
+                // Sort ALL diags (phase 1 output is not globally sorted
+                // due to PE interleaving at boundaries).
+                // TODO: fix phase 1 writeback to produce sorted output,
+                // then sort only the unsorted A-queue tail and merge.
+                gr[3]  = diag_base;
+                gr[4]  = MM_SORT_BUF;
+                gr[6]  = (n_a + 3) / 4;
+                gr[24] = n_a;
+                gr[28] = intv_n;
+            }
+        } else if (magic_id == 27) {
+            // No-op: merge path placeholder. Currently sort loop 2 sorts
+            // everything, so no merge needed. Will implement PE-tiled merge
+            // after phase 1 writeback is fixed to produce sorted output.
+            // Just pass through — gr[3,4,24,28] already set by sort loop 2.
+        } else if (magic_id == 29) {
+            // Dedup split search + full intv preload.
+            // Inputs: gr[3]=diag_base, gr[24]=n_a, gr[28]=intv_n.
+            // Computes vd-boundary PE splits, preloads intv into each PE's
+            // DEDUP_INTV region, inits DEDUP_META, stores s1c[0..3]=pe_start,
+            // s1c[4..7]=pe_n, s1c[12..15]=pe_out_base, s1c[20..23]=out_cursor.
+            // Sets gr[6] = dedup loop bound (rounds up to DEDUP_TILE).
+            {
+                auto &gr = main_addressing_register;
+                int *mm = gwfa_get_mm();
+                constexpr int DIAG_CAP_V = (16 << 20);
+                constexpr int MM_INTV = DIAG_CAP_V * 6;
+                constexpr int MAX_INTV_PER_PE =
+                    (GWFA_Q_START / 4 - DEDUP_INTV) / 2;
+                int diag_base = gr[3];
+                int n_a       = gr[24];
+                int intv_n    = gr[28];
+                int nape      = (n_a + 3) / 4;
+
+                // Find vd-boundary split points
+                int splits[5] = {0, 0, 0, 0, n_a};
+                for (int pe = 1; pe < 4; pe++) {
+                    int nom = pe * nape;
+                    if (nom >= n_a) { splits[pe] = n_a; continue; }
+                    uint32_t prev_vd = (uint32_t)mm[diag_base + 2*(nom-1)];
+                    int i = nom;
+                    while (i < n_a
+                           && (uint32_t)mm[diag_base + 2*i] == prev_vd)
+                        i++;
+                    splits[pe] = i;
+                }
+
+                // Find intv ranges per PE via binary search
+                int intv_lo[4] = {0, 0, 0, 0};
+                int intv_hi[4] = {intv_n, intv_n, intv_n, intv_n};
+                if (intv_n > 0) {
+                    for (int pe = 0; pe < 3; pe++) {
+                        if (splits[pe+1] >= n_a) continue;
+                        uint32_t vd =
+                            (uint32_t)mm[diag_base + 2*splits[pe+1]];
+                        int lo = 0, hi = intv_n;
+                        while (lo < hi) {
+                            int mid2 = (lo + hi) / 2;
+                            if ((uint32_t)mm[MM_INTV + 2*mid2] < vd)
+                                lo = mid2 + 1;
+                            else hi = mid2;
+                        }
+                        intv_hi[pe] = lo;
+                    }
+                    for (int pe = 1; pe < 4; pe++) {
+                        if (splits[pe] >= n_a) {
+                            intv_lo[pe] = intv_n; continue;
+                        }
+                        uint32_t vd =
+                            (uint32_t)mm[diag_base + 2*splits[pe]];
+                        int lo = 0, hi = intv_n;
+                        while (lo < hi) {
+                            int mid2 = (lo + hi) / 2;
+                            if ((uint32_t)mm[MM_INTV + 2*mid2 + 1] <= vd)
+                                lo = mid2 + 1;
+                            else hi = mid2;
+                        }
+                        intv_lo[pe] = lo;
+                    }
+                }
+
+                // Compute max PE range size for loop bound
+                int max_pe_n = 0;
+                for (int pe = 0; pe < 4; pe++) {
+                    int pe_n = splits[pe+1] - splits[pe];
+                    if (pe_n > max_pe_n) max_pe_n = pe_n;
+                }
+                int niter = ((max_pe_n + DEDUP_TILE - 1) / DEDUP_TILE)
+                            * DEDUP_TILE;
+                gr[6] = (niter == 0) ? DEDUP_TILE : niter;
+
+                // Check intv overflow — fall back to inline if needed
+                bool intv_overflow = false;
+                for (int pe = 0; pe < 4; pe++) {
+                    int iv_start = std::min(intv_lo[pe], intv_hi[pe]);
+                    int iv_end   = std::max(intv_lo[pe], intv_hi[pe]);
+                    if (iv_end - iv_start > MAX_INTV_PER_PE) {
+                        intv_overflow = true;
+                        break;
+                    }
+                }
+                if (intv_overflow) {
+                    // Inline fallback: run dedup sequentially in controller
+                    // (simple but slow path for rare overflow cases)
+                    int n_a_final = 0;
+                    int ii_g = 0;
+                    uint32_t pv = 0xFFFFFFFF;
+                    int pk = 0;
+                    for (int i = 0; i < n_a; i++) {
+                        uint32_t vd = (uint32_t)mm[diag_base + 2*i];
+                        int k = mm[diag_base + 2*i + 1];
+                        if (pv != 0xFFFFFFFF && vd == pv) {
+                            if (k > pk) pk = k;
+                        } else {
+                            if (pv != 0xFFFFFFFF) {
+                                while (ii_g < intv_n
+                                    && (uint32_t)mm[MM_INTV+2*ii_g+1]
+                                       <= pv)
+                                    ii_g++;
+                                bool forb = (ii_g < intv_n
+                                    && (uint32_t)mm[MM_INTV+2*ii_g] <= pv
+                                    && pv < (uint32_t)mm[MM_INTV+2*ii_g+1]);
+                                if (!forb) {
+                                    mm[diag_base + n_a_final*2] = (int)pv;
+                                    mm[diag_base + n_a_final*2+1] = pk;
+                                    n_a_final++;
+                                }
+                            }
+                            pv = vd; pk = k;
+                        }
+                    }
+                    if (pv != 0xFFFFFFFF) {
+                        while (ii_g < intv_n
+                            && (uint32_t)mm[MM_INTV+2*ii_g+1] <= pv)
+                            ii_g++;
+                        bool forb = (ii_g < intv_n
+                            && (uint32_t)mm[MM_INTV+2*ii_g] <= pv
+                            && pv < (uint32_t)mm[MM_INTV+2*ii_g+1]);
+                        if (!forb) {
+                            mm[diag_base + n_a_final*2] = (int)pv;
+                            mm[diag_base + n_a_final*2+1] = pk;
+                            n_a_final++;
+                        }
+                    }
+                    for (int pe = 0; pe < 4; pe++) {
+                        int *s = &SPM_unit->buffer[
+                            pe * SPM_BANK_GROUP_SIZE];
+                        memset(s, 0,
+                            (GWFA_Q_START / 4) * sizeof(int));
+                    }
+                    gwfa_finalize_sync(n_a_final, (size_t)intv_n);
+                    gr[15] = n_a_final;
+                    gr[28] = intv_n;
+                    gr[6]  = 0;  // skip dedup loop
+                    // Zero s1c so dedup loop prologue is harmless
+                    for (int pe = 0; pe < 4; pe++) {
+                        s1c[pe] = 0; s1c[4+pe] = 0;
+                        s1c[12+pe] = 0; s1c[20+pe] = 0;
+                    }
+                    if (n_a_final == 0) write_spm_magic(32767, 1);
+                } else {
+                    // Normal path: full intv preload into each PE
+                    int pe_out_base = 0;
+                    for (int pe = 0; pe < 4; pe++) {
+                        int pe_start = splits[pe];
+                        int pe_n = splits[pe+1] - splits[pe];
+                        int iv_start =
+                            std::min(intv_lo[pe], intv_hi[pe]);
+                        int iv_end =
+                            std::max(intv_lo[pe], intv_hi[pe]);
+                        int iv_n = iv_end - iv_start;
+                        s1c[pe]      = pe_start;
+                        s1c[4 + pe]  = pe_n;
+                        s1c[12 + pe] = pe_out_base;
+                        s1c[20 + pe] = 0;
+                        pe_out_base += pe_n;
+
+                        int *spm = &SPM_unit->buffer[
+                            pe * SPM_BANK_GROUP_SIZE];
+                        // Full intv preload
+                        for (int i = 0; i < iv_n; i++) {
+                            spm[DEDUP_INTV + i*2] =
+                                mm[MM_INTV + (iv_start + i)*2];
+                            spm[DEDUP_INTV + i*2+1] =
+                                mm[MM_INTV + (iv_start + i)*2+1];
+                        }
+                        // Init META (simple: only fields 0-6)
+                        spm[DEDUP_META + 0] = (int)0xFFFFFFFF;
+                        spm[DEDUP_META + 1] = 0;
+                        spm[DEDUP_META + 2] = 0;
+                        spm[DEDUP_META + 3] = 0;  // ii
+                        spm[DEDUP_META + 4] = 0;  // diag tile_n
+                        spm[DEDUP_META + 5] = 0;  // is_last_diag
+                        spm[DEDUP_META + 6] = iv_n;  // intv_n_pe
+                    }
+                }
+            }
+        } else if (magic_id == 30) {
+            // Dedup tile load: MM[diag_base] → DEDUP_BUF for each PE.
+            // gr[3]=diag_base, gr[2]=cursor, s1c[0..3]=pe_start, s1c[4..7]=pe_n.
+            // mask bit 0 = ping/pong (0=DEDUP_BUF0, 1=DEDUP_BUF1). Advances gr[2] by DEDUP_TILE.
+            {
+                auto &gr = main_addressing_register;
+                int *mm = gwfa_get_mm();
+                int diag_buf_off = (magic_mask & 1) ? DEDUP_BUF1 : DEDUP_BUF0;
+                int cursor = gr[2];
+                int diag_base = gr[3];
+                for (int pe = 0; pe < 4; pe++) {
+                    int pe_start = s1c[pe];
+                    int pe_n     = s1c[4 + pe];
+                    int remaining = std::max(0, pe_n - cursor);
+                    int tile_n    = std::min(DEDUP_TILE, remaining);
+                    bool is_last  = (cursor + DEDUP_TILE >= pe_n);
+                    int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
+                    int mm_src = diag_base + (pe_start + cursor) * 2;
+                    for (int j = 0; j < tile_n * 2; j++)
+                        spm[diag_buf_off + j] = mm[mm_src + j];
+                    spm[DEDUP_META + 4] = tile_n;
+                    spm[DEDUP_META + 5] = is_last ? 1 : 0;
+                }
+                gr[2] = cursor + DEDUP_TILE;
+            }
+        } else if (magic_id == 31) {
+            // Dedup output writeback: SPM DEDUP_OUT → MM[sort_buf + pe_out_base + out_cursor].
+            // gr[4]=mm_sort_buf, s1c[12..15]=pe_out_base, s1c[20..23]=out_cursor.
+            // mask bit 0 = ping/pong (0=DEDUP_OUT0, 1=DEDUP_OUT1).
+            {
+                auto &gr = main_addressing_register;
+                int *mm = gwfa_get_mm();
+                int out_buf_off = (magic_mask & 1) ? DEDUP_OUT1 : DEDUP_OUT0;
+                int mm_sort_buf = gr[4];
+                for (int pe = 0; pe < 4; pe++) {
+                    int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
+                    int out_n    = spm[DEDUP_META + 2];
+                    int mm_dst   = mm_sort_buf + (s1c[12 + pe] + s1c[20 + pe]) * 2;
+                    for (int j = 0; j < out_n * 2; j++)
+                        mm[mm_dst + j] = SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE + out_buf_off + j];
+                    s1c[20 + pe] += out_n;
+                }
+            }
+        } else if (magic_id == 32) {
+            // Dedup finalize: gather PE outputs from MM_SORT_BUF to diag_base.
+            // If gr[6]==0, overflow fallback in magic 29 already finalized.
+            {
+                auto &gr = main_addressing_register;
+                if (gr[6] == 0) {
+                    // Overflow fallback already handled finalize
+                } else {
+                    int *mm = gwfa_get_mm();
+                    int diag_base   = gr[3];
+                    int mm_sort_buf = gr[4];
+                    int intv_n      = gr[28];
+                    int n_a_final = 0;
+                    for (int pe = 0; pe < 4; pe++) {
+                        int base = s1c[12 + pe];
+                        int cnt = s1c[20 + pe];
+                        for (int j = 0; j < cnt * 2; j++)
+                            mm[diag_base + n_a_final * 2 + j] =
+                                mm[mm_sort_buf + base * 2 + j];
+                        n_a_final += cnt;
+                    }
+                    // Clear sort/dedup SPM region per PE
+                    for (int pe = 0; pe < 4; pe++) {
+                        int *s = &SPM_unit->buffer[
+                            pe * SPM_BANK_GROUP_SIZE];
+                        memset(s, 0,
+                            (GWFA_Q_START / 4) * sizeof(int));
+                    }
+                    gwfa_finalize_sync(n_a_final, (size_t)intv_n);
+                    gr[15] = n_a_final;
+                    gr[28] = intv_n;
+                    if (n_a_final == 0) write_spm_magic(32767, 1);
+                }
+            }
         } else if (magic_id == 6) {
             //WFA initializations
             int MEM_BLOCK_SIZE = 32;

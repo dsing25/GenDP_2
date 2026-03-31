@@ -186,11 +186,53 @@ inline int get_base_opcode(int opcode) {
 // GWFA graph topology in S2 (controller access)
 #define GRAPH_START 0
 
+// GWFA dedup/sort phase SPM layout (per-PE, reuses stale extend buffers at base 0)
+// Sequences start at per-PE local address GWFA_Q_START/4 = 6016; must stay below.
+#define SORT_TILE            80   // diags per PE per tile (multiple of 8 for mvdq)
+#define SORT_BIN_REGION_SIZE 80   // max diags per bin per tile (>= SORT_TILE)
+#define SORT_RADIX_BINS      16   // 2^4 bins per radix pass
+#define SORT_RADIX_PASSES    8    // 8 passes * 4 bits = 32-bit key
+// SPM word offsets (per PE, relative to GWFA_DEDUP_BASE = 0):
+//   [0..159]    TILE_BUF0  ping tile (SORT_TILE*2 words)
+//   [160..319]  TILE_BUF1  pong tile
+//   [320..2879] BIN_REG0   ping scatter bins (SORT_RADIX_BINS * SORT_BIN_REGION_SIZE * 2)
+//   [2880..5439] BIN_REG1  pong scatter bins
+//   [5440..5473] SORT_META  metadata (bin_counts[16], tile_bin_counts[16], tile_n, shift)
+//   Total: 5474 < GWFA_Q_START/4 = 6016 ✓
+#define SORT_TILE_BUF0  0
+#define SORT_TILE_BUF1  (SORT_TILE * 2)
+#define SORT_BIN_REG0   (SORT_TILE * 4)
+#define SORT_BIN_REG1   (SORT_TILE * 4 + SORT_RADIX_BINS * SORT_BIN_REGION_SIZE * 2)
+#define SORT_META       (SORT_TILE * 4 + 2 * SORT_RADIX_BINS * SORT_BIN_REGION_SIZE * 2)
+// SORT_META sub-offsets: [0..15]=bin_counts (accumulated), [16..31]=tile_bin_counts (per-tile),
+//                        [32]=tile_n, [33]=shift
+
+// GWFA dedup phase SPM layout (per-PE, reuses stale sort buffers; sort must finish first)
+// DEDUP_TILE reuses SORT_TILE (= 80). Sequential use of same base address space.
+//   [0..159]     DEDUP_BUF0  ping diag tile (DEDUP_TILE*2 words)
+//   [160..319]   DEDUP_BUF1  pong diag tile
+//   [320..481]   DEDUP_OUT0  ping output tile ((DEDUP_TILE+1)*2 words, +1 for pending flush)
+//   [482..643]   DEDUP_OUT1  pong output tile
+//   [644..659]   DEDUP_META  metadata (16 words)
+//   [660..6015]  DEDUP_INTV  preloaded intv for this PE
+#define DEDUP_TILE   SORT_TILE           // 80 diags per PE per tile
+#define DEDUP_BUF0   0
+#define DEDUP_BUF1   (DEDUP_TILE * 2)              // 160
+#define DEDUP_OUT0   (DEDUP_TILE * 4)              // 320
+#define DEDUP_OUT1   (DEDUP_OUT0 + (DEDUP_TILE + 1) * 2)  // 482
+#define DEDUP_META   (DEDUP_OUT1 + (DEDUP_TILE + 1) * 2)  // 644; 16 words
+// DEDUP_META sub-offsets:
+//   [0]=pending_vd (0xFFFFFFFF=none), [1]=pending_k, [2]=out_n,
+//   [3]=ii (intv cursor), [4]=diag_tile_n, [5]=is_last_diag,
+//   [6]=intv_n_pe (full intv count for this PE)
+#define DEDUP_INTV   (DEDUP_META + 16)  // 660; full intv preload buffer
+
 // Apply address swizzling for mvi instruction
 // Keeps bit[0] as line offset, moves bits[2:1] to top
 inline int apply_address_swizzle(int addr) {
     if (addr < 0 || addr > SPM_ADDR_NUM) {
-        fprintf(stderr, "Error: address %d out of bound for swizzling\n", addr);
+        fprintf(stderr, "Error: address %d out of bound for swizzling (max %d)\n",
+            addr, SPM_ADDR_NUM);
         exit(-1);
     }
     int addr_masked = addr & ((1u << ADDR_LEN) - 1);

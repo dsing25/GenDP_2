@@ -309,6 +309,10 @@ Current configuration: 8192 words/bank × 4 banks = 32768 words total.
 - Output files: `<kernel>_output.txt`, `<kernel>_sim_results/`
 - Use `-s` flag to show output during simulation
 - Address sanitizer is enabled by default (disable with `ADDRESS_SANITIZER=0`)
+- unless otherwise specified, you should always assume that the code you started working on was
+  correct. There are not "prexisting bugs before your change". I test the code before I have you
+  begin working. If there was an unknown bug, it was caused by your changes. Regardless, all bugs
+  need to be fixed before adding new features.
 
 ### Important Code Locations
 
@@ -479,6 +483,14 @@ bash scripts/<kernel>_throughput.sh <num_cases>
 ## Style
 For c++ limit the line length to 100 characters, but avoid unecessary line breaks.
 For instruction_generator.py files never put a line break within a f.write instruction
+
+## Agents
+You have some specialized agents available to you:
++ gendp-isa-reviewer: should be used after you've written c++ magic code intented to look like ISA.
+  Will review and let you know if you've done anything not realistic that needs fixing.
++ stop-gate: When you've finished a task or want to ask for user feedback, invoke stop-gate. It will
+  answer simple questions, and if it is too complex, will summarize the progress for the user.
++ isa-optimizer: This can be used to optimize c++ ISA-like code with instruction reordering.
 
 ## Additional Documentation
 
