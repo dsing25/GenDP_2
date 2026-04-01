@@ -1065,39 +1065,67 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         m8_done: ;
 #endif // reference vs PE implementation
         } else if (magic_id == 11) {
-            // Boundary sort: compare-and-swap last B of this PE with first B of next PE
-            // Ping-pong: mask bit 0 selects buffer half
+            // Boundary sort: 3-step compare-and-swap to fix up to 2
+            // entries of disorder at each PE boundary. Runs in parallel
+            // on PEs 0-2 (each fixes its own right boundary with the
+            // next PE's left boundary). PE3 pushes last B to FIFO.
             int buf_base = (magic_mask & 1)
                 ? GWFA_BUF1_BASE : GWFA_BUF0_BASE;
             int *spm = &SPM_unit->buffer[
                 id * SPM_BANK_GROUP_SIZE + buf_base];
             int tb_n = spm[1152]; // META_OFF
+            int tmp_vd, tmp_k;    // swap registers
             if (id < 3) {
                 int *next = &SPM_unit->buffer[
-                    (id + 1) * SPM_BANK_GROUP_SIZE
-                    + buf_base];
+                    (id + 1) * SPM_BANK_GROUP_SIZE + buf_base];
                 int next_tb_n = next[1152];
                 if (tb_n > 0 && next_tb_n > 0) {
-                    int my_off = 256 + 2 * (tb_n - 1);
-                    int nx_off = 256;
-                    if ((uint32_t)spm[my_off]
-                        > (uint32_t)next[nx_off]) {
-                        int tmp_vd = spm[my_off];
-                        int tmp_k = spm[my_off + 1];
-                        spm[my_off] = next[nx_off];
-                        spm[my_off + 1] =
-                            next[nx_off + 1];
-                        next[nx_off] = tmp_vd;
-                        next[nx_off + 1] = tmp_k;
+                    int last  = 256 + 2 * (tb_n - 1);
+                    int first = 256;
+                    // Step 1: compare-and-swap my last ↔ next's first
+                    if ((uint32_t)spm[last] > (uint32_t)next[first]) {
+                        tmp_vd = spm[last]; tmp_k = spm[last + 1];
+                        spm[last] = next[first];
+                        spm[last + 1] = next[first + 1];
+                        next[first] = tmp_vd;
+                        next[first + 1] = tmp_k;
+                    }
+                    // Step 2: fix my tail (second-to-last vs last)
+                    if (tb_n >= 2) {
+                        int prev = 256 + 2 * (tb_n - 2);
+                        if ((uint32_t)spm[prev] > (uint32_t)spm[last]) {
+                            tmp_vd = spm[prev]; tmp_k = spm[prev + 1];
+                            spm[prev] = spm[last];
+                            spm[prev + 1] = spm[last + 1];
+                            spm[last] = tmp_vd;
+                            spm[last + 1] = tmp_k;
+                        }
+                    }
+                    // Step 3: fix next PE's head (first vs second)
+                    if (next_tb_n >= 2) {
+                        int second = 256 + 2;
+                        if ((uint32_t)next[first] > (uint32_t)next[second]) {
+                            tmp_vd = next[first]; tmp_k = next[first + 1];
+                            next[first] = next[second];
+                            next[first + 1] = next[second + 1];
+                            next[second] = tmp_vd;
+                            next[second + 1] = tmp_k;
+                        }
                     }
                 }
             } else {
-                // PE 3: push last B to FIFO, decrement count
-                if (tb_n > 0) {
-                    int off = 256 + 2 * (tb_n - 1);
-                    fifo_out[0]->push(spm[off]);
-                    fifo_out[1]->push(spm[off + 1]);
-                    spm[1152] = tb_n - 1;
+                // PE 3: fix tail only (FIFO push moved to magic 9
+                // so it's consumed by the NEXT tile group's writeback)
+                if (tb_n >= 2) {
+                    int last = 256 + 2 * (tb_n - 1);
+                    int prev = 256 + 2 * (tb_n - 2);
+                    if ((uint32_t)spm[prev] > (uint32_t)spm[last]) {
+                        tmp_vd = spm[prev]; tmp_k = spm[prev + 1];
+                        spm[prev] = spm[last];
+                        spm[prev + 1] = spm[last + 1];
+                        spm[last] = tmp_vd;
+                        spm[last + 1] = tmp_k;
+                    }
                 }
             }
         } else if (magic_id == 13) {

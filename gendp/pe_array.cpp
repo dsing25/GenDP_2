@@ -827,14 +827,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int score = main_addressing_register[12] - 1;
             printf("qqq %d qqq\n", score);
         } else if (magic_id == 7) {
-            // GWFA tile load diags: MM → S1c (staged for magic 8)
+            // GWFA tile load diags: MM → SPM directly (no S1c staging)
             // ISA-like: all state in gr[]/s1c[]/mm[]/spm[]
-            // S1c layout: [0..511] A_TILE (4 PEs × 128w),
-            //             [512..515] tile_n[0..3]
-            constexpr int S1C_PE_STRIDE = 128;
             constexpr int S1C_TILE_N = 512;
             constexpr int META_OFF = 1152;
             constexpr int DIAGS_PER_PE = 64;
+            constexpr int A_TILE_OFF = 0;
             int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
             int *spm = SPM_unit->buffer;
             int buf_base = (magic_mask & 1)
@@ -857,11 +855,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     spm[pe_spm + META_OFF + 1] = 0;     // si
                 }
             }
-            // Phase 2: hoisted peel + mvdq MM → S1c
+            // Phase 2: hoisted peel + mvdq MM → SPM (direct, no S1c)
             // PE alloc: PE0=gr[1,3,4] PE1=gr[5,6,7] PE2=gr[8,9,10]
             //           PE3=gr[11,16,17]  gr[13]=peel/flag
             {
-                // Setup per-PE src (MM), dst (S1c), end
+                // Setup per-PE src (MM), dst (SPM), end
                 for (int pe = 0; pe < 4; pe++) {
                     int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
                     int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
@@ -876,7 +874,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     end = gr[13] + gr[13];                // add: 2*tile_n
                     //NOP
                     end = src + end;                       // add: end
-                    dst = pe * S1C_PE_STRIDE;             // si: S1c dst
+                    // SPM dst = pe_base + A_TILE_OFF
+                    dst = pe * SPM_BANK_GROUP_SIZE + buf_base + A_TILE_OFF;
                 }
                 // Peel (handle tile_n%4 remainder)
                 for (int pe = 0; pe < 4; pe++) {
@@ -885,135 +884,107 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[13] = s1c[S1C_TILE_N + pe] & 3;   // andi: n%4
                     //NOP
                 m7_peel:
-                    if (gr[13] <= 0) goto m7_peel_done; gr[13] -= 1; // bgt; subi (paired)
-                    s1c[dst] = mm[src]; s1c[dst+1] = mm[src+1];
-                    src += 2; dst += 2;                   // addi
+                    if (gr[13] <= 0) goto m7_peel_done; gr[13] -= 1;
+                    spm[dst] = mm[src]; spm[dst+1] = mm[src+1]; // mvd MM→SPM
+                    src += 2; dst += 2;
                     goto m7_peel;
                 m7_peel_done:
                     (void)0;
                 }
-                // Second peel: equalize PE counts; then main unmasked loop (1 cycle/iter overhead)
-                gr[23] = gr[4] - gr[1];                        // PE0 remaining
+                // Second peel: equalize PE counts; then main loop
+                gr[23] = gr[4] - gr[1];
                 gr[13] = gr[7] - gr[5];
-                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE1
+                if (gr[13] < gr[23]) gr[23] = gr[13];
                 gr[13] = gr[10] - gr[8];
-                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE2
+                if (gr[13] < gr[23]) gr[23] = gr[13];
                 gr[13] = gr[17] - gr[11];
-                if (gr[13] < gr[23]) gr[23] = gr[13];          // min with PE3 → gr[23]=min_words
-                gr[4] -= gr[23]; gr[7] -= gr[23]; gr[10] -= gr[23]; gr[17] -= gr[23]; // adjust ends
+                if (gr[13] < gr[23]) gr[23] = gr[13];
+                gr[4] -= gr[23]; gr[7] -= gr[23]; gr[10] -= gr[23]; gr[17] -= gr[23];
             m7_sp_outer:
                 gr[13] = 0;
                 if (gr[1] >= gr[4]) goto m7_sp_pe1;
-                mvdq_copy(&s1c[gr[3]], &mm[gr[1]], 8);
+                mvdq_copy(&spm[gr[3]], &mm[gr[1]], 8);   // PE0: MM→SPM
                 gr[1] += 8; gr[3] += 8; gr[13] = 1;
             m7_sp_pe1:
                 if (gr[5] >= gr[7]) goto m7_sp_pe2;
-                mvdq_copy(&s1c[gr[6]], &mm[gr[5]], 8);
+                mvdq_copy(&spm[gr[6]], &mm[gr[5]], 8);   // PE1
                 gr[5] += 8; gr[6] += 8; gr[13] = 1;
             m7_sp_pe2:
                 if (gr[8] >= gr[10]) goto m7_sp_pe3;
-                mvdq_copy(&s1c[gr[9]], &mm[gr[8]], 8);
+                mvdq_copy(&spm[gr[9]], &mm[gr[8]], 8);   // PE2
                 gr[8] += 8; gr[9] += 8; gr[13] = 1;
             m7_sp_pe3:
                 if (gr[11] >= gr[17]) goto m7_sp_check;
-                mvdq_copy(&s1c[gr[16]], &mm[gr[11]], 8);
+                mvdq_copy(&spm[gr[16]], &mm[gr[11]], 8);  // PE3
                 gr[11] += 8; gr[16] += 8; gr[13] = 1;
             m7_sp_check:
                 if (gr[13] != 0) goto m7_sp_outer;
-                // Convert PE1-3 cursors to deltas for register-offset main loop
-                gr[5] = gr[5] - gr[1];                        // PE1 src delta
-                gr[6] = gr[6] - gr[3];                        // PE1 dst delta
-                gr[8] = gr[8] - gr[1];                        // PE2 src delta
-                gr[9] = gr[9] - gr[3];                        // PE2 dst delta
-                gr[11] = gr[11] - gr[1];                      // PE3 src delta
-                gr[16] = gr[16] - gr[3];                      // PE3 dst delta
-                gr[13] = (unsigned)gr[23] >> 3;                // min_iters = min_words/8
+                // Convert PE1-3 cursors to deltas for main loop
+                gr[5] = gr[5] - gr[1];
+                gr[6] = gr[6] - gr[3];
+                gr[8] = gr[8] - gr[1];
+                gr[9] = gr[9] - gr[3];
+                gr[11] = gr[11] - gr[1];
+                gr[16] = gr[16] - gr[3];
+                gr[13] = (unsigned)gr[23] >> 3;
             m7_main_outer:
-                if (gr[13] <= 0) goto m7_all_done; gr[13] -= 1; // bgt; subi (paired)
-                mvdq_copy(&s1c[gr[3]], &mm[gr[1]], 8);                    // PE0
-                mvdq_copy(&s1c[gr[3]+gr[6]], &mm[gr[1]+gr[5]], 8);       // PE1 (reg offset)
-                mvdq_copy(&s1c[gr[3]+gr[9]], &mm[gr[1]+gr[8]], 8);       // PE2 (reg offset)
-                mvdq_copy(&s1c[gr[3]+gr[16]], &mm[gr[1]+gr[11]], 8);     // PE3 (reg offset)
-                gr[1] += 8; gr[3] += 8;                       // advance PE0 only
+                if (gr[13] <= 0) goto m7_all_done; gr[13] -= 1;
+                mvdq_copy(&spm[gr[3]], &mm[gr[1]], 8);                   // PE0
+                mvdq_copy(&spm[gr[3]+gr[6]], &mm[gr[1]+gr[5]], 8);      // PE1
+                mvdq_copy(&spm[gr[3]+gr[9]], &mm[gr[1]+gr[8]], 8);      // PE2
+                mvdq_copy(&spm[gr[3]+gr[16]], &mm[gr[1]+gr[11]], 8);    // PE3
+                gr[1] += 8; gr[3] += 8;
                 goto m7_main_outer;
             m7_all_done:
                 (void)0;
             }
-            // Advance cursor (moved from magic 9 section 6 for overlap)
-            gr[7] = gr[15] - gr[14];                       // sub: remaining
+            // Advance cursor
+            gr[7] = gr[15] - gr[14];
             //NOP
-            if (gr[7] > 256) gr[7] = 256;                  // blt; si
+            if (gr[7] > 256) gr[7] = 256;
             //NOP
-            gr[14] = gr[14] + gr[7];                       // add (cursor+=)
+            gr[14] = gr[14] + gr[7];
         } else if (magic_id == 8) {
-            // GWFA tile load seq info: S1c → SPM + S2 → SPM
-            // ISA-like: all state in gr[]/spm[]/s1c[]/s2[]
-            //
-            // Phase 1: process S1c in 4-diag chunks per PE:
-            //   - mvdq chunk S1c → SPM (A_TILE)
-            //   - extract unique vertices, overwrite S1c with
-            //     vertex list
-            // Phase 2: for each PE, iterate vertex list,
-            //   S2 lookup → write SEQ_INFO to SPM
-            //
-            // S1c layout (input from magic 7):
-            //   [pe*128 .. pe*128+127]  A_TILE per PE
-            //   [512..515]              tile_n[0..3]
-            // S1c layout (output of phase 1):
-            //   [0..n_total-1]  vertex list (per-PE, concatenated)
-            //   [512..515]      tile_n[0..3]
-            //   [516..519]      n_nodes[0..3]
+            // GWFA tile load seq info: vertex extract from SPM + S2 → SPM
+            // Diag data already in SPM (loaded by magic 7 directly).
+            // Phase 1: scan SPM A_TILE to extract unique vertices → S1c
+            // Phase 2: iterate vertex list, S2 lookup → SPM SEQ_INFO
             constexpr int A_TILE_OFF = 0;
             constexpr int SEQ_INFO_OFF = 128;
             constexpr int META_OFF = 1152;
-            constexpr int S1C_PE_STRIDE = 128;
             constexpr int S1C_TILE_N = 512;
             constexpr int S1C_NNODES = 516;
             int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
             int *spm = SPM_unit->buffer;
             int buf_base = (magic_mask & 1)
                 ? GWFA_BUF1_BASE : GWFA_BUF0_BASE;
-            // === Phase 1: chunk process — S1c → SPM + vertex extract ===
+            // === Phase 1: scan SPM diags, extract unique vertices → S1c ===
             gr[5] = 0;                                   // si: vtx write_ptr
             for (int pe = 0; pe < 4; pe++) {
                 int pe_spm = pe * SPM_BANK_GROUP_SIZE + buf_base;
-                int pe_s1c = pe * S1C_PE_STRIDE;
                 gr[10] = s1c[S1C_TILE_N + pe];          // mv (tile_n)
                 //NOP
                 gr[2] = 0;                               // si: n_nodes
-                gr[6] = -1;                              // si: prev_v (reset per PE)
+                gr[6] = -1;                              // si: prev_v
                 gr[1] = gr[10] + gr[10];                 // add: pe_words
                 gr[11] = 0;                              // si: word offset
                 //NOP
-            m8_chunk:
-                // Step 1: mvdq S1c → SPM (8 words)
-                if (gr[11] >= gr[1]) goto m8_chunk_done; gr[8] = pe_s1c + gr[11]; // bge; addi
-                gr[9] = pe_spm + A_TILE_OFF + gr[11];   // addi: spm dst
-                mvdq_copy(&spm[gr[9]], &s1c[gr[8]], 8); // mvdq S1c→SPM
-                // Step 2: scan 4 diags, extract unique vertices
-                gr[3] = 0;                               // si: diag offset in chunk
-                //NOP
             m8_scan:
-                gr[7] = gr[11] + gr[3];                  // add: word pos
-                //NOP
-                if (gr[7] >= gr[1]) goto m8_scan_done; gr[7] = s1c[pe_s1c + gr[7]]; // bge; mv (paired)
+                if (gr[11] >= gr[1]) goto m8_scan_done;
+                // Read vd from SPM (data already there from magic 7)
+                gr[7] = spm[pe_spm + A_TILE_OFF + gr[11]]; // mv SPM→gr
                 //NOP
                 gr[7] = (unsigned)gr[7] >> 16;           // shifti_r (v)
                 //NOP
                 if (gr[7] == gr[6]) goto m8_scan_skip;   // beq: same vertex
                 //NOP
-                // Step 3: write vertex to S1c (overwrite consumed data), auto-increment
-                s1c[gr[5]++] = gr[7];                    // mv gr→S1c, write_ptr++
+                s1c[gr[5]++] = gr[7];                    // mv gr→S1c
                 gr[2] = gr[2] + 1;                       // addi (n_nodes++)
                 gr[6] = gr[7];                           // mv (prev_v = v)
             m8_scan_skip:
-                gr[3] = gr[3] + 2;                       // addi (next diag)
-                //NOP
-                if (gr[3] < 8) goto m8_scan;             // blt: 4 diags/chunk
+                gr[11] = gr[11] + 2;                     // addi (next diag)
+                goto m8_scan;                             // jump
             m8_scan_done:
-                gr[11] = gr[11] + 8;                     // addi (next chunk)
-                goto m8_chunk;                            // jump
-            m8_chunk_done:
                 s1c[S1C_NNODES + pe] = gr[2];           // mv (n_nodes)
                 spm[pe_spm + META_OFF + 2] = gr[2];     // mv → SPM
             }
@@ -1083,6 +1054,20 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 spm[pe0_base + B_TILE_OFF + 1] = gr[4];   // mv gr→SPM
                 gr[3] = gr[8];                              // mv
                 gr[4] = gr[9];                              // mv
+                // Fix PE0[0] vs PE0[1]: after swap, PE0[0] may be > PE0[1]
+                if (gr[7] >= 2) {                           // bgt: tb_n >= 2
+                    gr[8] = spm[pe0_base + B_TILE_OFF + 2]; // mv: PE0[1].vd
+                    if ((uint32_t)spm[pe0_base + B_TILE_OFF]
+                        > (uint32_t)gr[8]) {
+                        int tmp_vd = spm[pe0_base + B_TILE_OFF];
+                        int tmp_k  = spm[pe0_base + B_TILE_OFF + 1];
+                        spm[pe0_base + B_TILE_OFF]     = gr[8];
+                        spm[pe0_base + B_TILE_OFF + 1] =
+                            spm[pe0_base + B_TILE_OFF + 3];
+                        spm[pe0_base + B_TILE_OFF + 2] = tmp_vd;
+                        spm[pe0_base + B_TILE_OFF + 3] = tmp_k;
+                    }
+                }
             m9_s1_write:
                 // write to MM: mm[s_B_a_base + 2*s_B_n]
                 gr[7] = gr[20] + gr[24];                   // add
@@ -1090,7 +1075,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 mm[gr[7] + gr[24]] = gr[3]; mm[gr[7] + gr[24] + 1] = gr[4]; // mvd (register-offset)
                 gr[24] = gr[24] + 1;                        // addi
             m9_s1_skip:
-                gr[2] = fifo_unit[0][0].size() > 0 ? 1 : 0;
+                (void)0;
             }
             // === Section 2: Read per-PE metadata → s1c ===
             for (int pe = 0; pe < 4; pe++) {
@@ -1102,6 +1087,20 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 s1c[pe] = gr[7];                            // mv gr→S1c
                 s1c[4 + pe] = gr[8];                       // mv gr→S1c
                 s1c[8 + pe] = gr[9];                       // mv gr→S1c
+            }
+            // === Section 2b: Push PE3 last B entry to FIFO ===
+            // Consumed by NEXT tile group's writeback (Section 1)
+            {
+                int pe3_base = 3 * SPM_BANK_GROUP_SIZE + buf_base;
+                gr[7] = spm[pe3_base + META_OFF];          // mv SPM→gr
+                //NOP; //NOP
+                if (gr[7] > 0) {
+                    int off = pe3_base + B_TILE_OFF + 2 * (gr[7] - 1);
+                    fifo_unit[0][0].push(spm[off]);        // mv SPM→FIFO
+                    fifo_unit[0][1].push(spm[off + 1]);    // mv SPM→FIFO
+                    s1c[3] = gr[7] - 1;                    // subi (adjust for writeback)
+                }
+                gr[2] = fifo_unit[0][0].size() > 0 ? 1 : 0;
             }
             // === Section 3: B diags SPM → MM (hoisted peel + mvdq) ===
             // PE alloc: PE0=gr[1,3,4] PE1=gr[5,6,7] PE2=gr[8,9,10]
@@ -2257,16 +2256,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
             gwfa_set_ha_n_dirty((uint32_t)gr[31]);
         } else if (magic_id == 16) {
-            // TEMP: original gwfa_phase2_finalize for merge testing
-            gwfa_sync_counters(main_addressing_register[24],
-                (uint32_t)main_addressing_register[25],
-                (uint32_t)main_addressing_register[26],
-                (uint32_t)main_addressing_register[27],
-                main_addressing_register[28]);
-            { int err = gwfa_phase2_finalize();
-            main_addressing_register[15] = gwfa_get_n_a();
-            if (err) write_spm_magic(32767, 1); }
-            if (false) {
+            // Sync counters, filter next_intv, setup intv sort state.
             auto &gr = main_addressing_register;
             gwfa_sync_counters(gr[24], (uint32_t)gr[25],
                 (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
@@ -2278,7 +2268,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             constexpr int MM_SWAP     = MM_NEXT_INTV + INTV_CAP_V * 2;
             int next_intv_n = gr[28];
             // Filter invalid next_intv entries (vd1 != vd0 + 1)
-            { int v = 0;
+            int n_phase1_intv = s1c[152];
+            if (n_phase1_intv < 0) n_phase1_intv = 0;
+            if (n_phase1_intv > next_intv_n) n_phase1_intv = next_intv_n;
+            { int v = 0, p1v = 0;
             for (int i = 0; i < next_intv_n; i++) {
                 uint32_t v0 = (uint32_t)mm[MM_NEXT_INTV + 2*i];
                 uint32_t v1 = (uint32_t)mm[MM_NEXT_INTV + 2*i + 1];
@@ -2288,19 +2281,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         mm[MM_NEXT_INTV + 2*v+1] = mm[MM_NEXT_INTV + 2*i+1];
                     }
                     v++;
+                    if (i < n_phase1_intv) p1v++;
                 }
             }
-            next_intv_n = v; }
+            next_intv_n = v;
+            n_phase1_intv = p1v; }
             // Save state for magic 26 (after intv sort completes)
             s1c[144] = gr[20];  // diag_base
             s1c[145] = gr[24];  // n_a
             s1c[146] = (int)gwfa_get_intv_n();  // old intv_n
-            // Setup intv sort: gr[3]=src, gr[4]=dst, gr[6]=nape, gr[24]=n
-            gr[3]  = MM_NEXT_INTV;
+            s1c[153] = n_phase1_intv;            // phase 1 intv count
+            // Merge path: sort only unsorted phase 2 tail
+            int n_unsorted_intv = next_intv_n - n_phase1_intv;
+            gr[3]  = MM_NEXT_INTV + n_phase1_intv * 2;
             gr[4]  = MM_SWAP;
-            gr[6]  = (next_intv_n + 3) / 4;
-            gr[24] = next_intv_n;
-            } // end if(false)
+            gr[6]  = (n_unsorted_intv + 3) / 4;
+            gr[24] = n_unsorted_intv;
         } else if (magic_id == 17) {
             // Set score = gr_lo[12] (current edit distance, packed)
             gwfa_set_score(
@@ -2445,21 +2441,60 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int diag_base   = s1c[144];
                 int n_a         = s1c[145];
                 int intv_n      = s1c[146];
-                int next_intv_n = gr[24];
-                // === Merge old intv + sorted next_intv ===
+                int n_p1_intv   = s1c[153];
+                int n_p2_intv   = gr[24]; // sort loop sorted the tail
+                int next_intv_n = n_p1_intv + n_p2_intv;
+                // === Merge sorted P1 prefix + sorted P2 tail → MM_SORT_BUF ===
+                int merged_src = MM_NEXT_INTV; // default: no merge needed
+                if (n_p1_intv > 0 && n_p2_intv > 0) {
+                    int abase = MM_NEXT_INTV;
+                    int bbase = MM_NEXT_INTV + n_p1_intv * 2;
+                    int ai = 0, bi = 0, ki = 0;
+                    while (ai < n_p1_intv && bi < n_p2_intv) {
+                        if ((uint32_t)mm[abase + ai*2]
+                            <= (uint32_t)mm[bbase + bi*2]) {
+                            mm[MM_SORT_BUF + ki*2] = mm[abase + ai*2];
+                            mm[MM_SORT_BUF + ki*2+1] = mm[abase + ai*2+1];
+                            ai++; ki++;
+                        } else {
+                            mm[MM_SORT_BUF + ki*2] = mm[bbase + bi*2];
+                            mm[MM_SORT_BUF + ki*2+1] = mm[bbase + bi*2+1];
+                            bi++; ki++;
+                        }
+                    }
+                    while (ai < n_p1_intv) {
+                        mm[MM_SORT_BUF + ki*2] = mm[abase + ai*2];
+                        mm[MM_SORT_BUF + ki*2+1] = mm[abase + ai*2+1];
+                        ai++; ki++;
+                    }
+                    while (bi < n_p2_intv) {
+                        mm[MM_SORT_BUF + ki*2] = mm[bbase + bi*2];
+                        mm[MM_SORT_BUF + ki*2+1] = mm[bbase + bi*2+1];
+                        bi++; ki++;
+                    }
+                    merged_src = MM_SORT_BUF;
+                } else if (n_p2_intv > 0) {
+                    // Only P2 tail (no P1 prefix) — already at MM_NEXT_INTV
+                    merged_src = MM_NEXT_INTV + n_p1_intv * 2;
+                    // Shift to start of MM_NEXT_INTV for uniform access below
+                    for (int i = 0; i < n_p2_intv * 2; i++)
+                        mm[MM_SORT_BUF + i] = mm[merged_src + i];
+                    merged_src = MM_SORT_BUF;
+                }
+                // === Merge old intv + merged next_intv → MM_INTV ===
                 if (intv_n + next_intv_n > 0) {
                     for (int i = 0; i < intv_n * 2; i++)
                         mm[MM_SWAP + i] = mm[MM_INTV + i];
                     int ai = 0, bi = 0, k = 0;
                     while (ai < intv_n && bi < next_intv_n) {
                         if ((uint32_t)mm[MM_SWAP + 2*ai]
-                            <= (uint32_t)mm[MM_NEXT_INTV + 2*bi]) {
+                            <= (uint32_t)mm[merged_src + 2*bi]) {
                             mm[MM_INTV + 2*k] = mm[MM_SWAP + 2*ai];
                             mm[MM_INTV + 2*k+1] = mm[MM_SWAP + 2*ai+1];
                             ai++; k++;
                         } else {
-                            mm[MM_INTV + 2*k] = mm[MM_NEXT_INTV + 2*bi];
-                            mm[MM_INTV + 2*k+1] = mm[MM_NEXT_INTV + 2*bi+1];
+                            mm[MM_INTV + 2*k] = mm[merged_src + 2*bi];
+                            mm[MM_INTV + 2*k+1] = mm[merged_src + 2*bi+1];
                             bi++; k++;
                         }
                     }
@@ -2469,8 +2504,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         ai++; k++;
                     }
                     while (bi < next_intv_n) {
-                        mm[MM_INTV + 2*k] = mm[MM_NEXT_INTV + 2*bi];
-                        mm[MM_INTV + 2*k+1] = mm[MM_NEXT_INTV + 2*bi+1];
+                        mm[MM_INTV + 2*k] = mm[merged_src + 2*bi];
+                        mm[MM_INTV + 2*k+1] = mm[merged_src + 2*bi+1];
                         bi++; k++;
                     }
                     // Filter invalid entries (vd0 >= vd1)
@@ -2507,21 +2542,77 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         intv_n = 0;
                     }
                 }
-                // Sort ALL diags (phase 1 output is not globally sorted
-                // due to PE interleaving at boundaries).
-                // TODO: fix phase 1 writeback to produce sorted output,
-                // then sort only the unsorted A-queue tail and merge.
-                gr[3]  = diag_base;
+                constexpr int DIAG_CAP_LIM = (16 << 20);
+                if (n_a > DIAG_CAP_LIM) n_a = DIAG_CAP_LIM;
+                // Merge path: sort only unsorted A-queue tail
+                int n_phase1_v = s1c[151];
+                if (n_phase1_v < 0) n_phase1_v = 0;
+                if (n_phase1_v > n_a) n_phase1_v = n_a;
+                int n_unsorted = n_a - n_phase1_v;
+                s1c[147] = n_phase1_v;
+                s1c[148] = n_a;
+                s1c[149] = intv_n;
+                s1c[150] = diag_base;
+                gr[3]  = diag_base + n_phase1_v * 2;
                 gr[4]  = MM_SORT_BUF;
-                gr[6]  = (n_a + 3) / 4;
-                gr[24] = n_a;
+                gr[6]  = (n_unsorted + 3) / 4;
+                gr[24] = n_unsorted;
                 gr[28] = intv_n;
             }
         } else if (magic_id == 27) {
-            // No-op: merge path placeholder. Currently sort loop 2 sorts
-            // everything, so no merge needed. Will implement PE-tiled merge
-            // after phase 1 writeback is fixed to produce sorted output.
-            // Just pass through — gr[3,4,24,28] already set by sort loop 2.
+            // Merge sorted phase1 prefix with sorted phase2 tail.
+            {
+                auto &gr = main_addressing_register;
+                int *mm = gwfa_get_mm();
+                constexpr int DIAG_CAP_V  = (16 << 20);
+                constexpr int INTV_CAP_V  = (1 << 21);
+                constexpr int MM_SORT_BUF = DIAG_CAP_V * 6 + INTV_CAP_V * 6;
+                int n_phase1  = s1c[147];
+                int n_a       = s1c[148];
+                int intv_n    = s1c[149];
+                int diag_base = s1c[150];
+                int n_tail = n_a - n_phase1;
+                if (n_tail < 0) n_tail = 0;
+                if (n_phase1 < 0) n_phase1 = 0;
+                if (n_a > (16 << 20)) n_a = (16 << 20);
+                if (n_phase1 > n_a) n_phase1 = n_a;
+                n_tail = n_a - n_phase1;
+                if (n_phase1 > n_a) n_phase1 = n_a;
+                // Two-pointer merge: prefix + tail → MM_SORT_BUF
+                int abase = diag_base;
+                int bbase = diag_base + n_phase1 * 2;
+                int ai = 0, bi = 0, ki = 0;
+                while (ai < n_phase1 && bi < n_tail) {
+                    if ((uint32_t)mm[abase + ai*2]
+                        <= (uint32_t)mm[bbase + bi*2]) {
+                        mm[MM_SORT_BUF + ki*2] = mm[abase + ai*2];
+                        mm[MM_SORT_BUF + ki*2+1] = mm[abase + ai*2+1];
+                        ai++; ki++;
+                    } else {
+                        mm[MM_SORT_BUF + ki*2] = mm[bbase + bi*2];
+                        mm[MM_SORT_BUF + ki*2+1] = mm[bbase + bi*2+1];
+                        bi++; ki++;
+                    }
+                }
+                while (ai < n_phase1) {
+                    mm[MM_SORT_BUF + ki*2] = mm[abase + ai*2];
+                    mm[MM_SORT_BUF + ki*2+1] = mm[abase + ai*2+1];
+                    ai++; ki++;
+                }
+                while (bi < n_tail) {
+                    mm[MM_SORT_BUF + ki*2] = mm[bbase + bi*2];
+                    mm[MM_SORT_BUF + ki*2+1] = mm[bbase + bi*2+1];
+                    bi++; ki++;
+                }
+                // Copy merged result back to diag_base
+                for (int i = 0; i < n_a * 2; i++)
+                    mm[diag_base + i] = mm[MM_SORT_BUF + i];
+                // Setup for dedup
+                gr[3]  = diag_base;
+                gr[4]  = MM_SORT_BUF;
+                gr[24] = n_a;
+                gr[28] = intv_n;
+            }
         } else if (magic_id == 29) {
             // Dedup split search + full intv preload.
             // Inputs: gr[3]=diag_base, gr[24]=n_a, gr[28]=intv_n.

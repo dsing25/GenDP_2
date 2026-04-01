@@ -176,10 +176,13 @@ def gwfa_main_instruction():
     f.write(write_magic(MAGIC_9_BUF1))                                                             # PC 29: writeback buf1
     # fallthrough to FIFO_FLUSH
     # === FIFO FLUSH (guarded by gr[2] from magic 9) ===
-    f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 0, 0, 0, 2, beq))                        # PC 30: beq gr[2]==0 → +4 (PC 34: P2 prologue)
+    f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 0, 0, 0, 2, beq))                        # PC 30: beq gr[2]==0 → +4 (PC 34: save n_phase1)
     f.write(data_movement_instruction(gr, fifo[0], 0, 0, 3, 0, 0, 0, 0, 0, mv))                  # PC 31: gr[3]=fifo[0]
     f.write(data_movement_instruction(gr, fifo[1], 0, 0, 4, 0, 0, 0, 0, 0, mv))                  # PC 32: gr[4]=fifo[1]
     f.write(write_magic(12))                                                                       # PC 33: flush to s_B_a
+    # fallthrough
+    f.write(data_movement_instruction(s1c, gr, 0, 0, 151, 0, 0, 0, 24, 0, mv))                   # PC 34: s1c[151]=gr[24] (save n_phase1 diags)
+    f.write(data_movement_instruction(s1c, gr, 0, 0, 152, 0, 0, 0, 28, 0, mv))                   # PC 35: s1c[152]=gr[28] (save n_phase1 intv)
     # === PHASE 2 (overlapped: magic18+magic15 during PE_P2, magic14 during PE_FIN0) ===
     # --- Prologue: load both buffers, compute BUF1 to seed HALF_A ---
     prologue_start = f.write_count
@@ -280,10 +283,61 @@ def gwfa_main_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 1, bne))                          # bne → DRAIN_EXIT
     f.write(write_magic(MAGIC_15_BUF0_F0A))                                                          # magic15 BUF0→FIN0_A
     f.write(data_movement_instruction(0, 0, 0, 0, shared_fin0a_drain - f.write_count, 0, 0, 0, 0, 0, jump))  # jump → FIN0_A_DRAIN
-    # === POST-PHASE 2: INTV SORT → INTV MERGE → DIAG SORT → DEDUP ===
+    # === POST-PHASE 2: INTV SORT → INTV MERGE → DIAG SORT → MERGE → DEDUP ===
     p2_exit = f.write_count
     f.patch_imm0(br_p2exit, p2_exit - br_p2exit)
-    f.write(write_magic(16))                                                                          # TEMP: finalize only
+    # Intv sort setup (gr[30] already saved at PC 34 before phase 2)
+    f.write(write_magic(16))                                                                          # filter+setup intv sort
+    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 0, 0, si))                           # gr[1]=0
+    emit_sort_loop(f)                                                                                  # sort loop 1: intv
+    # Intv merge + diag tail sort setup
+    f.write(write_magic(MAGIC_26))                                                                     # merge intv + setup tail sort
+    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 0, 0, si))                           # gr[1]=0
+    emit_sort_loop(f)                                                                                  # sort loop 2: diag tail
+    # Merge sorted prefix + sorted tail
+    f.write(write_magic(27))                                                                           # merge
+    # Dedup
+    f.write(write_magic(MAGIC_29))                                                                     # dedup split search
+    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si))                           # gr[2]=0
+    # --- Dedup prologue: load PING ---
+    f.write(write_magic(MAGIC_30_BUF0))
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PING, 0, 0, 0, 0, 0, set_PC))
+    br_depilA_pro = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))                           # → DEPIL_A (patch)
+    # --- SS_PONG ---
+    ss_pong = f.write_count
+    f.write(write_magic(MAGIC_30_BUF1))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin
+    f.write(write_magic(MAGIC_31_BUF0))                                                               # writeback PING
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PONG, 0, 0, 0, 0, 0, set_PC))
+    br_depilB = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))                           # → DEPIL_B (patch)
+    # --- SS_PING ---
+    f.write(write_magic(MAGIC_30_BUF0))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin
+    f.write(write_magic(MAGIC_31_BUF1))                                                               # writeback PONG
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PING, 0, 0, 0, 0, 0, set_PC))
+    br_depilA_ss = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))                           # → DEPIL_A (patch)
+    f.write(data_movement_instruction(0, 0, 0, 0, ss_pong - f.write_count, 0, 0, 0, 0, 0, jump))    # → SS_PONG
+    # --- DEPIL_B ---
+    depilB = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin
+    f.write(write_magic(MAGIC_31_BUF1))                                                               # writeback last PONG
+    br_done_from_B = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, jump))                          # → DONE (patch)
+    # --- DEPIL_A ---
+    depilA = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin
+    f.write(write_magic(MAGIC_31_BUF0))                                                               # writeback last PING
+    # fallthrough to DONE
+    dedup_done = f.write_count
+    f.write(write_magic(MAGIC_32))                                                                     # gather + finalize
+    # Patch dedup branches
+    f.patch_imm0(br_depilA_pro, depilA - br_depilA_pro)
+    f.patch_imm0(br_depilB, depilB - br_depilB)
+    f.patch_imm0(br_depilA_ss, depilA - br_depilA_ss)
+    f.patch_imm0(br_done_from_B, dedup_done - br_done_from_B)
     # === STEP DONE ===
     f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 12, 0, 0, 0, 1, 12, addi))               # gr_lo[12]++
     f.write(write_magic(5))                                                                           # magic5
