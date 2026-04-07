@@ -72,3 +72,4 @@ RSHIFT_WORD = 22
 ADD_I = 23 # Note to Fix -1 not working for ADDI instructions or any negative number
 COPY_I = 24
 POPCOUNT = 25 
+RSHIFT_1 = 27

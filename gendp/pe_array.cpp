@@ -166,8 +166,8 @@ struct Graph {
         // Node 69830: Length=64
         // Sequence: TTGAGTGTGTTTTTAATTTTCACATATTCGTGAATTATCTTGGTTTTCTTCTATTGATTTCTAG
         nodes[3].node_id = 69830;
-        nodes[3].length = 64;
-        strcpy(nodes[3].sequence, "TTGAGTGTGTTTTTAATTTTCACATATTCGTGAATTATCTTGGTTTTCTTCTATTGATTTCTAG");
+        nodes[3].length = 63;
+        strcpy(nodes[3].sequence, "TGAGTGTGTTTTTAATTTTCACATATTCGTGAATTATCTTGGTTTTCTTCTATTGATTTCTAG");
         nodes[3].num_in_neighbors = 0;
         nodes[3].in_neighbors[0] = 0;
         nodes[3].num_out_neighbors = 1;
@@ -872,6 +872,8 @@ if (is_magic) {
         // Initialize HP/HN for first node (previousSlice.HP/HN)
         SPM_unit->access_magic(0, 18) = 0xFFFFFFFF;   // HP = AllOnes (first node)
         SPM_unit->access_magic(0, 19) = 0;            // HN = AllZeros (first node)
+        SPM_unit->access_magic(0, 20) = 0;   
+        SPM_unit->access_magic(0, 21) = 0;            
 
 #ifdef PROFILE
         printf("Magic instruction (payload=%d): Loaded equality vectors into PE0 SPM[0-3]\n", magic_payload);

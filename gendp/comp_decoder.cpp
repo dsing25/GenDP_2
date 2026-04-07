@@ -28,6 +28,7 @@ const char* opcode_to_string(int opcode) {
         case BWISE_NOT: return "not";
         case BWISE_XOR: return "xor";
         case LSHIFT_1: return "lshift1";
+        case RSHIFT_1: return "rshift1";
         case RSHIFT_WORD: return "rshift_w";
         case ADD_I: return "addi";
         case COPY_I: return "copyi";

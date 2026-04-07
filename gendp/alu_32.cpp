@@ -149,6 +149,12 @@ int alu_32::execute(int input_0, int input_1, int op) {
 			out = tmp >> 31;
 			break;
 		}
+		case RSHIFT_1: { 
+			if (input_0 < 0) tmp = pow(2, 32) + input_0;
+			else tmp = input_0;
+			out = tmp >> 1;
+			break;
+		}
 		case COPY: {
 			out = input_0;
 			break;
@@ -358,6 +364,12 @@ int alu_32::execute_4input(int input_0, int input_1, int input_2, int input_3, i
 			if (input_0 < 0) tmp = pow(2, 32) + input_0;
 			else tmp = input_0;
 			out = tmp >> 31;
+			break;
+		}
+		case RSHIFT_1: { // >> 1 bit
+			if (input_0 < 0) tmp = pow(2, 32) + input_0;
+			else tmp = input_0;
+			out = tmp >> 1;
 			break;
 		}
 		case COPY: {

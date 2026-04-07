@@ -8,7 +8,7 @@
 // GBV kernel configuration
 #define GBV_COMPUTE_INSTRUCTION_NUM 200
 #define GBV_PE_GROUP_SIZE 4
-#define GBV_MAX_CYCLES 1500
+#define GBV_MAX_CYCLES 28000
 
 // GBV register names for debugging
 static const char* GBV_REG_NAMES[] = {

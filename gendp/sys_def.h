@@ -103,6 +103,7 @@
 #define COPY_I 24 // Dummy TODO implement
 #define POPCOUNT 25 // partial dummy TODO
 #define CMP_2INP 26 // dummy TODO
+#define RSHIFT_1 27 // TODO partial dummy
 
 inline bool is_immediate_opcode(int opcode) {
     return (opcode == ADD_I || opcode == COPY_I);
