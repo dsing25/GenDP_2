@@ -371,7 +371,7 @@ struct PriorityQueue {
 // ==== Slice Node CAM (Content Addressable Memory) ====
 // Tracks nodes in current slice and their SPM addresses
 #define MAX_SLICE_NODES 32           // Max nodes in current slice
-#define SPM_SLICE_DATA_START 18      // Starting SPM address for slice data
+#define SPM_SLICE_DATA_START 22      // Starting SPM address for slice data
 #define SPM_SLICE_DATA_SIZE 4        // Words per node (VN, VP, scoreEnd, reserved)
 
 struct SliceNodeCAM {
@@ -869,12 +869,19 @@ if (is_magic) {
         SPM_unit->access_magic(0, 16) = 1229530258;   // VP (bottom 32 bits) = 0x49249252
         SPM_unit->access_magic(0, 17) = 22;            // scoreEnd (regfile[25] bottom 32 bits)
 
+        // Initialize HP/HN for first node (previousSlice.HP/HN)
+        SPM_unit->access_magic(0, 18) = 0xFFFFFFFF;   // HP = AllOnes (first node)
+        SPM_unit->access_magic(0, 19) = 0;            // HN = AllZeros (first node)
+
 #ifdef PROFILE
         printf("Magic instruction (payload=%d): Loaded equality vectors into PE0 SPM[0-3]\n", magic_payload);
-        printf("  Initialized extraSlice into SPM[4-6]:\n");
-        printf("    SPM[4] = VN = 1\n");
-        printf("    SPM[5] = VP = 1229530258 (0x49249252)\n");
-        printf("    SPM[6] = scoreEnd = 1\n");
+        printf("  Initialized extraSlice into SPM[15-17]:\n");
+        printf("    SPM[15] = VN = 1\n");
+        printf("    SPM[16] = VP = 1229530258 (0x49249252)\n");
+        printf("    SPM[17] = scoreEnd = 22\n");
+        printf("  Initialized HP/HN into SPM[18-19]:\n");
+        printf("    SPM[18] = HP = 0xFFFFFFFF (AllOnes)\n");
+        printf("    SPM[19] = HN = 0 (AllZeros)\n");
 #endif
     }
     else if (magic_payload == 2) {

@@ -421,6 +421,19 @@ def gbv_compute_v3():
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
 
+    f.write(compute_instruction(SUBTRACTION, INVALID, COPY, 0, 5, 0, 0, 0, 0, 20)) # hinP
+    f.write(compute_instruction(SUBTRACTION, INVALID, COPY, 0, 4, 0, 0, 0, 0, 21)) # hinN
+
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 6, 20, 0, 0, 0, 0, 20)) # mask for hinP
+    f.write(compute_instruction(BWISE_AND, INVALID, COPY, 7, 21, 0, 0, 0, 0, 21)) # mask for hinN
+
+    # Parallel OR into slice HP/HN (using compute instruction)
+    f.write(compute_instruction(BWISE_OR, INVALID, COPY, 6, 20, 0, 0, 0, 0, 22)) #hinP
+    f.write(compute_instruction(BWISE_OR, INVALID, COPY, 7, 21, 0, 0, 0, 0, 23)) #hinN
+
+    f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
+    f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
+
     f.close()
 
 def gbv_main_instruction():
@@ -513,26 +526,26 @@ def gbv_main_instruction():
     # ============================================================
     BP_LOOP_START_PC = 19
     BP_DONE_PC = 26
-    PE_BP_START_PC = 56  # PE PC where basepair receive starts (moved to new location)
+    PE_BP_START_PC = 189  # PE PC where basepair receive starts (moved to new location)
 
     # PC 19: BP_LOOP_START - Check if done (gr[14] >= gr[11])
     DONE_OFFSET = BP_DONE_PC - BP_LOOP_START_PC  # = 7
     f.write(data_movement_instruction(gr, gr, 0, 0, DONE_OFFSET, 0, 1, 0, 14, 11, bge))
 
-    # PC 20: magic(9) - fetch basepair at position gr[14] -> gr[4]
-    f.write(write_magic(9))
-
-    # PC 21: set_PC to restart PE at basepair receive
+    # PC 20: set_PC to restart PE at basepair receive
     f.write(data_movement_instruction(0, 0, 0, 0, PE_BP_START_PC, 0, 0, 0, 0, 0, set_PC))
+
+    # PC 21: magic(9) - fetch basepair at position gr[14] -> gr[4]
+    f.write(write_magic(9))
 
     # PC 22: out = gr[4] (basepair 0-3) -> PE gr[6]
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 4, 0, mv))
 
-    # PC 23: Wait for PE to complete (spin while gr[13] == 0)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 0, 13, beq))
-
-    # PC 24: gr[14]++ (increment basepair position)
+    # PC 23: gr[14]++ (increment basepair position)
     f.write(data_movement_instruction(gr, gr, 0, 0, 14, 0, 0, 0, 1, 14, addi))
+
+    # PC 24: Wait for PE to complete (spin while gr[13] == 0)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 0, 13, beq))
 
     # PC 25: Jump back to BP_LOOP_START -> PC 19
     JUMP_BACK_OFFSET = BP_LOOP_START_PC - 25  # = -6
@@ -615,11 +628,6 @@ def pe_instruction(pe_id):
     JMPC_FROM_F = 4 # PC 97 → PC 101 (Jump C, from F)
     JMPB2   = -36  # PC 100 → PC 64 (Jump B2, from G)
 
-    # Step 5 and Step 11 PCs for extraSlice merge branch-back
-    # Verified by counting f.write pairs from start of pe_instruction()
-    STEP5_MERGE_PC = 59  # PC where set_PC 0 for merge occurs (after basepair code moved to PC 56)
-    STEP11_EXTRASLICE_MERGE_PC = 198  # PC where branch back to Step 5 occurs (updated after basepair move)
-
     f = InstructionWriter("instructions/gbv/pe_{}_instruction.txt".format(pe_id))
 
     # dest, src, flag_0, flag_1, imm/reg_0, reg_0(++),
@@ -677,18 +685,23 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(gr, in_port, 0, 0, 13, 0, 0, 0, 0, 0, mv))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    # PC 8: gr[7] = in (flags), then halt
+    # PC 8: gr[7] = in (flags), continue to Step 2
     f.write(data_movement_instruction(gr, in_port, 0, 0, 7, 0, 0, 0, 0, 0, mv))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     # ============================================================
     # Step 2: Neighbor Loop (PC 9-18)
     # ============================================================
-    # PC 9-13: NOPs (wait for controller)
-    for i in range(5):
+    # PC 9: if gr[13] == 0, skip neighbor receive loop -> PC 19
+    PE_NEIGHBOR_SKIP_OFFSET = 10  # PC 9 -> PC 19
+    f.write(data_movement_instruction(gr, gr, 0, 0, PE_NEIGHBOR_SKIP_OFFSET, 0, 0, 0, 0, 13, beq))
+    f.write(data_movement_instruction(gr, gr, 0, 0, PE_NEIGHBOR_SKIP_OFFSET, 0, 0, 0, 0, 13, beq))
+
+    # PC 10-13: NOPs (wait for controller)
+    for i in range(4):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
@@ -712,7 +725,7 @@ def pe_instruction(pe_id):
     # PC 18: Loop back if gr[13] != 0
     NEIGHBOR_LOOP_BACK = 11 - 18  # Jump to PC 11
     f.write(data_movement_instruction(gr, gr, 0, 0, NEIGHBOR_LOOP_BACK, 0, 0, 0, 0, 13, bne))
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(gr, gr, 0, 0, NEIGHBOR_LOOP_BACK, 0, 0, 0, 0, 13, bne))
 
     # ============================================================
     # Step 3: Check if had incoming neighbors (PC 19)
@@ -720,7 +733,7 @@ def pe_instruction(pe_id):
     # PC 19: If gr[12] != 0, jump to HAS_NEIGHBORS path
     HAS_NEIGHBORS_OFFSET = 20
     f.write(data_movement_instruction(gr, gr, 0, 0, HAS_NEIGHBORS_OFFSET, 0, 0, 0, 0, 12, bne))
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(gr, gr, 0, 0, HAS_NEIGHBORS_OFFSET, 0, 0, 0, 0, 12, bne))
 
     # ============================================================
     # Step 4: Handle skipFirst Flag (PC 20+)
@@ -775,7 +788,7 @@ def pe_instruction(pe_id):
     # Jump to end
     AFTER_SKIP_FIRST_OFFSET = 10
     f.write(data_movement_instruction(gr, gr, 0, 0, AFTER_SKIP_FIRST_OFFSET, 0, 0, 0, 0, 0, beq))
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(gr, gr, 0, 0, AFTER_SKIP_FIRST_OFFSET, 0, 0, 0, 0, 0, beq))
 
     # skipFirst TRUE: Load extraSlice from SPM[15-17]
     f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 15, 0, si))  # gr[2] = 15
@@ -1046,7 +1059,7 @@ def pe_instruction(pe_id):
     # End of Jump H
 
     # Jump I (PC 80)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 20, 0, 0, 0, 1, 0, subi)) # reg20 = 0 - 1 so FFFFF hopefully
+    f.write(data_movement_instruction(reg, 0, 0, 0, 20, 0, 0, 0, -1, 0, si)) # reg[20] = -1 (0xFFFFFFFF)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     f.write(data_movement_instruction(reg, 0, 0, 0, 21, 0, 0, 0, 0, 0, si)) # reg21 = 0
@@ -1153,8 +1166,8 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(reg, 0, 0, 0, 5, 0, 0, 0, 1, 0, si))  # reg[5] = 1
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    # Load Eq vector from SPM[gr[6]]
-    f.write(data_movement_instruction(reg, SPM, 0, 0, 1, 0, 0, 0, 0, 6, mv))  # reg[1] = SPM[gr[6]]
+    # no ops
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -1173,7 +1186,7 @@ def pe_instruction(pe_id):
     # Step 9: Save WS (Merge Output) to SPM[10,11,12]
     # ============================================================
     # Check if gr[14] == 99 (from extraSlice merge) -> skip to hinP/hinN
-    SKIP_TO_HINP_HINN_OFFSET = 53
+    SKIP_TO_HINP_HINN_OFFSET = 60
     f.write(data_movement_instruction(gr, gr, 0, 0, SKIP_TO_HINP_HINN_OFFSET, 0, 0, 0, 99, 14, beq))
     f.write(data_movement_instruction(gr, gr, 0, 0, SKIP_TO_HINP_HINN_OFFSET, 0, 0, 0, 99, 14, beq))
 
@@ -1198,6 +1211,12 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))  # gr[10] = 1 (sync signal)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))  # halt - wait for controller
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))   
+
     # ============================================================
     # Step 10: Basepair receive location
     # ============================================================
@@ -1205,8 +1224,77 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
     # gr[6] = in (basepair)
     f.write(data_movement_instruction(gr, in_port, 0, 0, 6, 0, 0, 0, 0, 0, mv))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # Load Eq vector from SPM[gr[6]]
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 1, 0, 0, 0, 0, 6, mv))  # reg[1] = SPM[gr[6]]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+        # Load HP and HN from SPM
+    # PC X: Load HP from SPM[18] into reg[6]
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 6, 0, 0, 0, 0, 18, mv))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # PC X+1: Load HN from SPM[19] into reg[7]
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 7, 0, 0, 0, 0, 19, mv))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # PC X+2: NOP (SPM latency - cycle 1)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # PC X+3: NOP (SPM latency - cycle 2)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # Extract LSB to get hinP and hinN
+    # PC X+4: reg[5] = reg[6] & 1 (hinP = HP & 1)
+    f.write(data_movement_instruction(reg, reg, 0, 0, 5, 0, 0, 0, 1, 6, ANDI))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # PC X+5: reg[4] = reg[7] & 1 (hinN = HN & 1)
+    f.write(data_movement_instruction(reg, reg, 0, 0, 4, 0, 0, 0, 1, 7, ANDI))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # Shift HP and HN left by 1
+    # PC X+6: reg[6] = reg[6] << 1 (shift HP)
+    f.write(data_movement_instruction(reg, reg, 0, 0, 6, 0, 0, 0, 1, 6, shifti_l))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # PC X+7: reg[7] = reg[7] << 1 (shift HN)
+    f.write(data_movement_instruction(reg, reg, 0, 0, 7, 0, 0, 0, 1, 7, shifti_l))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # Store shifted HP and HN back to SPM
+    # PC X+8: SPM[18] = reg[6] (store shifted HP)
+    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 18, 0, 0, 6, 0, mv))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # PC X+9: NOP (SPM write latency - cycle 1)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # PC X+10: NOP (SPM write latency - cycle 2)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # PC X+11: SPM[19] = reg[7] (store shifted HN)
+    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 19, 0, 0, 7, 0, mv))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # PC X+12: NOP (SPM write latency - cycle 1)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # PC X+13: NOP (SPM write latency - cycle 2)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     # Step 11: Set forceEq based on prevSliceExists
@@ -1318,10 +1406,10 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(gr, 0, 0, 0, 14, 0, 0, 0, 99, 0, si))  # gr[14] = 99 do this so that we can check if its 99 then we can branch back here (99 means we came from down here)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    # Branch back to Step 5 (set_PC 0 for original merge)
-    BRANCH_BACK_TO_STEP5 = STEP5_MERGE_PC - STEP11_EXTRASLICE_MERGE_PC
-    f.write(data_movement_instruction(gr, gr, 0, 0, BRANCH_BACK_TO_STEP5, 0, 0, 0, 0, 0, beq))  # branch to Step 5
-    f.write(data_movement_instruction(gr, gr, 0, 0, BRANCH_BACK_TO_STEP5, 0, 0, 0, 0, 0, beq))
+    # Branch back to Step 6 (set_PC 0 for merge at PC 60)
+    JUMP_BACK_TO_STEP6_MERGE = -178  # Offset from PC 238 to PC 60
+    f.write(data_movement_instruction(gr, gr, 0, 0, JUMP_BACK_TO_STEP6_MERGE, 0, 0, 0, 0, 0, beq))  # branch to Step 6 merge
+    f.write(data_movement_instruction(gr, gr, 0, 0, JUMP_BACK_TO_STEP6_MERGE, 0, 0, 0, 0, 0, beq))
 
     #Calculate hinN hinP
     # Load ws.scoreEnd from SPM[12] into reg[20], set reg[21] = 1
@@ -1377,6 +1465,47 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(gr, 0, 0, 0, 14, 0, 0, 0, 0, 0, si))  # gr[14] = 0 so new getnextslices can happen
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
+    
+    # PC X: Initialize gr[6] = 2 (mask for bit position 1, since offset starts at 1)
+    f.write(data_movement_instruction(gr, 0, 0, 0, 15, 0, 0, 0, 2, 0, si))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 6, 0, 0, 0, 0, 20, mv)) # take slice.HP
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 7, 0, 0, 0, 0, 21, mv)) # take slice.HN
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 107, 0, 0, 0, 0, 0, set_PC))  # set_PC 107
+    f.write(data_movement_instruction(0, 0, 0, 0, 107, 0, 0, 0, 0, 0, set_PC))
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 20, 0, si))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(SPM, reg, 0, 1, 0, 2, 0, 0, 22, 0, mv))  # SPM[gr[2]++] = reg(22)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 2, 0, 0, 23, 0, mv))  # SPM[gr[2]++] = reg(23)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # PC X+15: Shift mask left for next iteration: gr[6] = gr[6] << 1
+    f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0, 1, 6, shifti_l))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
     # 9.7: Signal done to controller: gr[10] = 1, then halt
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))  # gr[10] = 1 (sync signal)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
@@ -1407,7 +1536,7 @@ def pe_idle_instruction(pe_id):
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 0, 0, beq))  # beq 0 0, offset=0 (loop to self)
 
     # Fill rest with nops (shouldn't be reached due to infinite loop above)
-    for i in range(100):
+    for i in range(200):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
