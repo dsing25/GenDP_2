@@ -896,76 +896,71 @@ if (is_magic) {
 #endif
     }
     else if (magic_payload == 3) {
-        // Magic payload 3: Insert into priority queue
-        // Input from addressing registers:
-        //   gr[0] = target_node (ID in graph)
-        //   gr[1] = priority
-        //   gr[2] = spm_addr (0 = auto-allocate via CAM, non-zero = use specified address)
-        //   gr[3] = flags (8-bit packed: bit0=skip_first, bit1=prevSliceExists, bit2=currSliceExists)
-        //   gr[4] = basepairs (32-bit, 16 bases encoded)
-        // Output:
-        //   gr[5] = success (1 = inserted, 0 = queue full)
-        //   gr[6] = num_out_neighbors (number of neighbors loaded)
-        //   gr[7] = allocated_spm_addr (actual SPM address used)
-        QueueEntry entry;
-        entry.target_node = main_addressing_register[0];
-        entry.priority = main_addressing_register[1];
+        // Magic payload 3: Pop current node and insert its out-neighbors into the queue
+        // Input: gr[1] = node_id (node that has finished processing)
+        // Operation: Pop the queue, then insert all out-neighbors of the node
+        uint32_t node_id = main_addressing_register[1];
 
-        // Auto-allocate SPM address via CAM if gr[2] is 0
-        if (main_addressing_register[2] == 0) {
-            entry.spm_addr = sliceNodeCAM.allocateNode(entry.target_node);
-        } else {
-            entry.spm_addr = main_addressing_register[2];
-            // Still register in CAM for tracking (won't reallocate if already exists)
-            sliceNodeCAM.allocateNode(entry.target_node);
+        // Pop the current node from the queue (it has finished processing)
+        if (!graphAlignQueue.empty()) {
+            graphAlignQueue.pop();
+#ifdef PROFILE
+            printf("Magic instruction (payload=%d): Popped node=%u from queue\n",
+                   magic_payload, node_id);
+#endif
         }
 
-        entry.flags = (uint8_t)main_addressing_register[3];  // Load all flags at once
+        // Get the node and insert all its out-neighbors
+        GraphNode* node = graphStructure.getNode(node_id);
 
-        // Automatically populate neighbors, sequence, and num_chunks from graph
-        GraphNode* node = graphStructure.getNode(entry.target_node);
         if (node) {
-            // Copy full sequence from graph to queue entry
-            strncpy(entry.sequence, node->sequence, MAX_NODE_SEQ_LEN - 1);
-            entry.sequence[MAX_NODE_SEQ_LEN - 1] = '\0';  // Ensure null termination
+            // Iterate through all out-neighbors and insert each into the queue
+            for (int i = 0; i < node->num_out_neighbors; i++) {
+                uint32_t neighbor_id = node->out_neighbors[i];
+                GraphNode* neighbor_node = graphStructure.getNode(neighbor_id);
 
-            entry.num_out_neighbors = (node->num_out_neighbors < MAX_QUEUE_NEIGHBORS)
-                                      ? node->num_out_neighbors
-                                      : MAX_QUEUE_NEIGHBORS;
-            for (int i = 0; i < entry.num_out_neighbors; i++) {
-                entry.out_neighbors[i] = node->out_neighbors[i];
-            }
-            // Populate num_in_neighbors from graph (for Step 1.5 incoming edge check)
-            entry.num_in_neighbors = node->num_in_neighbors;
-            // Store node_length directly (total basepairs for this node)
-            entry.node_length = node->length;
-            // Calculate num_chunks: ceil(node_length / 16)
-            entry.num_chunks = (node->length + 15) / 16;
-        } else {
-            memset(entry.sequence, 0, sizeof(entry.sequence));
-            entry.num_out_neighbors = 0;
-            entry.num_in_neighbors = 0;
-            entry.node_length = 0;
-            entry.num_chunks = 0;
-        }
+                if (neighbor_node) {
+                    QueueEntry entry;
+                    entry.target_node = neighbor_id;
+                    entry.priority = 0;  // Default priority
+                    entry.spm_addr = sliceNodeCAM.allocateNode(neighbor_id);  // Auto-allocate
+                    entry.flags = 0;  // Default flags
 
-        bool success = graphAlignQueue.insert(entry);
-        main_addressing_register[5] = success ? 1 : 0;
-        main_addressing_register[6] = entry.num_out_neighbors;
-        main_addressing_register[7] = entry.spm_addr;  // Return allocated address
+                    // Copy full sequence from graph to queue entry
+                    strncpy(entry.sequence, neighbor_node->sequence, MAX_NODE_SEQ_LEN - 1);
+                    entry.sequence[MAX_NODE_SEQ_LEN - 1] = '\0';
+
+                    // Populate neighbor information
+                    entry.num_out_neighbors = (neighbor_node->num_out_neighbors < MAX_QUEUE_NEIGHBORS)
+                                              ? neighbor_node->num_out_neighbors
+                                              : MAX_QUEUE_NEIGHBORS;
+                    for (int j = 0; j < entry.num_out_neighbors; j++) {
+                        entry.out_neighbors[j] = neighbor_node->out_neighbors[j];
+                    }
+                    entry.num_in_neighbors = neighbor_node->num_in_neighbors;
+                    entry.node_length = neighbor_node->length;
+                    entry.num_chunks = (neighbor_node->length + 15) / 16;
+
+                    graphAlignQueue.insert(entry);
 
 #ifdef PROFILE
-        if (node) {
-            printf("Magic instruction (payload=%d): Queue insert node=%u len=%u chunks=%u prio=%d spm=%u flags=0x%02X (skip=%u prev=%u curr=%u) neighbors=%u -> %s\n",
-                   magic_payload, entry.target_node, node->length, entry.num_chunks, entry.priority,
-                   entry.spm_addr, entry.flags, entry.getSkipFirst(), entry.getPrevSliceExists(),
-                   entry.getCurrSliceExists(), entry.num_out_neighbors, success ? "OK" : "FULL");
-        } else {
-            printf("Magic instruction (payload=%d): Queue insert node=%u (NOT IN GRAPH) prio=%d spm=%u flags=0x%02X -> %s\n",
-                   magic_payload, entry.target_node, entry.priority,
-                   entry.spm_addr, entry.flags, success ? "OK" : "FULL");
-        }
+                    printf("Magic instruction (payload=%d): Inserted out-neighbor[%d] node=%u len=%u chunks=%u spm=%u neighbors_out=%u neighbors_in=%u\n",
+                           magic_payload, i, neighbor_id, neighbor_node->length, entry.num_chunks,
+                           entry.spm_addr, entry.num_out_neighbors, entry.num_in_neighbors);
 #endif
+                }
+            }
+
+#ifdef PROFILE
+            printf("Magic instruction (payload=%d): Processed node=%u with %u out-neighbors\n",
+                   magic_payload, node_id, node->num_out_neighbors);
+#endif
+        } else {
+#ifdef PROFILE
+            printf("Magic instruction (payload=%d): Node=%u NOT FOUND\n",
+                   magic_payload, node_id);
+#endif
+        }
     }
     else if (magic_payload == 4) {
         // Magic payload 4: Reserved for future use (currently empty)
@@ -988,6 +983,23 @@ if (is_magic) {
         //   gr[11] = node_length (total basepairs for this node)
         // NOTE: Priority is NOT output (not needed in controller)
         // NOTE: Valid flag is packed into gr[3] bit3, NOT separate gr[5]
+
+#ifdef PROFILE
+        // Show current queue contents
+        printf("Magic instruction (payload=%d): Current queue contents (size=%d):\n",
+               magic_payload, graphAlignQueue.size);
+        int display_count = (graphAlignQueue.size < 10) ? graphAlignQueue.size : 10;
+        for (int i = 0; i < display_count; i++) {  // Show first 10 entries
+            const QueueEntry& entry = graphAlignQueue.entries[i];
+            printf("  [%d] node=%u prio=%d len=%u spm=%u out_neighbors=%u in_neighbors=%u\n",
+                   i, entry.target_node, entry.priority, entry.node_length,
+                   entry.spm_addr, entry.num_out_neighbors, entry.num_in_neighbors);
+        }
+        if (graphAlignQueue.size > 10) {
+            printf("  ... and %d more entries\n", graphAlignQueue.size - 10);
+        }
+#endif
+
         if (!graphAlignQueue.empty()) {
             QueueEntry top = graphAlignQueue.top();
             // gr[0] intentionally NOT written - must stay 0
@@ -1043,24 +1055,31 @@ if (is_magic) {
 #endif
     }
     else if (magic_payload == 7) {
-        // Magic payload 7: Get in-neighbor ID by index
+        // Magic payload 7: Get in-neighbor ID by index AND do CAM lookup (combined 7+12)
         // Input:
         //   gr[1] = node_id (from queue, preserved)
         //   gr[5] = neighbor_index (0 to num_in_neighbors-1)
         // Output:
         //   gr[5] = neighbor_id (overwrites the index)
+        //   gr[9] = neighbor's SPM address (from CAM lookup)
         uint32_t node_id = main_addressing_register[1];
         int neighbor_idx = main_addressing_register[5];
         GraphNode* node = graphStructure.getNode(node_id);
 
         if (node && neighbor_idx >= 0 && neighbor_idx < node->num_in_neighbors) {
-            main_addressing_register[5] = node->in_neighbors[neighbor_idx];
+            uint32_t neighbor_id = node->in_neighbors[neighbor_idx];
+            main_addressing_register[5] = neighbor_id;
+
+            // CAM lookup for neighbor's SPM address
+            uint32_t spm_addr = sliceNodeCAM.getSpmAddr(neighbor_id);
+            main_addressing_register[9] = spm_addr;
 
 #ifdef PROFILE
-            printf("Magic instruction (payload=%d): Get node=%u in_neighbor[%d]=%u\n",
-                   magic_payload, node_id, neighbor_idx, node->in_neighbors[neighbor_idx]);
+            printf("Magic instruction (payload=%d): Get node=%u in_neighbor[%d]=%u, CAM lookup -> spm=%u\n",
+                   magic_payload, node_id, neighbor_idx, neighbor_id, spm_addr);
 #endif
         } else {
+            main_addressing_register[9] = 0;  // invalid neighbor -> no SPM addr
 #ifdef PROFILE
             printf("Magic instruction (payload=%d): Get node=%u in_neighbor[%d] -> INVALID\n",
                    magic_payload, node_id, neighbor_idx);
@@ -1196,18 +1215,10 @@ if (is_magic) {
         }
     }
     else if (magic_payload == 12) {
-        // Magic payload 12: Query CAM for node's SPM address
-        // Input:
-        //   gr[5] = neighbor_node_id (from magic(7) output)
-        // Output:
-        //   gr[2] = spm_addr (0 if not found)
-        uint32_t node_id = main_addressing_register[5];
-        uint32_t spm_addr = sliceNodeCAM.getSpmAddr(node_id);
-        main_addressing_register[2] = spm_addr;
-
+        // Magic payload 12: DEPRECATED - functionality merged into magic(7)
+        // No operation - this magic instruction is no longer used
 #ifdef PROFILE
-        printf("Magic instruction (payload=%d): CAM lookup node=%u -> spm=%u (%s)\n",
-               magic_payload, node_id, spm_addr, (spm_addr != 0) ? "FOUND" : "NOT FOUND");
+        printf("Magic instruction (payload=%d): DEPRECATED - use magic(7) instead\n", magic_payload);
 #endif
     }
     else if (magic_payload == 13) {
