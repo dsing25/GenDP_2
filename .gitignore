@@ -28,3 +28,16 @@ wfaTrace.txt
 *_opus.txt
 *tmp*
 *.swp
+.humanize/
+.bashrc
+.bash_profile
+.claude/
+.idea
+.mcp.json
+.vscode
+.zprofile
+.zshrc
+*Prompt*
+.profile
+.ripgreprc
+
