@@ -421,7 +421,8 @@ static bool merge_split_and_load(
         spm[MERGE_META+9] = a0; spm[MERGE_META+10] = a1;
         spm[MERGE_META+11] = b0; spm[MERGE_META+12] = b1;
     }
-    int niter = ((max_pt + MERGE_TILE - 1) / MERGE_TILE) * MERGE_TILE;
+    // Input-capped: loop bound based on max inputs per PE, stepped by MERGE_STEP
+    int niter = ((max_pt + MERGE_STEP - 1) / MERGE_STEP) * MERGE_STEP;
     gr_arr[6] = (niter == 0) ? 0 : niter;
     gr_arr[4] = out_mm;
     return true;
@@ -2709,15 +2710,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     s1c[4+pe] += out_n;
                     cum += s1c[pe];
                 }
-                bool all_full = true;
-                for (int pe = 0; pe < 4; pe++) {
-                    int *s = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
-                    bool done = (s1c[4+pe] >= s1c[pe])
-                        || (s[MERGE_META+5]==1 && s[MERGE_META+6]==1);
-                    if (s[MERGE_META+4] < MERGE_TILE && !done)
-                        all_full = false;
-                }
-                if (all_full) gr[2] += MERGE_TILE;
+                // Input-capped: advance unconditionally each iteration
+                gr[2] += MERGE_STEP;
             }
         } else if (magic_id == 36) {
             // Diag merge finalize: copy MM_SORT_BUF → diag_base.

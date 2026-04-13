@@ -1416,7 +1416,8 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             int bd  = spm[MERGE_META + 6];
             int *out = &spm[out_off];
             int oi = 0;
-            while (oi < MERGE_TILE) {
+            int ai0 = ai, bi0 = bi; // initial cursors for input budget
+            while ((ai - ai0) + (bi - bi0) < MERGE_STEP) {
                 // Switch A buffer if current exhausted
                 if (ai >= a_n) {
                     int o = aw ^ 1;
@@ -1425,10 +1426,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                         spm[MERGE_META + 9 + aw] = 0;
                         aw = o;
                         ab = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
-                        ai = 0; a_n = on;
+                        ai = 0; ai0 -= a_n; a_n = on;
                     }
                 }
-                // Switch B buffer if current exhausted
                 if (bi >= b_n) {
                     int o = bw ^ 1;
                     int on = spm[MERGE_META + 11 + o];
@@ -1436,34 +1436,21 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                         spm[MERGE_META + 11 + bw] = 0;
                         bw = o;
                         bb = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
-                        bi = 0; b_n = on;
+                        bi = 0; bi0 -= b_n; b_n = on;
                     }
                 }
                 bool aa = (ai < a_n), ba = (bi < b_n);
                 if (!aa && !ba) break;
-                if (!aa && !ad) break; // need A reload
-                if (!ba && !bd) break; // need B reload
-                if (!aa) { // A globally done, drain B
-                    while (oi<MERGE_TILE && bi<b_n) {
-                        out[oi*2]=spm[bb+bi*2];
-                        out[oi*2+1]=spm[bb+bi*2+1]; bi++; oi++;
-                    }
-                    break;
-                }
-                if (!ba) { // B globally done, drain A
-                    while (oi<MERGE_TILE && ai<a_n) {
-                        out[oi*2]=spm[ab+ai*2];
-                        out[oi*2+1]=spm[ab+ai*2+1]; ai++; oi++;
-                    }
-                    break;
-                }
-                if ((uint32_t)spm[ab+ai*2]
-                    <= (uint32_t)spm[bb+bi*2]) {
-                    out[oi*2]=spm[ab+ai*2];
-                    out[oi*2+1]=spm[ab+ai*2+1]; ai++; oi++;
-                } else {
+                if (!aa && !ad) break; // need A reload from controller
+                if (!ba && !bd) break; // need B reload from controller
+                // Pick next element: drain single stream or merge two
+                if (!aa || (ba && (uint32_t)spm[bb+bi*2]
+                                < (uint32_t)spm[ab+ai*2])) {
                     out[oi*2]=spm[bb+bi*2];
                     out[oi*2+1]=spm[bb+bi*2+1]; bi++; oi++;
+                } else {
+                    out[oi*2]=spm[ab+ai*2];
+                    out[oi*2+1]=spm[ab+ai*2+1]; ai++; oi++;
                 }
             }
             spm[MERGE_META+0]=ai; spm[MERGE_META+1]=bi;

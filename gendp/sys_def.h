@@ -273,6 +273,7 @@ inline int get_base_opcode(int opcode) {
 //   [656..815]    MERGE_B_BUF0 B ping tile
 //   [816..975]    MERGE_B_BUF1 B pong tile
 #define MERGE_TILE         SORT_TILE          // 80 entries per tile/output block
+#define MERGE_STEP         (MERGE_TILE / 2)   // 40 inputs consumed per PE call
 #define MERGE_META         0                  // 16 words
 #define MERGE_OUT0         16                 // 160 words
 #define MERGE_OUT1         (MERGE_OUT0 + MERGE_TILE * 2)  // 176
