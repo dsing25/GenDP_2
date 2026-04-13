@@ -227,25 +227,62 @@ inline int get_base_opcode(int opcode) {
 // SORT_META sub-offsets: [0..15]=bin_counts (accumulated), [16..31]=tile_bin_counts (per-tile),
 //                        [32]=tile_n, [33]=shift
 
-// GWFA dedup phase SPM layout (per-PE, reuses stale sort buffers; sort must finish first)
-// DEDUP_TILE reuses SORT_TILE (= 80). Sequential use of same base address space.
-//   [0..159]     DEDUP_BUF0  ping diag tile (DEDUP_TILE*2 words)
-//   [160..319]   DEDUP_BUF1  pong diag tile
-//   [320..481]   DEDUP_OUT0  ping output tile ((DEDUP_TILE+1)*2 words, +1 for pending flush)
-//   [482..643]   DEDUP_OUT1  pong output tile
-//   [644..659]   DEDUP_META  metadata (16 words)
-//   [660..6015]  DEDUP_INTV  preloaded intv for this PE
-#define DEDUP_TILE   SORT_TILE           // 80 diags per PE per tile
-#define DEDUP_BUF0   0
-#define DEDUP_BUF1   (DEDUP_TILE * 2)              // 160
-#define DEDUP_OUT0   (DEDUP_TILE * 4)              // 320
-#define DEDUP_OUT1   (DEDUP_OUT0 + (DEDUP_TILE + 1) * 2)  // 482
-#define DEDUP_META   (DEDUP_OUT1 + (DEDUP_TILE + 1) * 2)  // 644; 16 words
-// DEDUP_META sub-offsets:
-//   [0]=pending_vd (0xFFFFFFFF=none), [1]=pending_k, [2]=out_n,
-//   [3]=ii (intv cursor), [4]=diag_tile_n, [5]=is_last_diag,
-//   [6]=intv_n_pe (full intv count for this PE)
-#define DEDUP_INTV   (DEDUP_META + 16)  // 660; full intv preload buffer
+// GWFA dedup phase SPM layout (per-PE, reuses stale sort/merge buffers)
+// Tiled dedup with ping-pong input AND output buffers.
+// DEDUP_TILE = elements processed per PE call (counted across diag+intv reads).
+// Each input buffer holds DEDUP_TILE entries. PE reads at most DEDUP_TILE
+// elements per call, so it can exhaust at most one buffer per stream per call.
+//   [0..19]       DEDUP_META      metadata (20 words)
+//   [20..179]     DEDUP_DIAG_BUF0 diag input 0 (TILE×2 words = 160)
+//   [180..339]    DEDUP_DIAG_BUF1 diag input 1
+//   [340..499]    DEDUP_INTV_BUF0 intv input 0
+//   [500..659]    DEDUP_INTV_BUF1 intv input 1
+//   [660..819]    DEDUP_DIAG_OUT0 diag output ping (TILE×2 words = 160)
+//   [820..979]    DEDUP_DIAG_OUT1 diag output pong
+//   [980..1139]   DEDUP_INTV_OUT0 intv output ping
+//   [1140..1299]  DEDUP_INTV_OUT1 intv output pong
+//   Total: 1300 words < 6016 ✓
+#define DEDUP_TILE        SORT_TILE              // 80
+#define DEDUP_META_SIZE   20
+#define DEDUP_META        0
+#define DEDUP_DIAG_BUF0   (DEDUP_META + DEDUP_META_SIZE)       // 20
+#define DEDUP_DIAG_BUF1   (DEDUP_DIAG_BUF0 + DEDUP_TILE * 2)  // 180
+#define DEDUP_INTV_BUF0   (DEDUP_DIAG_BUF1 + DEDUP_TILE * 2)  // 340
+#define DEDUP_INTV_BUF1   (DEDUP_INTV_BUF0 + DEDUP_TILE * 2)  // 500
+#define DEDUP_DIAG_OUT0   (DEDUP_INTV_BUF1 + DEDUP_TILE * 2)  // 660
+#define DEDUP_DIAG_OUT1   (DEDUP_DIAG_OUT0 + DEDUP_TILE * 2)  // 820
+#define DEDUP_INTV_OUT0   (DEDUP_DIAG_OUT1 + DEDUP_TILE * 2)  // 980
+#define DEDUP_INTV_OUT1   (DEDUP_INTV_OUT0 + DEDUP_TILE * 2)  // 1140
+// DEDUP_META sub-offsets (PE writes [0..9,14..19]; controller writes [10..13]):
+//   [0]=pending_vd, [1]=pending_k, [2]=n_diag_out, [3]=n_intv_out,
+//   [4]=diag_cursor, [5]=intv_cursor, [6]=diag_which, [7]=intv_which,
+//   [8]=diag_exhausted, [9]=intv_exhausted,
+//   [10]=diag_BUF0_tile_n, [11]=diag_BUF1_tile_n,
+//   [12]=intv_BUF0_tile_n, [13]=intv_BUF1_tile_n,
+//   [14]=cur_intv_lo (0xFFFFFFFF=none), [15]=cur_intv_hi,
+//   [16]=state (0=X, 1=B, 2=C), [17]=pe_done,
+//   [18]=new_vd, [19]=new_k
+
+// GWFA merge phase SPM layout (per-PE, reuses stale sort/dedup region)
+// Merge runs BEFORE dedup, so this area is reused by dedup afterward.
+//   [0..15]       MERGE_META  metadata (16 words)
+//   [16..175]     MERGE_OUT0  ping output (MERGE_TILE*2 words)
+//   [176..335]    MERGE_OUT1  pong output
+//   [336..495]    MERGE_A_BUF0 A ping tile (MERGE_TILE*2 words)
+//   [496..655]    MERGE_A_BUF1 A pong tile
+//   [656..815]    MERGE_B_BUF0 B ping tile
+//   [816..975]    MERGE_B_BUF1 B pong tile
+#define MERGE_TILE         SORT_TILE          // 80 entries per tile/output block
+#define MERGE_META         0                  // 16 words
+#define MERGE_OUT0         16                 // 160 words
+#define MERGE_OUT1         (MERGE_OUT0 + MERGE_TILE * 2)  // 176
+#define MERGE_A_BUF0       (MERGE_OUT1 + MERGE_TILE * 2)  // 336
+#define MERGE_A_BUF1       (MERGE_A_BUF0 + MERGE_TILE * 2) // 496
+#define MERGE_B_BUF0       (MERGE_A_BUF1 + MERGE_TILE * 2) // 656
+#define MERGE_B_BUF1       (MERGE_B_BUF0 + MERGE_TILE * 2) // 816
+// MERGE_META sub-offsets:
+//   [0]=a_cursor, [1]=b_cursor, [2]=a_tile_n, [3]=b_tile_n,
+//   [4]=out_n, [5]=a_global_done, [6]=b_global_done
 
 // Apply address swizzling for mvi instruction
 // Keeps bit[0] as line offset, moves bits[2:1] to top

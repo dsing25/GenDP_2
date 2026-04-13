@@ -76,13 +76,70 @@ MAGIC_31_BUF0 = 31
 MAGIC_31_BUF1 = (31 << 8) | 1
 MAGIC_32      = 32
 
-# PE dedup code locations
-PE_DEDUP_PING = 49
-PE_DEDUP_PONG = 53
+# Merge phase magic IDs
+MAGIC_28      = 28
+MAGIC_33      = 33
+MAGIC_35_BUF0 = 35
+MAGIC_35_BUF1 = (35 << 8) | 1
+MAGIC_36      = 36
+MAGIC_37      = 37
+MAGIC_38      = 38
+MAGIC_39      = 39
+
+# PE merge code locations
+PE_MERGE_PING = 49
+PE_MERGE_PONG = 53
+
+# PE magic IDs for merge
+MAGIC_22_BUF0 = 22
+MAGIC_22_BUF1 = (22 << 8) | 1
+
+# PE dedup code locations (after merge PCs)
+PE_DEDUP_PING = 57
+PE_DEDUP_PONG = 61
 
 # PE magic IDs for dedup
 MAGIC_23_BUF0 = 23
 MAGIC_23_BUF1 = (23 << 8) | 1
+
+def emit_merge_loop(f):
+    """Emit a PE-parallel merge loop. Caller must set gr[6]=loop bound
+    before calling. Uses PE_MERGE_PING/PONG, MAGIC_33 (reload, disabled),
+    MAGIC_35 (writeback). Returns PC after the loop."""
+    br_skip = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 6, beq))
+    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si))
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_MERGE_PING, 0, 0, 0, 0, 0, set_PC))
+    br_epilA_pro = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))
+    ss_pong = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin (PE wrote OUT_PING)
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_MERGE_PONG, 0, 0, 0, 0, 0, set_PC))            # PE starts (writes OUT_PONG)
+    f.write(write_magic(MAGIC_35_BUF0))                                                               # writeback OUT_PING (overlapped)
+    f.write(write_magic(MAGIC_33))                                                                     # reload tiles (overlapped)
+    br_epilB = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin (PE wrote OUT_PONG)
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_MERGE_PING, 0, 0, 0, 0, 0, set_PC))            # PE starts (writes OUT_PING)
+    f.write(write_magic(MAGIC_35_BUF1))                                                               # writeback OUT_PONG (overlapped)
+    f.write(write_magic(MAGIC_33))                                                                     # reload tiles (overlapped)
+    br_epilA_ss = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))
+    f.write(data_movement_instruction(0, 0, 0, 0, ss_pong - f.write_count, 0, 0, 0, 0, 0, jump))
+    epilB = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin last PONG
+    f.write(write_magic(MAGIC_35_BUF1))                                                               # writeback last PONG
+    br_done_B = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, jump))
+    epilA = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin last PING
+    f.write(write_magic(MAGIC_35_BUF0))                                                               # writeback last PING
+    done = f.write_count
+    f.patch_imm0(br_skip, done - br_skip)
+    f.patch_imm0(br_epilA_pro, epilA - br_epilA_pro)
+    f.patch_imm0(br_epilB, epilB - br_epilB)
+    f.patch_imm0(br_epilA_ss, epilA - br_epilA_ss)
+    f.patch_imm0(br_done_B, done - br_done_B)
 
 def emit_sort_loop(f):
     """Emit one radix sort pass loop (42 instructions). Position-independent.
@@ -176,13 +233,15 @@ def gwfa_main_instruction():
     f.write(write_magic(MAGIC_9_BUF1))                                                             # PC 29: writeback buf1
     # fallthrough to FIFO_FLUSH
     # === FIFO FLUSH (guarded by gr[2] from magic 9) ===
-    f.write(data_movement_instruction(0, 0, 0, 0, 4, 0, 0, 0, 0, 2, beq))                        # PC 30: beq gr[2]==0 → +4 (PC 34: save n_phase1)
+    br_fifo_skip = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 2, beq))                        # beq gr[2]==0 → save n_phase1 (patched)
     f.write(data_movement_instruction(gr, fifo[0], 0, 0, 3, 0, 0, 0, 0, 0, mv))                  # PC 31: gr[3]=fifo[0]
     f.write(data_movement_instruction(gr, fifo[1], 0, 0, 4, 0, 0, 0, 0, 0, mv))                  # PC 32: gr[4]=fifo[1]
     f.write(write_magic(12))                                                                       # PC 33: flush to s_B_a
     # fallthrough
-    f.write(data_movement_instruction(s1c, gr, 0, 0, 151, 0, 0, 0, 24, 0, mv))                   # PC 34: s1c[151]=gr[24] (save n_phase1 diags)
-    f.write(data_movement_instruction(s1c, gr, 0, 0, 152, 0, 0, 0, 28, 0, mv))                   # PC 35: s1c[152]=gr[28] (save n_phase1 intv)
+    save_n_phase1 = f.write_count
+    f.write(data_movement_instruction(s1c, gr, 0, 0, 151, 0, 0, 0, 24, 0, mv))                   # s1c[151]=gr[24] (save n_phase1 diags)
+    f.patch_imm0(br_fifo_skip, save_n_phase1 - br_fifo_skip)
     # === PHASE 2 (overlapped: magic18+magic15 during PE_P2, magic14 during PE_FIN0) ===
     # --- Prologue: load both buffers, compute BUF1 to seed HALF_A ---
     prologue_start = f.write_count
@@ -290,49 +349,62 @@ def gwfa_main_instruction():
     f.write(write_magic(16))                                                                          # filter+setup intv sort
     f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 0, 0, si))                           # gr[1]=0
     emit_sort_loop(f)                                                                                  # sort loop 1: intv
-    # Intv merge + diag tail sort setup
-    f.write(write_magic(MAGIC_26))                                                                     # merge intv + setup tail sort
+    # === INTV MERGE: PE-parallel (sorted new + old → MM_INTV) ===
+    f.write(write_magic(MAGIC_37))                                                                     # intv merge split + load
+    emit_merge_loop(f)
+    f.write(write_magic(MAGIC_39))                                                                     # intv finalize + diag sort setup
     f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 0, 0, si))                           # gr[1]=0
     emit_sort_loop(f)                                                                                  # sort loop 2: diag tail
-    # Merge sorted prefix + sorted tail
-    f.write(write_magic(27))                                                                           # merge
-    # Dedup
-    f.write(write_magic(MAGIC_29))                                                                     # dedup split search
+    # === DIAG MERGE: PE-parallel merge ===
+    f.write(write_magic(MAGIC_28))                                                                     # diag split + load
+    emit_merge_loop(f)
+    f.write(write_magic(MAGIC_36))                                                                     # diag merge finalize
+    # Dedup (tiled with overlapped writeback+reload)
+    # Matches old dedup/merge ISA pattern.
+    f.write(write_magic(MAGIC_29))                                                                     # dedup split + initial tile load
     f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si))                           # gr[2]=0
-    # --- Dedup prologue: load PING ---
-    f.write(write_magic(MAGIC_30_BUF0))
+    # --- Prologue: load + first PE call ---
+    f.write(write_magic(MAGIC_30_BUF0))                                                               # reload (loads BUF1 from remaining data)
     f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PING, 0, 0, 0, 0, 0, set_PC))
     br_depilA_pro = f.write_count
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))                           # → DEPIL_A (patch)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop pair
     # --- SS_PONG ---
     ss_pong = f.write_count
-    f.write(write_magic(MAGIC_30_BUF1))
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin
-    f.write(write_magic(MAGIC_31_BUF0))                                                               # writeback PING
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PONG, 0, 0, 0, 0, 0, set_PC))
+    f.write(write_magic(MAGIC_30_BUF0))                                                               # reload (slot0, re-exec safe during spin)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin (slot1)
+    f.write(write_magic(MAGIC_31_BUF0))                                                               # writeback OUT0
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PONG, 0, 0, 0, 0, 0, set_PC))            # PE writes OUT1
     br_depilB = f.write_count
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))                           # → DEPIL_B (patch)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop pair
     # --- SS_PING ---
-    f.write(write_magic(MAGIC_30_BUF0))
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin
-    f.write(write_magic(MAGIC_31_BUF1))                                                               # writeback PONG
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PING, 0, 0, 0, 0, 0, set_PC))
+    f.write(write_magic(MAGIC_30_BUF0))                                                               # reload (slot0, re-exec safe during spin)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin (slot1)
+    f.write(write_magic(MAGIC_31_BUF1))                                                               # writeback OUT1
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PING, 0, 0, 0, 0, 0, set_PC))            # PE writes OUT0
     br_depilA_ss = f.write_count
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))                           # → DEPIL_A (patch)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop pair
     f.write(data_movement_instruction(0, 0, 0, 0, ss_pong - f.write_count, 0, 0, 0, 0, 0, jump))    # → SS_PONG
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop pair
     # --- DEPIL_B ---
     depilB = f.write_count
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop (slot0)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin (slot1)
     f.write(write_magic(MAGIC_31_BUF1))                                                               # writeback last PONG
     br_done_from_B = f.write_count
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, jump))                          # → DONE (patch)
     # --- DEPIL_A ---
     depilA = f.write_count
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop (slot0)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin (slot1)
     f.write(write_magic(MAGIC_31_BUF0))                                                               # writeback last PING
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop pair
     # fallthrough to DONE
     dedup_done = f.write_count
     f.write(write_magic(MAGIC_32))                                                                     # gather + finalize
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop pair
     # Patch dedup branches
     f.patch_imm0(br_depilA_pro, depilA - br_depilA_pro)
     f.patch_imm0(br_depilB, depilB - br_depilB)
@@ -523,30 +595,56 @@ def pe_instruction(pe_id):
     # PC 40: halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot0: halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot1: halt
-    # --- Dedup PING (PE_DEDUP_PING = 41) ---
-    # PC 41: clear sync
+    # --- Merge PING (PE_MERGE_PING = 49) ---
+    # PC 49: clear sync
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                       # slot1: gr[10]=0
-    # PC 42: dedup PING
+    # PC 50: merge PING
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
-    f.write(write_magic(MAGIC_23_BUF0))                                                            # slot1: magic(23, mask=0)
-    # PC 43: signal done
+    f.write(write_magic(MAGIC_22_BUF0))                                                            # slot1: magic(22, mask=0)
+    # PC 51: signal done
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                       # slot1: gr[10]=1
-    # PC 44: halt
+    # PC 52: halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot0: halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot1: halt
-    # --- Dedup PONG (PE_DEDUP_PONG = 45) ---
-    # PC 45: clear sync
+    # --- Merge PONG (PE_MERGE_PONG = 53) ---
+    # PC 53: clear sync
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                       # slot1: gr[10]=0
-    # PC 46: dedup PONG
+    # PC 54: merge PONG
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
-    f.write(write_magic(MAGIC_23_BUF1))                                                            # slot1: magic(23, mask=1)
-    # PC 47: signal done
+    f.write(write_magic(MAGIC_22_BUF1))                                                            # slot1: magic(22, mask=1)
+    # PC 55: signal done
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                       # slot1: gr[10]=1
-    # PC 48: halt
+    # PC 56: halt
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot0: halt
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot1: halt
+    # --- Dedup PING (PE_DEDUP_PING = 57) ---
+    # PC 57: clear sync
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                       # slot1: gr[10]=0
+    # PC 58: dedup PING
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(write_magic(MAGIC_23_BUF0))                                                            # slot1: magic(23, mask=0)
+    # PC 59: signal done
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                       # slot1: gr[10]=1
+    # PC 60: halt
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot0: halt
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot1: halt
+    # --- Dedup PONG (PE_DEDUP_PONG = 61) ---
+    # PC 61: clear sync
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))                       # slot1: gr[10]=0
+    # PC 62: dedup PONG
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(write_magic(MAGIC_23_BUF1))                                                            # slot1: magic(23, mask=1)
+    # PC 63: signal done
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                       # slot0: nop
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 1, 0, si))                       # slot1: gr[10]=1
+    # PC 64: halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot0: halt
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))                       # slot1: halt
     f.close()

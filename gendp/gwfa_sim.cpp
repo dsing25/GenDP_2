@@ -385,8 +385,8 @@ void gwfa_simulation(
 
         // Max cycles: scale with edit distance × tiles per step
         int max_cycles =
-            inp.s_term * 200000 + 200000;
-        if (max_cycles < 1000000) max_cycles = 1000000;
+            inp.s_term * 500000 + 500000;
+        if (max_cycles < 2000000) max_cycles = 2000000;
         pa->run(max_cycles, 0, PE_4_SETTING,
             MAIN_INSTRUCTION_1);
 

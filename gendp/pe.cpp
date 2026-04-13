@@ -53,6 +53,7 @@ void pe::reset() {
     PC[0] = 0;
     PC[1] = 0;
     ras = 0;
+    outstanding_req.clear();
 }
 
 void pe::recieve_spm_data(int data[LINE_SIZE]){
@@ -1392,64 +1393,296 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 bin_cursors[bin]++;
                 tile_bin_counts[bin]++;
             }
-        } else if (magic_id == 23) {
-            // Dedup: max-k per vd group + intv filter (simple linear scan).
-            int diag_buf_off = (magic_mask & 1) ? DEDUP_BUF1 : DEDUP_BUF0;
-            int out_buf_off  = (magic_mask & 1) ? DEDUP_OUT1  : DEDUP_OUT0;
+        } else if (magic_id == 22) {
+            // Merge: two-pointer merge with ping-pong A/B tiles.
+            // PE switches to other buffer when current exhausted.
+            // If both buffers empty and not globally done, stops
+            // (controller reloads exhausted buffer during next PE call).
+            // META: [0]=ai, [1]=bi, [4]=out_n,
+            //   [5]=a_done, [6]=b_done, [7]=a_which, [8]=b_which,
+            //   [9]=a_tile_n_buf0, [10]=a_tile_n_buf1,
+            //   [11]=b_tile_n_buf0, [12]=b_tile_n_buf1
+            int out_off = (magic_mask & 1) ? MERGE_OUT1 : MERGE_OUT0;
             int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
-            int tile_n       = spm[DEDUP_META + 4];
-            int is_last_diag = spm[DEDUP_META + 5];
-            int intv_n_pe    = spm[DEDUP_META + 6];
-            uint32_t pending_vd = (uint32_t)spm[DEDUP_META + 0];
-            int      pending_k  = spm[DEDUP_META + 1];
-            int      out_n      = 0;
-            int      ii         = spm[DEDUP_META + 3];
-            int *diag = &spm[diag_buf_off];
-            int *out  = &spm[out_buf_off];
-            int *intv = &spm[DEDUP_INTV];
-            for (int i = 0; i < tile_n; i++) {
-                uint32_t vd = (uint32_t)diag[i * 2];
-                int      k  = diag[i * 2 + 1];
-                if (pending_vd != 0xFFFFFFFFU && vd == pending_vd) {
-                    if (k > pending_k) pending_k = k;
+            int ai  = spm[MERGE_META + 0];
+            int bi  = spm[MERGE_META + 1];
+            int aw  = spm[MERGE_META + 7];
+            int bw  = spm[MERGE_META + 8];
+            int a_n = spm[MERGE_META + 9 + aw];
+            int b_n = spm[MERGE_META + 11 + bw];
+            int ab  = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
+            int bb  = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
+            int ad  = spm[MERGE_META + 5];
+            int bd  = spm[MERGE_META + 6];
+            int *out = &spm[out_off];
+            int oi = 0;
+            while (oi < MERGE_TILE) {
+                // Switch A buffer if current exhausted
+                if (ai >= a_n) {
+                    int o = aw ^ 1;
+                    int on = spm[MERGE_META + 9 + o];
+                    if (on > 0) {
+                        spm[MERGE_META + 9 + aw] = 0;
+                        aw = o;
+                        ab = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
+                        ai = 0; a_n = on;
+                    }
+                }
+                // Switch B buffer if current exhausted
+                if (bi >= b_n) {
+                    int o = bw ^ 1;
+                    int on = spm[MERGE_META + 11 + o];
+                    if (on > 0) {
+                        spm[MERGE_META + 11 + bw] = 0;
+                        bw = o;
+                        bb = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
+                        bi = 0; b_n = on;
+                    }
+                }
+                bool aa = (ai < a_n), ba = (bi < b_n);
+                if (!aa && !ba) break;
+                if (!aa && !ad) break; // need A reload
+                if (!ba && !bd) break; // need B reload
+                if (!aa) { // A globally done, drain B
+                    while (oi<MERGE_TILE && bi<b_n) {
+                        out[oi*2]=spm[bb+bi*2];
+                        out[oi*2+1]=spm[bb+bi*2+1]; bi++; oi++;
+                    }
+                    break;
+                }
+                if (!ba) { // B globally done, drain A
+                    while (oi<MERGE_TILE && ai<a_n) {
+                        out[oi*2]=spm[ab+ai*2];
+                        out[oi*2+1]=spm[ab+ai*2+1]; ai++; oi++;
+                    }
+                    break;
+                }
+                if ((uint32_t)spm[ab+ai*2]
+                    <= (uint32_t)spm[bb+bi*2]) {
+                    out[oi*2]=spm[ab+ai*2];
+                    out[oi*2+1]=spm[ab+ai*2+1]; ai++; oi++;
                 } else {
-                    if (pending_vd != 0xFFFFFFFFU) {
-                        // Advance intv scan past pending_vd
-                        while (ii < intv_n_pe
-                               && (uint32_t)intv[ii*2+1] <= pending_vd)
-                            ii++;
-                        bool forbidden = (ii < intv_n_pe
-                            && (uint32_t)intv[ii*2] <= pending_vd
-                            && pending_vd < (uint32_t)intv[ii*2+1]);
-                        if (!forbidden) {
-                            out[out_n*2]   = (int)pending_vd;
-                            out[out_n*2+1] = pending_k;
-                            out_n++;
+                    out[oi*2]=spm[bb+bi*2];
+                    out[oi*2+1]=spm[bb+bi*2+1]; bi++; oi++;
+                }
+            }
+            spm[MERGE_META+0]=ai; spm[MERGE_META+1]=bi;
+            spm[MERGE_META+4]=oi;
+            spm[MERGE_META+7]=aw; spm[MERGE_META+8]=bw;
+        } else if (magic_id == 23) {
+            // Tiled dedup: state machine with TILE_SIZE counter,
+            // dual input ping-pong, inline intv merge-adjacent.
+            // States: X=merge same-vd, B=advance intv, C=drain intv.
+            // mask bit 0 selects output ping (OUT0) or pong (OUT1).
+            int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+            int do_off = (magic_mask & 1)
+                ? DEDUP_DIAG_OUT1 : DEDUP_DIAG_OUT0;
+            int io_off = (magic_mask & 1)
+                ? DEDUP_INTV_OUT1 : DEDUP_INTV_OUT0;
+            // Restore state from META
+            uint32_t pv = (uint32_t)spm[DEDUP_META + 0];
+            int pk       = spm[DEDUP_META + 1];
+            int n_do = 0, n_io = 0;
+            int dc   = spm[DEDUP_META + 4];
+            int ic   = spm[DEDUP_META + 5];
+            int dw   = spm[DEDUP_META + 6];
+            int iw   = spm[DEDUP_META + 7];
+            int de = 0, ie = 0;
+            int dtn  = spm[DEDUP_META + 10 + dw];
+            int don_ = spm[DEDUP_META + 10 + (dw^1)];
+            int itn  = spm[DEDUP_META + 12 + iw];
+            int ion  = spm[DEDUP_META + 12 + (iw^1)];
+            uint32_t clo = (uint32_t)spm[DEDUP_META + 14];
+            uint32_t chi = (uint32_t)spm[DEDUP_META + 15];
+            int state    = spm[DEDUP_META + 16];
+            int pdone    = spm[DEDUP_META + 17];
+            uint32_t nv  = (uint32_t)spm[DEDUP_META + 18];
+            int nk       = spm[DEDUP_META + 19];
+            int db = dw ? DEDUP_DIAG_BUF1 : DEDUP_DIAG_BUF0;
+            int ib = iw ? DEDUP_INTV_BUF1  : DEDUP_INTV_BUF0;
+            int p = 0;  // processed counter
+            bool ad = false, ai = false;  // all_diag/intv done
+
+            // --- Helpers ---
+            // Read next diag; returns false if all consumed
+            auto rd = [&](uint32_t &vd, int &k) -> bool {
+                if (dc >= dtn) {
+                    spm[DEDUP_META + 10 + dw] = 0; // zero in SPM
+                    dw ^= 1;
+                    db = dw ? DEDUP_DIAG_BUF1 : DEDUP_DIAG_BUF0;
+                    de = 1; dtn = don_; don_ = 0; dc = 0;
+                    if (dtn == 0) { ad = true; return false; }
+                }
+                vd = (uint32_t)spm[db+dc*2];
+                k  = spm[db+dc*2+1];
+                dc++; p++;
+                return true;
+            };
+            // Read next intv; returns false if all consumed
+            auto ri = [&](uint32_t &lo, uint32_t &hi) -> bool {
+                if (ic >= itn) {
+                    spm[DEDUP_META + 12 + iw] = 0;
+                    iw ^= 1;
+                    ib = iw ? DEDUP_INTV_BUF1 : DEDUP_INTV_BUF0;
+                    ie = 1; itn = ion; ion = 0; ic = 0;
+                    if (itn == 0) { ai = true; return false; }
+                }
+                lo = (uint32_t)spm[ib+ic*2];
+                hi = (uint32_t)spm[ib+ic*2+1];
+                ic++; p++;
+                return true;
+            };
+            // Peek next intv without consuming
+            auto pi = [&](uint32_t &lo, uint32_t &hi) -> bool {
+                int tc=ic, tw=iw, tt=itn, tb=ib;
+                if (tc >= tt) {
+                    tw ^= 1;
+                    tb = tw ? DEDUP_INTV_BUF1 : DEDUP_INTV_BUF0;
+                    tt = ion; tc = 0;
+                    if (tt == 0) return false;
+                }
+                lo = (uint32_t)spm[tb+tc*2];
+                hi = (uint32_t)spm[tb+tc*2+1];
+                return true;
+            };
+            // Save all PE-owned META fields and exit
+            #define M23_SAVE do { \
+                spm[DEDUP_META+0]=(int)pv; spm[DEDUP_META+1]=pk; \
+                spm[DEDUP_META+2]=n_do; spm[DEDUP_META+3]=n_io; \
+                spm[DEDUP_META+4]=dc; spm[DEDUP_META+5]=ic; \
+                spm[DEDUP_META+6]=dw; spm[DEDUP_META+7]=iw; \
+                spm[DEDUP_META+8]=de; spm[DEDUP_META+9]=ie; \
+                spm[DEDUP_META+14]=(int)clo; \
+                spm[DEDUP_META+15]=(int)chi; \
+                spm[DEDUP_META+16]=state; \
+                spm[DEDUP_META+17]=pdone; \
+                spm[DEDUP_META+18]=(int)nv; \
+                spm[DEDUP_META+19]=nk; \
+            } while(0)
+
+            if (pdone) { M23_SAVE; goto m23_end; }
+            // Jump to saved state
+            if (state == 1) goto m23_B;
+            if (state == 2) goto m23_C;
+
+            // --- State X: merge same-vd diags ---
+m23_X:      while (p < DEDUP_TILE) {
+                uint32_t vd; int k;
+                if (!rd(vd, k)) {
+                    // All diags consumed
+                    if (pv != 0xFFFFFFFFU) {
+                        nv = 0xFFFFFFFFU; // flag: diags done
+                        goto m23_B;
+                    }
+                    goto m23_C;
+                }
+                if (pv == 0xFFFFFFFFU) {
+                    pv = vd; pk = k; continue;
+                }
+                if (vd == pv) {
+                    if (k > pk) pk = k; continue;
+                }
+                // New vd group → process completed (pv,pk)
+                nv = vd; nk = k;
+m23_B:          // Advance intv past pv (State B)
+                state = 1;
+                for (;;) {
+                    // Read first intv if no cur_intv
+                    if (clo == 0xFFFFFFFFU) {
+                        if (ai) break;
+                        uint32_t lo, hi;
+                        if (!ri(lo, hi)) break;
+                        if (p >= DEDUP_TILE) {
+                            clo = lo; chi = hi;
+                            M23_SAVE; goto m23_end;
+                        }
+                        clo = lo; chi = hi;
+                    }
+                    // Always merge overlapping via peek
+                    for (;;) {
+                        uint32_t l2, h2;
+                        if (!pi(l2, h2)) break;
+                        if (l2 <= chi) {
+                            uint32_t d1, d2; ri(d1, d2);
+                            if (h2 > chi) chi = h2;
+                            if (p >= DEDUP_TILE) {
+                                M23_SAVE; goto m23_end;
+                            }
+                        } else break;
+                    }
+                    if (chi > pv) break; // cur_intv passes pv
+                    // Flush cur_intv (behind pv)
+                    spm[io_off + n_io*2] = (int)clo;
+                    spm[io_off + n_io*2+1] = (int)chi;
+                    n_io++;
+                    clo = 0xFFFFFFFFU;
+                }
+                // Forbidden check
+                { bool forb = (clo != 0xFFFFFFFFU
+                    && clo <= pv && pv < chi);
+                  if (!forb) {
+                      spm[do_off + n_do*2] = (int)pv;
+                      spm[do_off + n_do*2+1] = pk;
+                      n_do++;
+                  }
+                }
+                // Transition
+                if (nv == 0xFFFFFFFFU) {
+                    pv = 0xFFFFFFFFU; goto m23_C;
+                }
+                pv = nv; pk = nk;
+            }
+            state = 0; M23_SAVE; goto m23_end;
+
+            // --- State C: drain remaining intervals ---
+m23_C:      state = 2;
+            while (p < DEDUP_TILE) {
+                if (clo == 0xFFFFFFFFU) {
+                    uint32_t lo, hi;
+                    if (!ri(lo, hi)) {
+                        pdone = 1; M23_SAVE; goto m23_end;
+                    }
+                    if (p >= DEDUP_TILE) {
+                        clo = lo; chi = hi;
+                        M23_SAVE; goto m23_end;
+                    }
+                    clo = lo; chi = hi;
+                }
+                // Merge overlapping via peek
+                for (;;) {
+                    uint32_t lo, hi;
+                    if (!pi(lo, hi)) goto m23_drain_done;
+                    if (lo <= chi) {
+                        uint32_t d1, d2; ri(d1, d2);
+                        if (hi > chi) chi = hi;
+                        if (p >= DEDUP_TILE) {
+                            M23_SAVE; goto m23_end;
+                        }
+                    } else {
+                        // Disjoint: flush cur_intv, start new
+                        spm[io_off + n_io*2] = (int)clo;
+                        spm[io_off + n_io*2+1] = (int)chi;
+                        n_io++;
+                        uint32_t d1, d2; ri(d1, d2);
+                        clo = d1; chi = d2;
+                        if (p >= DEDUP_TILE) {
+                            M23_SAVE; goto m23_end;
                         }
                     }
-                    pending_vd = vd;
-                    pending_k  = k;
                 }
-            }
-            // Flush pending on last diag tile
-            if (is_last_diag && pending_vd != 0xFFFFFFFFU) {
-                while (ii < intv_n_pe
-                       && (uint32_t)intv[ii*2+1] <= pending_vd)
-                    ii++;
-                bool forbidden = (ii < intv_n_pe
-                    && (uint32_t)intv[ii*2] <= pending_vd
-                    && pending_vd < (uint32_t)intv[ii*2+1]);
-                if (!forbidden) {
-                    out[out_n*2]   = (int)pending_vd;
-                    out[out_n*2+1] = pending_k;
-                    out_n++;
+m23_drain_done:
+                // All intv consumed — flush last cur_intv
+                if (clo != 0xFFFFFFFFU) {
+                    spm[io_off + n_io*2] = (int)clo;
+                    spm[io_off + n_io*2+1] = (int)chi;
+                    n_io++; clo = 0xFFFFFFFFU;
                 }
-                pending_vd = 0xFFFFFFFF;
+                pdone = 1; M23_SAVE; goto m23_end;
             }
-            spm[DEDUP_META + 0] = (int)pending_vd;
-            spm[DEDUP_META + 1] = pending_k;
-            spm[DEDUP_META + 2] = out_n;
-            spm[DEDUP_META + 3] = ii;
+            M23_SAVE;
+m23_end:    ;
+            ;
+            #undef M23_SAVE
         } else if (magic_id == 19) {
             // PE FIN0: hash check + character match on FIN_0_TILE.
             // Reads: diags, arc_meta, arcs, HA buckets from FIN0 region.
