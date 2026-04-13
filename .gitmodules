@@ -25,3 +25,7 @@
 [submodule "gendp/kernel/Gwfa"]
 	path = gendp/kernel/Gwfa
 	url = git@github.com:UM-mbit/GwfaGdpKernel.git
+[submodule "gendp/kernel/Gssw"]
+	path = gendp/kernel/Gssw
+	url = git@github.com:kaplannp/gssw.git
+	branch = gendpGsswIsa

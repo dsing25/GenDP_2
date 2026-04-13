@@ -2421,6 +2421,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
 
             magic_wfs_out << std::endl;
+        } else if (magic_id == 100) {
+            // GSSW init: copy pre-packed SPM bytes from
+            // host ptr va_regfile[0] into PE 0's SPM.
+            const uint8_t *src =
+                (const uint8_t*)(uintptr_t)va_regfile[0];
+            uint64_t sz = va_regfile[1];
+            if (src && sz > 0
+                && sz <= (uint64_t)SPM_BANK_GROUP_SIZE * 4) {
+                memcpy(&SPM_unit->buffer[0], src, sz);
+            }
         } else {
             fprintf(stderr, "ERROR: PE_ARRAY PC=%d cycle=%d unknown magic id %d (payload %d mask 0x%x).\n",
                     *PC, cycle, magic_id, magic_payload, magic_mask);

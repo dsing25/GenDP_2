@@ -8,6 +8,8 @@ extern "C" {
 #include "kernel/Gwfa/gwfa.h"
 }
 #include <iostream>
+#include <emmintrin.h>   // SSE2
+#include <smmintrin.h>   // SSE4.1
 
 bool check_legal_mv(int src, int dest) {
     //TODO come back and add this. Right now some traces (cough cough poa) are illegal
@@ -547,6 +549,215 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
         }
     }
 }
+
+// ===== Inlined GSSW kernel (from gssw.c) =====
+// Block-copied to avoid linking gssw.c into the simulator.
+
+#define GSSW_SEG_LEN   10
+#define GSSW_PROF_OFF   0
+#define GSSW_HPING_OFF  (40 * 16)
+#define GSSW_HPONG_OFF  (50 * 16)
+#define GSSW_E_OFF      (60 * 16)
+#define GSSW_F_OFF      (70 * 16)
+#define GSSW_BEST_OFF   (80 * 16)
+#define GSSW_GRAPH_OFF  (90 * 16)
+
+// Horizontal max of 16 uint8 lanes
+#define gssw_m128i_max16(m, vm) \
+    (vm) = _mm_max_epu8((vm), _mm_srli_si128((vm), 8)); \
+    (vm) = _mm_max_epu8((vm), _mm_srli_si128((vm), 4)); \
+    (vm) = _mm_max_epu8((vm), _mm_srli_si128((vm), 2)); \
+    (vm) = _mm_max_epu8((vm), _mm_srli_si128((vm), 1)); \
+    (m) = _mm_extract_epi16((vm), 0)
+
+// Unsigned 8-bit compare-greater-than
+#define gssw_m128i_cmpgt(v0, v1) \
+    _mm_cmpgt_epi8( \
+        _mm_xor_si128(v0, _mm_set1_epi8(-128)), \
+        _mm_xor_si128(v1, _mm_set1_epi8(-128)))
+
+struct gssw_spm_graph_meta_t {
+    uint32_t num_nodes;
+    uint32_t total_nexts;
+    uint32_t total_seq;
+    uint32_t _pad;
+};
+
+struct gssw_spm_node_desc_t {
+    int16_t seq_off;
+    int16_t seq_len;
+    int16_t next_off;
+    int16_t next_len;
+    int8_t  _pad[8];
+    __m128i hSeed[GSSW_SEG_LEN];
+    __m128i eSeed[GSSW_SEG_LEN];
+};
+
+// Process one reference column (no allocation)
+static void gssw_sw_column_inline(
+    const __m128i* prof, const __m128i* hPing,
+    __m128i* hPong, __m128i* pvE, __m128i* pvF,
+    int8_t refBase, __m128i* vMaxColumn)
+{
+    const int32_t segLen = GSSW_SEG_LEN;
+    const __m128i vZero = _mm_setzero_si128();
+    const __m128i vGapO = _mm_set1_epi8(6);
+    const __m128i vGapE = _mm_set1_epi8(1);
+    const __m128i vBias = _mm_set1_epi8(4);
+    const __m128i* vP = prof + refBase * segLen;
+
+    __m128i vH = _mm_load_si128(hPing + (segLen - 1));
+    vH = _mm_slli_si128(vH, 1);
+
+    __m128i e, vF = vZero;
+    *vMaxColumn = vZero;
+    memset(pvF, 0, segLen * sizeof(__m128i));
+
+    // Main inner loop
+    int32_t j;
+    for (j = 0; j < segLen; ++j) {
+        vH = _mm_adds_epu8(vH, _mm_load_si128(vP + j));
+        vH = _mm_subs_epu8(vH, vBias);
+
+        e = _mm_load_si128(pvE + j);
+        vH = _mm_max_epu8(vH, e);
+        vH = _mm_max_epu8(vH, vF);
+        *vMaxColumn = _mm_max_epu8(*vMaxColumn, vH);
+
+        _mm_store_si128(hPong + j, vH);
+        _mm_store_si128(pvF + j, vF);
+
+        vH = _mm_subs_epu8(vH, vGapO);
+        e = _mm_subs_epu8(e, vGapE);
+        e = _mm_max_epu8(e, vH);
+        _mm_store_si128(pvE + j, e);
+
+        vF = _mm_subs_epu8(vF, vGapE);
+        vF = _mm_max_epu8(vF, vH);
+
+        vH = _mm_load_si128(hPing + j);
+    }
+
+    // Lazy-F loop
+    j = 0;
+    vH = _mm_load_si128(hPong + j);
+    vF = _mm_slli_si128(vF, 1);
+
+    __m128i vTemp = gssw_m128i_cmpgt(vF, vH);
+    int32_t cmp = _mm_movemask_epi8(vTemp);
+    vTemp = _mm_load_si128(pvF + j);
+    vTemp = gssw_m128i_cmpgt(vF, vTemp);
+    cmp |= _mm_movemask_epi8(vTemp);
+
+    while (cmp != 0x0000) {
+        vH = _mm_max_epu8(vH, vF);
+        *vMaxColumn = _mm_max_epu8(*vMaxColumn, vH);
+        _mm_store_si128(hPong + j, vH);
+
+        e = _mm_load_si128(pvE + j);
+        vTemp = _mm_subs_epu8(vH, vGapO);
+        e = _mm_max_epu8(e, vTemp);
+        _mm_store_si128(pvE + j, e);
+
+        vTemp = _mm_load_si128(pvF + j);
+        vTemp = _mm_max_epu8(vTemp, vF);
+        _mm_store_si128(pvF + j, vTemp);
+
+        vF = _mm_subs_epu8(vF, vGapE);
+
+        j++;
+        if (j >= segLen) {
+            j = 0;
+            vF = _mm_slli_si128(vF, 1);
+        }
+
+        vH = _mm_load_si128(hPong + j);
+        vTemp = gssw_m128i_cmpgt(vF, vH);
+        cmp = _mm_movemask_epi8(vTemp);
+        vTemp = _mm_load_si128(pvF + j);
+        vTemp = gssw_m128i_cmpgt(vF, vTemp);
+        cmp |= _mm_movemask_epi8(vTemp);
+    }
+}
+
+// Full allocation-free graph alignment kernel
+static uint16_t gssw_kernel_inline(uint8_t* SPM) {
+    const int32_t segLen = GSSW_SEG_LEN;
+
+    __m128i* prof  = (__m128i*)(SPM + GSSW_PROF_OFF);
+    __m128i* hPing = (__m128i*)(SPM + GSSW_HPING_OFF);
+    __m128i* hPong = (__m128i*)(SPM + GSSW_HPONG_OFF);
+    __m128i* pvE   = (__m128i*)(SPM + GSSW_E_OFF);
+    __m128i* pvF   = (__m128i*)(SPM + GSSW_F_OFF);
+    __m128i* best  = (__m128i*)(SPM + GSSW_BEST_OFF);
+
+    gssw_spm_graph_meta_t* meta =
+        (gssw_spm_graph_meta_t*)(SPM + GSSW_GRAPH_OFF);
+    uint32_t numNodes = meta->num_nodes;
+    gssw_spm_node_desc_t* nodeDescs =
+        (gssw_spm_node_desc_t*)(
+            SPM + GSSW_GRAPH_OFF
+            + sizeof(gssw_spm_graph_meta_t));
+    int16_t* childIds = (int16_t*)(
+        (uint8_t*)nodeDescs
+        + numNodes * sizeof(gssw_spm_node_desc_t));
+    uint64_t nexts_bytes =
+        ((uint64_t)meta->total_nexts * sizeof(int16_t)
+         + 15) & ~15ULL;
+    const int8_t* graphSeq =
+        (const int8_t*)childIds + nexts_bytes;
+
+    memset(best, 0, segLen * sizeof(__m128i));
+    uint8_t overallMax = 0;
+
+    for (uint32_t n = 0; n < numNodes; n++) {
+        gssw_spm_node_desc_t* nd = &nodeDescs[n];
+
+        memcpy(hPing, nd->hSeed, segLen * sizeof(__m128i));
+        memcpy(pvE, nd->eSeed, segLen * sizeof(__m128i));
+
+        const int8_t* seq = graphSeq + nd->seq_off;
+        for (int32_t col = 0; col < nd->seq_len; col++) {
+            __m128i vMaxColumn = _mm_setzero_si128();
+            gssw_sw_column_inline(
+                prof, hPing, hPong, pvE, pvF,
+                seq[col], &vMaxColumn);
+
+            uint8_t colMax;
+            gssw_m128i_max16(colMax, vMaxColumn);
+            if (colMax > overallMax) {
+                overallMax = colMax;
+                memcpy(best, hPong,
+                       segLen * sizeof(__m128i));
+            }
+
+            __m128i* tmp = hPing;
+            hPing = hPong;
+            hPong = tmp;
+        }
+
+        // Push seed to children
+        for (int16_t c = 0; c < nd->next_len; c++) {
+            int16_t child = childIds[nd->next_off + c];
+            gssw_spm_node_desc_t* cd = &nodeDescs[child];
+            for (int32_t j2 = 0; j2 < segLen; j2++) {
+                cd->hSeed[j2] = _mm_max_epu8(
+                    cd->hSeed[j2], hPing[j2]);
+                cd->eSeed[j2] = _mm_max_epu8(
+                    cd->eSeed[j2], pvE[j2]);
+            }
+        }
+    }
+
+    __m128i vMax = _mm_setzero_si128();
+    for (int32_t j = 0; j < segLen; j++)
+        vMax = _mm_max_epu8(vMax, best[j]);
+    uint8_t maxScore;
+    gssw_m128i_max16(maxScore, vMax);
+    return (uint16_t)maxScore;
+}
+
+// ===== End inlined GSSW kernel =====
 
 int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int simd, int* ctrl_write_addr, int* ctrl_write_datum) {
     if (instruction == 0x20f7800000000) {
@@ -1449,6 +1660,23 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             fspm[FIN0_META + 3] = n_B;
             fspm[FIN0_META + 4] = n_HA;
         m19_done: ;
+        } else if (magic_id == 101) {
+            // GSSW kernel: run on this PE's SPM bytes.
+            alignas(16) static uint8_t gssw_scratch[
+                SPM_BANK_GROUP_SIZE * 4];
+            uint8_t *spm_bytes = (uint8_t*)&SPM_unit->buffer[
+                id * SPM_BANK_GROUP_SIZE];
+            memcpy(gssw_scratch, spm_bytes,
+                   SPM_BANK_GROUP_SIZE * 4);
+            uint16_t score =
+                gssw_kernel_inline(gssw_scratch);
+            // Store in gr[15] to avoid clobbering gr[0]
+            // which si gr[10]=1 uses as base register.
+            addr_regfile_unit->st(15, (int)score);
+        } else if (magic_id == 102) {
+            // GSSW print score from gr[15].
+            printf("qqq %d qqq\n",
+                   addr_regfile_unit->at(15));
         }
         (*PC)++;
     } else if (opcode == 0) {              // add rd rs1 rs2

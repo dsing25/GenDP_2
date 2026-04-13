@@ -8,7 +8,7 @@ AR      = @echo generating static library $@ && ar rc
 
 #BASE CXXFLAGS
 #CXXFLAGS   = -g -Wall -Wno-format -Wno-unused-variable -Wno-unused-but-set-parameter -Wno-unused-result -fPIC -std=c++11 -O0 -g3 -fno-inline -fno-omit-frame-pointer -fno-lto -fvar-tracking -fvar-tracking-assignments -lpthread 
-CXXFLAGS   = -g -g3 -ggdb -O0 -std=c++11 -DGWFA_DBG_DEFAULT=1
+CXXFLAGS   = -g -g3 -ggdb -O0 -std=c++11 -msse4.1 -DGWFA_DBG_DEFAULT=1
 #CXXFLAGS   += -Wall -Wextra -Wpedantic
 HEADER  = 
 LIBS    = libsimulator.a 
@@ -22,7 +22,7 @@ ifeq ($(ADDRESS_SANITIZER),1)
 endif
 
 
-OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o gwfa_sim.o simulator.o
+OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o gwfa_sim.o gssw_sim.o simulator.o
 
 ifeq ($(debug),1)
 CXXFLAGS+= -DDEBUG
@@ -49,7 +49,7 @@ BIN_PATH = ./
 TARGET = sim
 
 # O3 optimized build
-CXXFLAGS_O3 = -O3 -std=c++11
+CXXFLAGS_O3 = -O3 -std=c++11 -msse4.1
 TARGET_O3 = sim_o3
 OBJECT_O3 = $(OBJECT:.o=_o3.o)
 LIB_O3 = libsimulator_o3.a
