@@ -2553,9 +2553,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 s1c[148] = n_total;
             }
         } else if (magic_id == 38) {
-            // Intv merge finalize: compute intv_n, restore gr[24]=n_a.
-            // s1c[152] already points to merged intv location.
+            // Intv merge finalize: compute intv_n, restore gr[24]=n_a,
+            // compute intv boundary positions (AC-7) from stored diag splits.
             {
+                int *mm = gwfa_get_mm();
                 int intv_n;
                 if (s1c[149] < 0) {
                     intv_n = s1c[148];
@@ -2565,9 +2566,36 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         intv_n += s1c[4 + pe];
                 }
                 s1c[149] = intv_n;
-                // Restore gr[24]=n_a (clobbered by intv sort) for dedup
                 main_addressing_register[24] = s1c[145]; // n_a
                 main_addressing_register[28] = intv_n;
+                // Compute intv boundary positions using stored diag split vd
+                // s1c[159..161] = 3 internal boundary vd values (from M36)
+                // intv_lo: first intv whose hi > vd (hi-based boundary)
+                // intv_hi: first intv whose lo >= vd (lo-based boundary)
+                int ib = s1c[152]; // active_intv_base
+                // s1c[163..165] = intv_lo[pe] for PE 1,2,3
+                // s1c[166..168] = intv_hi[pe] for PE 0,1,2
+                for (int b = 0; b < 3; b++) {
+                    uint32_t vd = (uint32_t)s1c[159+b];
+                    // hi-based: first intv whose lo >= vd
+                    int lo = 0, hi = intv_n;
+                    while (lo < hi) {
+                        int mid = (lo + hi) / 2;
+                        if ((uint32_t)mm[ib+2*mid] < vd)
+                            lo = mid + 1;
+                        else hi = mid;
+                    }
+                    s1c[166+b] = lo; // intv_hi for PE b
+                    // lo-based: first intv whose hi > vd
+                    lo = 0; hi = intv_n;
+                    while (lo < hi) {
+                        int mid = (lo + hi) / 2;
+                        if ((uint32_t)mm[ib+2*mid+1] <= vd)
+                            lo = mid + 1;
+                        else hi = mid;
+                    }
+                    s1c[163+b] = lo; // intv_lo for PE b+1
+                }
             }
         } else if (magic_id == 26) {
             // New+old intv merge split + load (pointer-swap version).
@@ -2736,6 +2764,33 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 } else {
                     s1c[153] = gr[3]; // active_diag_base = original diag_base
                 }
+                // Compute and store diag split metadata for dedup (AC-6)
+                int db = s1c[153];
+                int nape = (n_a + 3) / 4;
+                // 5 split indices in s1c[154..158]
+                s1c[154] = 0;
+                s1c[158] = n_a;
+                for (int pe = 1; pe < 4; pe++) {
+                    int nom = pe * nape;
+                    if (nom >= n_a) { s1c[154+pe] = n_a; continue; }
+                    uint32_t prev_vd = (uint32_t)mm[db + 2*(nom-1)];
+                    int i = nom;
+                    while (i < n_a && (uint32_t)mm[db+2*i] == prev_vd)
+                        i++;
+                    s1c[154+pe] = i;
+                }
+                // 4 boundary vd values in s1c[159..162]
+                // vd at split[1], split[2], split[3] (internal boundaries)
+                // + sentinel for split[4]=n_a (use vd at n_a-1 or max)
+                for (int pe = 0; pe < 3; pe++) {
+                    int sp = s1c[155+pe]; // split[pe+1]
+                    if (sp < n_a)
+                        s1c[159+pe] = mm[db + 2*sp]; // vd at split
+                    else
+                        s1c[159+pe] = (int)0xFFFFFFFF; // sentinel
+                }
+                s1c[162] = (n_a > 0)
+                    ? mm[db + 2*(n_a-1)] : (int)0xFFFFFFFF;
             }
         } else if (magic_id == 29) {
             // Tiled dedup: split search + initial tile load.
@@ -2757,59 +2812,26 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 // Use MM_SWAP region (free during dedup)
                 constexpr int MM_DEDUP_INTV_OUT =
                     DIAG_CAP_V * 6 + INTV_CAP_V * 4;
-                // Use active bases from s1c pointer swap
+                // Use pre-computed splits from s1c (AC-8)
                 int diag_base = s1c[153]; // active_diag_base
                 int intv_base = s1c[152]; // active_intv_base
                 int n_a       = gr[24];
                 int intv_n    = gr[28];
-                int nape      = (n_a + 3) / 4;
 
-                // Find vd-boundary split points for diags
-                int splits[5] = {0, 0, 0, 0, n_a};
-                for (int pe = 1; pe < 4; pe++) {
-                    int nom = pe * nape;
-                    if (nom >= n_a) { splits[pe] = n_a; continue; }
-                    uint32_t prev_vd =
-                        (uint32_t)mm[diag_base + 2*(nom-1)];
-                    int i = nom;
-                    while (i < n_a
-                           && (uint32_t)mm[diag_base+2*i] == prev_vd)
-                        i++;
-                    splits[pe] = i;
-                }
+                // Read pre-computed diag splits from s1c[154..158]
+                int splits[5];
+                for (int i = 0; i < 5; i++) splits[i] = s1c[154+i];
 
-                // Find intv ranges per PE via binary search
+                // Read pre-computed intv boundaries from s1c[163..168]
+                // intv_lo[pe]: first intv whose hi > vd(split[pe])
+                // intv_hi[pe]: first intv whose lo >= vd(split[pe+1])
                 int intv_lo[4] = {0, 0, 0, 0};
                 int intv_hi[4] = {intv_n, intv_n, intv_n, intv_n};
                 if (intv_n > 0) {
-                    for (int pe = 0; pe < 3; pe++) {
-                        if (splits[pe+1] >= n_a) continue;
-                        uint32_t vd =
-                            (uint32_t)mm[diag_base+2*splits[pe+1]];
-                        int lo = 0, hi = intv_n;
-                        while (lo < hi) {
-                            int mid2 = (lo + hi) / 2;
-                            if ((uint32_t)mm[intv_base+2*mid2] < vd)
-                                lo = mid2 + 1;
-                            else hi = mid2;
-                        }
-                        intv_hi[pe] = lo;
-                    }
-                    for (int pe = 1; pe < 4; pe++) {
-                        if (splits[pe] >= n_a) {
-                            intv_lo[pe] = intv_n; continue;
-                        }
-                        uint32_t vd =
-                            (uint32_t)mm[diag_base+2*splits[pe]];
-                        int lo = 0, hi = intv_n;
-                        while (lo < hi) {
-                            int mid2 = (lo + hi) / 2;
-                            if ((uint32_t)mm[intv_base+2*mid2+1] <= vd)
-                                lo = mid2 + 1;
-                            else hi = mid2;
-                        }
-                        intv_lo[pe] = lo;
-                    }
+                    for (int pe = 0; pe < 3; pe++)
+                        intv_hi[pe] = s1c[166+pe];
+                    for (int pe = 1; pe < 4; pe++)
+                        intv_lo[pe] = s1c[163+pe-1];
                 }
 
                 // Loop bound: max(diag_n + intv_n) across PEs
