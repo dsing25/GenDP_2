@@ -2343,7 +2343,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
             gwfa_set_ha_n_dirty((uint32_t)gr[31]);
         } else if (magic_id == 16) {
-            // Sync counters, filter next_intv, setup intv sort state.
+            // Sync counters, save state, setup DIAG sort (DIAG-first order).
             auto &gr = main_addressing_register;
             gwfa_sync_counters(gr[24], (uint32_t)gr[25],
                 (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
@@ -2351,20 +2351,28 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             constexpr int DIAG_CAP_V  = (16 << 20);
             constexpr int INTV_CAP_V  = (1 << 21);
             constexpr int MM_INTV     = DIAG_CAP_V * 6;
-            constexpr int MM_NEXT_INTV = MM_INTV + INTV_CAP_V * 2;
-            constexpr int MM_SWAP     = MM_NEXT_INTV + INTV_CAP_V * 2;
+            constexpr int MM_SORT_BUF = DIAG_CAP_V * 6 + INTV_CAP_V * 6;
+            int diag_base = gr[20];
+            int n_a       = gr[24];
             int next_intv_n = gr[28];
-            // Save state for after intv sort
-            s1c[144] = gr[20];  // diag_base
-            s1c[145] = gr[24];  // n_a
+            int n_phase1_v = s1c[151]; // set by ISA before sort/merge pipeline
+            // Save state for later phases
+            s1c[144] = diag_base;
+            s1c[145] = n_a;
             s1c[146] = (int)gwfa_get_intv_n();  // old intv_n
-            s1c[152] = MM_INTV;  // active_intv_base
-            s1c[153] = gr[20];   // active_diag_base = diag_base
-            // Sort ALL next_intv (P1 intv not guaranteed sorted)
-            gr[3]  = MM_NEXT_INTV;
-            gr[4]  = MM_SWAP;
-            gr[6]  = (next_intv_n + 3) / 4;
-            gr[24] = next_intv_n;
+            s1c[155] = next_intv_n;              // save for intv sort setup
+            s1c[152] = MM_INTV;   // active_intv_base
+            s1c[153] = diag_base; // active_diag_base
+            // Setup DIAG tail sort (phase 1 prefix already sorted)
+            if (n_phase1_v < 0) n_phase1_v = 0;
+            if (n_phase1_v > n_a) n_phase1_v = n_a;
+            int n_unsorted = n_a - n_phase1_v;
+            s1c[147] = n_phase1_v;
+            s1c[148] = n_a;
+            gr[3]  = diag_base + n_phase1_v * 2;
+            gr[4]  = MM_SORT_BUF;
+            gr[6]  = (n_unsorted + 3) / 4;
+            gr[24] = n_unsorted;
         } else if (magic_id == 17) {
             // Set score = gr_lo[12] (current edit distance, packed)
             gwfa_set_score(
@@ -2544,6 +2552,21 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
                 s1c[148] = n_total;
             }
+        } else if (magic_id == 38) {
+            // Intv merge finalize: compute intv_n from PE output cursors.
+            // s1c[152] already points to merged intv location.
+            {
+                int intv_n;
+                if (s1c[149] < 0) {
+                    intv_n = s1c[148];
+                } else {
+                    intv_n = 0;
+                    for (int pe = 0; pe < 4; pe++)
+                        intv_n += s1c[4 + pe];
+                }
+                s1c[149] = intv_n;
+                main_addressing_register[28] = intv_n;
+            }
         } else if (magic_id == 26) {
             // New+old intv merge split + load (pointer-swap version).
             {
@@ -2580,40 +2603,20 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
             }
         } else if (magic_id == 39) {
-            // Intv merge finalize + diag sort setup (pointer-swap version).
+            // Intv sort setup (after diag merge, DIAG-first order).
+            // Reads saved state from magic 16. Sets up gr for intv sort.
             {
                 auto &gr = main_addressing_register;
                 constexpr int DIAG_CAP_V  = (16 << 20);
                 constexpr int INTV_CAP_V  = (1 << 21);
-                constexpr int MM_SORT_BUF = DIAG_CAP_V * 6 + INTV_CAP_V * 6;
-                int diag_base = s1c[144];
-                int n_a       = s1c[145];
-                // Compute merged intv_n (no copy needed: s1c[152] already points
-                // to wherever the intv data lives)
-                int intv_n;
-                if (s1c[149] < 0) {
-                    // Merge skipped: s1c[152] already points to correct data
-                    intv_n = s1c[148];
-                } else {
-                    intv_n = 0;
-                    for (int pe = 0; pe < 4; pe++)
-                        intv_n += s1c[4 + pe];
-                }
-                constexpr int DIAG_CAP_LIM = (16 << 20);
-                if (n_a > DIAG_CAP_LIM) n_a = DIAG_CAP_LIM;
-                int n_phase1_v = s1c[151];
-                if (n_phase1_v < 0) n_phase1_v = 0;
-                if (n_phase1_v > n_a) n_phase1_v = n_a;
-                int n_unsorted = n_a - n_phase1_v;
-                s1c[147] = n_phase1_v;
-                s1c[148] = n_a;
-                s1c[149] = intv_n;
-                s1c[150] = diag_base;
-                gr[3]  = diag_base + n_phase1_v * 2;
-                gr[4]  = MM_SORT_BUF;
-                gr[6]  = (n_unsorted + 3) / 4;
-                gr[24] = n_unsorted;
-                gr[28] = intv_n;
+                constexpr int MM_INTV     = DIAG_CAP_V * 6;
+                constexpr int MM_NEXT_INTV = MM_INTV + INTV_CAP_V * 2;
+                constexpr int MM_SWAP     = MM_NEXT_INTV + INTV_CAP_V * 2;
+                int next_intv_n = s1c[155]; // saved by magic 16
+                gr[3]  = MM_NEXT_INTV;
+                gr[4]  = MM_SWAP;
+                gr[6]  = (next_intv_n + 3) / 4;
+                gr[24] = next_intv_n;
             }
         } else if (magic_id == 28) {
             // Diag merge split + tile load.
@@ -2626,8 +2629,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 constexpr int MM_SORT_BUF = DIAG_CAP_V * 6 + INTV_CAP_V * 6;
                 int n_phase1  = s1c[147];
                 int n_a       = s1c[148];
-                int intv_n    = s1c[149];
-                int diag_base = s1c[150];
+                int intv_n    = s1c[146]; // old intv_n (new intv_n not known yet)
+                int diag_base = s1c[153]; // active_diag_base
                 // Check inputs sorted (no static, every call)
                 if (n_phase1 > 0 && n_phase1 < n_a) {
                     bool p_ok = true, t_ok = true;
@@ -2981,11 +2984,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int *mm = gwfa_get_mm();
                 constexpr int DIAG_CAP_V2 = (16 << 20);
                 constexpr int MM_INTV2 = DIAG_CAP_V2 * 6;
-                int diag_base   = gr[3];
+                int diag_base   = s1c[144]; // original diag_base
                 int mm_sort_buf = gr[4];
                 int mm_intv_out = gr[7];
 
-                // Gather deduped diags from MM_SORT_BUF → diag_base
+                // Gather deduped diags → diag_base
                 int n_a_final = 0;
                 for (int pe = 0; pe < 4; pe++) {
                     int base = s1c[16 + pe];

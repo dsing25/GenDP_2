@@ -342,23 +342,25 @@ def gwfa_main_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 1, bne))                          # bne → DRAIN_EXIT
     f.write(write_magic(MAGIC_15_BUF0_F0A))                                                          # magic15 BUF0→FIN0_A
     f.write(data_movement_instruction(0, 0, 0, 0, shared_fin0a_drain - f.write_count, 0, 0, 0, 0, 0, jump))  # jump → FIN0_A_DRAIN
-    # === POST-PHASE 2: INTV SORT → INTV MERGE → DIAG SORT → MERGE → DEDUP ===
+    # === POST-PHASE 2: DIAG SORT → DIAG MERGE → INTV SORT → MERGE → DEDUP ===
     p2_exit = f.write_count
     f.patch_imm0(br_p2exit, p2_exit - br_p2exit)
-    # Intv sort setup (gr[30] already saved at PC 34 before phase 2)
-    f.write(write_magic(16))                                                                          # filter+setup intv sort
+    # Diag sort setup (magic 16 now sets up diag sort, not intv sort)
+    f.write(write_magic(16))                                                                          # sync+setup diag sort
     f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 0, 0, si))                           # gr[1]=0
-    emit_sort_loop(f)                                                                                  # sort loop 1: intv
-    # === INTV MERGE: PE-parallel (sorted new + old → MM_INTV) ===
-    f.write(write_magic(MAGIC_37))                                                                     # intv merge split + load
-    emit_merge_loop(f)
-    f.write(write_magic(MAGIC_39))                                                                     # intv finalize + diag sort setup
-    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 0, 0, si))                           # gr[1]=0
-    emit_sort_loop(f)                                                                                  # sort loop 2: diag tail
+    emit_sort_loop(f)                                                                                  # sort loop 1: diag tail
     # === DIAG MERGE: PE-parallel merge ===
     f.write(write_magic(MAGIC_28))                                                                     # diag split + load
     emit_merge_loop(f)
     f.write(write_magic(MAGIC_36))                                                                     # diag merge finalize
+    # === INTV SORT: setup + radix sort ===
+    f.write(write_magic(MAGIC_39))                                                                     # intv sort setup
+    f.write(data_movement_instruction(gr, 0, 0, 0, 1, 0, 0, 0, 0, 0, si))                           # gr[1]=0
+    emit_sort_loop(f)                                                                                  # sort loop 2: intv
+    # === INTV MERGE: PE-parallel (sorted new + old) ===
+    f.write(write_magic(MAGIC_37))                                                                     # intv merge split + load
+    emit_merge_loop(f)
+    f.write(write_magic(MAGIC_38))                                                                     # intv merge finalize
     # Dedup (tiled with overlapped writeback+reload)
     # Matches old dedup/merge ISA pattern.
     f.write(write_magic(MAGIC_29))                                                                     # dedup split + initial tile load
