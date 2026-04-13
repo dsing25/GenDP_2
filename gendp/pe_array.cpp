@@ -2553,7 +2553,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 s1c[148] = n_total;
             }
         } else if (magic_id == 38) {
-            // Intv merge finalize: compute intv_n from PE output cursors.
+            // Intv merge finalize: compute intv_n, restore gr[24]=n_a.
             // s1c[152] already points to merged intv location.
             {
                 int intv_n;
@@ -2565,6 +2565,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         intv_n += s1c[4 + pe];
                 }
                 s1c[149] = intv_n;
+                // Restore gr[24]=n_a (clobbered by intv sort) for dedup
+                main_addressing_register[24] = s1c[145]; // n_a
                 main_addressing_register[28] = intv_n;
             }
         } else if (magic_id == 26) {
