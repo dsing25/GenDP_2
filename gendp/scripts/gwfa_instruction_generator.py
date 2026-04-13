@@ -169,13 +169,13 @@ def emit_sort_loop(f):
     f.write(data_movement_instruction(0, 0, 0, 0, 15, 0, 1, 0, 2, 6, bge))                      # +20: bge → +15 (+35)
     f.write(write_magic(MAGIC_24_BUF1))                                                            # +21: SS_PONG
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # +22: spin
-    f.write(write_magic(MAGIC_25_BUF0))                                                            # +23: writeback PING
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_SORT_SCATTER_PONG, 0, 0, 0, 0, 0, set_PC))  # +24: set_PC scatter PONG
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_SORT_SCATTER_PONG, 0, 0, 0, 0, 0, set_PC))  # +23: set_PC scatter PONG
+    f.write(write_magic(MAGIC_25_BUF0))                                                            # +24: writeback PING (overlapped)
     f.write(data_movement_instruction(0, 0, 0, 0, 7, 0, 1, 0, 2, 6, bge))                       # +25: bge → +7 (+32)
     f.write(write_magic(MAGIC_24_BUF0))                                                            # +26: SS_PING
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # +27: spin
-    f.write(write_magic(MAGIC_25_BUF1))                                                            # +28: writeback PONG
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_SORT_SCATTER_PING, 0, 0, 0, 0, 0, set_PC))  # +29: set_PC scatter PING
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_SORT_SCATTER_PING, 0, 0, 0, 0, 0, set_PC))  # +28: set_PC scatter PING
+    f.write(write_magic(MAGIC_25_BUF1))                                                            # +29: writeback PONG (overlapped)
     f.write(data_movement_instruction(0, 0, 0, 0, 5, 0, 1, 0, 2, 6, bge))                       # +30: bge → +5 (+35)
     f.write(data_movement_instruction(0, 0, 0, 0, -10, 0, 0, 0, 0, 0, jump))                     # +31: jump -10 (+21: SS_PONG)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # +32: SEPIL_B: spin
@@ -373,16 +373,16 @@ def gwfa_main_instruction():
     ss_pong = f.write_count
     f.write(write_magic(MAGIC_30_BUF0))                                                               # reload (slot0, re-exec safe during spin)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin (slot1)
-    f.write(write_magic(MAGIC_31_BUF0))                                                               # writeback OUT0
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PONG, 0, 0, 0, 0, 0, set_PC))            # PE writes OUT1
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PONG, 0, 0, 0, 0, 0, set_PC))            # PE starts OUT1
+    f.write(write_magic(MAGIC_31_BUF0))                                                               # writeback OUT0 (overlapped)
     br_exit_pong = f.write_count
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))                           # → EXIT_PONG (patch)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop pair
     # --- SS_PING ---
     f.write(write_magic(MAGIC_30_BUF0))                                                               # reload (slot0, re-exec safe during spin)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin (slot1)
-    f.write(write_magic(MAGIC_31_BUF1))                                                               # writeback OUT1
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PING, 0, 0, 0, 0, 0, set_PC))            # PE writes OUT0
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PING, 0, 0, 0, 0, 0, set_PC))            # PE starts OUT0
+    f.write(write_magic(MAGIC_31_BUF1))                                                               # writeback OUT1 (overlapped)
     br_exit_ping_ss = f.write_count
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))                           # → EXIT_PING (patch)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop pair
