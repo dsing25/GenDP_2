@@ -366,8 +366,8 @@ def gwfa_main_instruction():
     # --- Prologue: load + first PE call ---
     f.write(write_magic(MAGIC_30_BUF0))                                                               # reload (loads BUF1 from remaining data)
     f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PING, 0, 0, 0, 0, 0, set_PC))
-    br_depilA_pro = f.write_count
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))                           # → DEPIL_A (patch)
+    br_exit_ping_pro = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))                           # → EXIT_PING (patch)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop pair
     # --- SS_PONG ---
     ss_pong = f.write_count
@@ -375,28 +375,28 @@ def gwfa_main_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin (slot1)
     f.write(write_magic(MAGIC_31_BUF0))                                                               # writeback OUT0
     f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PONG, 0, 0, 0, 0, 0, set_PC))            # PE writes OUT1
-    br_depilB = f.write_count
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))                           # → DEPIL_B (patch)
+    br_exit_pong = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))                           # → EXIT_PONG (patch)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop pair
     # --- SS_PING ---
     f.write(write_magic(MAGIC_30_BUF0))                                                               # reload (slot0, re-exec safe during spin)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin (slot1)
     f.write(write_magic(MAGIC_31_BUF1))                                                               # writeback OUT1
     f.write(data_movement_instruction(0, 0, 0, 0, PE_DEDUP_PING, 0, 0, 0, 0, 0, set_PC))            # PE writes OUT0
-    br_depilA_ss = f.write_count
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))                           # → DEPIL_A (patch)
+    br_exit_ping_ss = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 2, 6, bge))                           # → EXIT_PING (patch)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop pair
     f.write(data_movement_instruction(0, 0, 0, 0, ss_pong - f.write_count, 0, 0, 0, 0, 0, jump))    # → SS_PONG
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop pair
-    # --- DEPIL_B ---
-    depilB = f.write_count
+    # --- DEDUP_EXIT_PONG ---
+    dedup_exit_pong = f.write_count
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop (slot0)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin (slot1)
     f.write(write_magic(MAGIC_31_BUF1))                                                               # writeback last PONG
-    br_done_from_B = f.write_count
+    br_done_from_pong = f.write_count
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, jump))                          # → DONE (patch)
-    # --- DEPIL_A ---
-    depilA = f.write_count
+    # --- DEDUP_EXIT_PING ---
+    dedup_exit_ping = f.write_count
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop (slot0)
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                          # spin (slot1)
     f.write(write_magic(MAGIC_31_BUF0))                                                               # writeback last PING
@@ -406,10 +406,10 @@ def gwfa_main_instruction():
     f.write(write_magic(MAGIC_32))                                                                     # gather + finalize
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                          # nop pair
     # Patch dedup branches
-    f.patch_imm0(br_depilA_pro, depilA - br_depilA_pro)
-    f.patch_imm0(br_depilB, depilB - br_depilB)
-    f.patch_imm0(br_depilA_ss, depilA - br_depilA_ss)
-    f.patch_imm0(br_done_from_B, dedup_done - br_done_from_B)
+    f.patch_imm0(br_exit_ping_pro, dedup_exit_ping - br_exit_ping_pro)
+    f.patch_imm0(br_exit_pong, dedup_exit_pong - br_exit_pong)
+    f.patch_imm0(br_exit_ping_ss, dedup_exit_ping - br_exit_ping_ss)
+    f.patch_imm0(br_done_from_pong, dedup_done - br_done_from_pong)
     # === STEP DONE ===
     f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 12, 0, 0, 0, 1, 12, addi))               # gr_lo[12]++
     f.write(write_magic(5))                                                                           # magic5
