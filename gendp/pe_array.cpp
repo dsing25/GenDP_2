@@ -2358,6 +2358,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             s1c[144] = gr[20];  // diag_base
             s1c[145] = gr[24];  // n_a
             s1c[146] = (int)gwfa_get_intv_n();  // old intv_n
+            s1c[152] = MM_INTV;  // active_intv_base
+            s1c[153] = gr[20];   // active_diag_base = diag_base
             // Sort ALL next_intv (P1 intv not guaranteed sorted)
             gr[3]  = MM_NEXT_INTV;
             gr[4]  = MM_SWAP;
@@ -2510,7 +2512,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
             }
         } else if (magic_id == 37) {
-            // Intv new+old merge split + load.
+            // Intv new+old merge split + load (pointer-swap version).
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
@@ -2522,28 +2524,28 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int n_new  = gr[24];
                 int intv_n = s1c[146];
                 int n_total = n_new + intv_n;
+                int active_intv = s1c[152]; // current intv buffer base
                 if (n_new <= 0 || intv_n <= 0) {
+                    // Only one source: just point active base there
                     if (n_new > 0)
-                        for (int i = 0; i < n_new * 2; i++)
-                            mm[MM_SWAP + i] = mm[MM_NEXT_INTV + i];
-                    else if (intv_n > 0)
-                        for (int i = 0; i < intv_n * 2; i++)
-                            mm[MM_SWAP + i] = mm[MM_INTV + i];
+                        s1c[152] = MM_NEXT_INTV;
+                    // else: active_intv stays (old intv already there)
                     gr[6] = 0; s1c[149] = -1;
                 } else {
-                    for (int i = 0; i < intv_n * 2; i++)
-                        mm[MM_SWAP + i] = mm[MM_INTV + i];
+                    // Merge: output to opposite buffer from active_intv
+                    int out_buf = (active_intv == MM_INTV) ? MM_SWAP : MM_INTV;
                     merge_split_and_load(mm, SPM_unit->buffer,
                         SPM_BANK_GROUP_SIZE, s1c, gr,
                         MM_NEXT_INTV, n_new,
-                        MM_SWAP, intv_n,
-                        MM_INTV);
+                        active_intv, intv_n,
+                        out_buf);
+                    s1c[152] = out_buf;
                     s1c[149] = 0;
                 }
                 s1c[148] = n_total;
             }
         } else if (magic_id == 26) {
-            // New+old intv merge split + load. A=merged_new, B=old → MM_INTV.
+            // New+old intv merge split + load (pointer-swap version).
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
@@ -2553,31 +2555,32 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 constexpr int MM_NEXT_INTV = MM_INTV + INTV_CAP_V * 2;
                 constexpr int MM_SWAP     = MM_NEXT_INTV + INTV_CAP_V * 2;
                 int intv_n  = s1c[146];
-                int n_new   = s1c[154]; // from magic 37/39a
+                int n_new   = s1c[154];
                 int n_total = n_new + intv_n;
+                int active_intv = s1c[152];
                 if (n_new <= 0 || intv_n <= 0) {
-                    // Nothing to merge. If only new, copy to MM_INTV.
                     if (n_new > 0)
-                        for (int i = 0; i < n_new * 2; i++)
-                            mm[MM_INTV + i] = mm[MM_SWAP + i];
-                    s1c[148] = n_total; // total intv count
-                    s1c[149] = -1;      // skip flag
+                        s1c[152] = MM_SWAP; // new intv already at MM_SWAP
+                    // else: active_intv stays
+                    s1c[148] = n_total;
+                    s1c[149] = -1;
                     gr[6] = 0;
                 } else {
-                    // Backup old: MM_INTV → MM_NEXT_INTV (temp)
-                    for (int i = 0; i < intv_n * 2; i++)
-                        mm[MM_NEXT_INTV + i] = mm[MM_INTV + i];
+                    // Merge: new is at MM_SWAP, old is at active_intv
+                    int out_buf = (active_intv == MM_INTV) ? MM_NEXT_INTV
+                                                           : MM_INTV;
                     merge_split_and_load(mm, SPM_unit->buffer,
                         SPM_BANK_GROUP_SIZE, s1c, gr,
                         MM_SWAP, n_new,
-                        MM_NEXT_INTV, intv_n,
-                        MM_INTV);
+                        active_intv, intv_n,
+                        out_buf);
+                    s1c[152] = out_buf;
                     s1c[148] = n_total;
-                    s1c[149] = 0; // active flag
+                    s1c[149] = 0;
                 }
             }
         } else if (magic_id == 39) {
-            // Intv merge finalize + diag sort setup.
+            // Intv merge finalize + diag sort setup (pointer-swap version).
             {
                 auto &gr = main_addressing_register;
                 constexpr int DIAG_CAP_V  = (16 << 20);
@@ -2585,19 +2588,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 constexpr int MM_SORT_BUF = DIAG_CAP_V * 6 + INTV_CAP_V * 6;
                 int diag_base = s1c[144];
                 int n_a       = s1c[145];
-                // Compute merged intv_n
-                int *mm = gwfa_get_mm();
-                constexpr int DIAG_CAP_V2 = (16 << 20);
-                constexpr int MM_INTV2 = DIAG_CAP_V2 * 6;
-                constexpr int MM_INTV_R = DIAG_CAP_V * 6;
-                constexpr int MM_NEXT_INTV_R = MM_INTV_R + INTV_CAP_V * 2;
-                constexpr int MM_SWAP_R = MM_NEXT_INTV_R + INTV_CAP_V * 2;
+                // Compute merged intv_n (no copy needed: s1c[152] already points
+                // to wherever the intv data lives)
                 int intv_n;
                 if (s1c[149] < 0) {
-                    // Merge skipped: data is in MM_SWAP, copy to MM_INTV
+                    // Merge skipped: s1c[152] already points to correct data
                     intv_n = s1c[148];
-                    for (int i = 0; i < intv_n * 2; i++)
-                        mm[MM_INTV_R + i] = mm[MM_SWAP_R + i];
                 } else {
                     intv_n = 0;
                     for (int pe = 0; pe < 4; pe++)
@@ -2714,25 +2710,26 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[2] += MERGE_STEP;
             }
         } else if (magic_id == 36) {
-            // Diag merge finalize: copy MM_SORT_BUF → diag_base.
-            // Skip copy if merge was not performed (gr[6]==0).
+            // Diag merge finalize (pointer-swap version).
+            // If merge happened, active_diag_base = gr[4] (MM_SORT_BUF).
+            // If merge skipped (gr[6]==0), active_diag_base stays = gr[3].
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
-                int diag_base = gr[3];
                 int n_a = gr[24];
                 if (gr[6] != 0) {
-                    int mm_sort_buf = gr[4];
-                    for (int i = 0; i < n_a * 2; i++)
-                        mm[diag_base + i] = mm[mm_sort_buf + i];
-                    // Check output sorted (no static)
+                    s1c[153] = gr[4]; // active_diag_base = MM_SORT_BUF
+                    // Check output sorted
+                    int db = s1c[153];
                     for (int i = 1; i < n_a; i++)
-                        if ((uint32_t)mm[diag_base+(i-1)*2]
-                            > (uint32_t)mm[diag_base+i*2]) {
+                        if ((uint32_t)mm[db+(i-1)*2]
+                            > (uint32_t)mm[db+i*2]) {
                             fprintf(stderr, "M36 UNSORTED[%d] np1=%d na=%d\n",
                                 i, s1c[147], n_a);
                             break;
                         }
+                } else {
+                    s1c[153] = gr[3]; // active_diag_base = original diag_base
                 }
             }
         } else if (magic_id == 29) {
@@ -2755,7 +2752,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 // Use MM_SWAP region (free during dedup)
                 constexpr int MM_DEDUP_INTV_OUT =
                     DIAG_CAP_V * 6 + INTV_CAP_V * 4;
-                int diag_base = gr[3];
+                // Use active bases from s1c pointer swap
+                int diag_base = s1c[153]; // active_diag_base
+                int intv_base = s1c[152]; // active_intv_base
                 int n_a       = gr[24];
                 int intv_n    = gr[28];
                 int nape      = (n_a + 3) / 4;
@@ -2785,7 +2784,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         int lo = 0, hi = intv_n;
                         while (lo < hi) {
                             int mid2 = (lo + hi) / 2;
-                            if ((uint32_t)mm[MM_INTV+2*mid2] < vd)
+                            if ((uint32_t)mm[intv_base+2*mid2] < vd)
                                 lo = mid2 + 1;
                             else hi = mid2;
                         }
@@ -2800,7 +2799,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         int lo = 0, hi = intv_n;
                         while (lo < hi) {
                             int mid2 = (lo + hi) / 2;
-                            if ((uint32_t)mm[MM_INTV+2*mid2+1] <= vd)
+                            if ((uint32_t)mm[intv_base+2*mid2+1] <= vd)
                                 lo = mid2 + 1;
                             else hi = mid2;
                         }
@@ -2836,7 +2835,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     int i0 = std::min(DEDUP_TILE, iv_n);
                     int i1 = std::min(DEDUP_TILE,
                         std::max(0, iv_n - i0));
-                    int i_src = MM_INTV + iv_s * 2;
+                    int i_src = intv_base + iv_s * 2;
                     for (int j = 0; j < i0 * 2; j++)
                         spm[DEDUP_INTV_BUF0 + j] = mm[i_src + j];
                     for (int j = 0; j < i1 * 2; j++)
@@ -2880,7 +2879,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int niter = ((max_total + DEDUP_TILE - 1)
                     / DEDUP_TILE) * DEDUP_TILE;
                 gr[6] = (niter == 0) ? DEDUP_TILE : niter;
-                gr[4] = MM_SORT_BUF;
+                // Dedup diag output goes to opposite of active_diag_base
+                gr[4] = (diag_base == MM_SORT_BUF)
+                    ? s1c[144] : MM_SORT_BUF;
                 gr[7] = MM_DEDUP_INTV_OUT;
                 // Save original counts for reference dedup in M32
             }
@@ -3028,6 +3029,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         (GWFA_Q_START / 4) * sizeof(int));
                 }
                 memset(s1c, 0, 144 * sizeof(int));
+                // Reset active bases after dedup gather
+                s1c[152] = MM_INTV2;    // intv gathered to MM_INTV
+                s1c[153] = diag_base;   // diags gathered to diag_base
                 gwfa_finalize_sync(n_a_final, (size_t)intv_n);
                 gr[15] = n_a_final;
                 gr[28] = intv_n;
