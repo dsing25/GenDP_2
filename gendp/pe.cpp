@@ -1426,6 +1426,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // [979..981] = lo_pos[0..2]: first output where lo >= bvd
             // [982] = cumulative output count across calls
             int cum_oi = spm[982];
+            int pe_global_base = spm[983]; // global output base for this PE
             while ((ai - ai0) + (bi - bi0) < MERGE_STEP) {
                 // Switch A buffer if current exhausted
                 if (ai >= a_n) {
@@ -1449,7 +1450,11 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                     }
                 }
                 bool aa = (ai < a_n), ba = (bi < b_n);
-                if (!aa && !ba) break; // no data in any loaded buffer
+                if (!aa && !ba) {
+                    // Force budget satisfied to exit loop cleanly
+                    ai0 = ai - MERGE_STEP; bi0 = bi;
+                    continue;
+                }
                 // Pick next element: drain single stream or merge two
                 if (!aa || (ba && (uint32_t)spm[bb+bi*2]
                                 < (uint32_t)spm[ab+ai*2])) {
@@ -1460,7 +1465,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                     out[oi*2+1]=spm[ab+ai*2+1]; ai++; oi++;
                 }
                 // Track intv boundary crossings (AC-7)
-                int gpos = cum_oi + oi - 1; // global output position
+                int gpos = pe_global_base + cum_oi + oi - 1;
                 uint32_t out_lo = (uint32_t)out[(oi-1)*2];
                 uint32_t out_hi = (uint32_t)out[(oi-1)*2+1];
                 for (int b = 0; b < 3; b++) {
