@@ -4160,16 +4160,16 @@ bool pe_array::willStallPair(
         if (is_magic) continue;
 
         int opcode = instr & 0x3F;
-        int dest   = (instr >> 54) & 0xF;
-        int src    = (instr >> 50) & 0xF;
-        int riB0   = (instr >> 49) & 1;
-        int imm0   = (instr >> 32) & 0xFFFF;
+        int dest   = (instr >> 56) & 0xF;
+        int src    = (instr >> 52) & 0xF;
+        int riB0   = (instr >> 51) & 1;
+        int imm0   = (instr >> 34) & 0xFFFF;
         if (imm0 & 0x8000) imm0 |= ~0xFFFF;
-        int r0     = (instr >> 28) & 0xF;
-        int riB1   = (instr >> 27) & 1;
-        int imm1   = (instr >> 10) & 0xFFFF;
+        int r0     = (instr >> 29) & 0x1F;
+        int riB1   = (instr >> 28) & 1;
+        int imm1   = (instr >> 11) & 0xFFFF;
         if (imm1 & 0x8000) imm1 |= ~0xFFFF;
-        int r1     = (instr >> 6)  & 0xF;
+        int r1     = (instr >> 6)  & 0x1F;
 
         bool srcSpm  = (src  == CTRL_SPM);
         bool srcS2   = (src  == CTRL_S2);
@@ -4181,11 +4181,11 @@ bool pe_array::willStallPair(
         if (opcode == 5 && spmS2) {
             // mv SPM<->S2: one spm addr, one s2 addr
             int addr0 = (riB0
-                ? main_addressing_register[imm0 & 0xF]
+                ? main_addressing_register[imm0 & 0x1F]
                 : imm0)
                 + main_addressing_register[r0];
             int addr1 = (riB1
-                ? main_addressing_register[imm1 & 0xF]
+                ? main_addressing_register[imm1 & 0x1F]
                 : imm1)
                 + main_addressing_register[r1];
             // dest uses addr0 (field 0), src uses addr1
@@ -4196,11 +4196,11 @@ bool pe_array::willStallPair(
         } else if (opcode == CTRL_MVDQ && spmS2) {
             // mvdq SPM<->S2: 4-5 entries each side
             int addr0 = (riB0
-                ? main_addressing_register[imm0 & 0xF]
+                ? main_addressing_register[imm0 & 0x1F]
                 : imm0)
                 + main_addressing_register[r0];
             int addr1 = (riB1
-                ? main_addressing_register[imm1 & 0xF]
+                ? main_addressing_register[imm1 & 0x1F]
                 : imm1)
                 + main_addressing_register[r1];
             int spmA = destSpm ? addr0 : addr1;

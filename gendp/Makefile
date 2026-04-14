@@ -22,7 +22,8 @@ ifeq ($(ADDRESS_SANITIZER),1)
 endif
 
 
-OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o gwfa_sim.o simulator.o
+OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o simulator.o \
+			$(if $(wildcard kernel/Gwfa/gwfa.c),gwfa_sim.o)
 
 ifeq ($(debug),1)
 CXXFLAGS+= -DDEBUG
