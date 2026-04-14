@@ -60,7 +60,7 @@ cd $GenDP_WORK_DIR/gendp
 python3 scripts/wfa_instruction_generator.py
 make clean && make -j ADDRESS_SANITIZER=0
 python3 scripts/wfa_check_correctness.py \
-  "$GenDP_WORK_DIR/../kernel/Wfa/Datasets/shortSeq.seq" -n 3
+  "$GenDP_WORK_DIR/backtest-datasets/wfa/oneSeq.seq" -n 3
 
 ### GWFA
 cd $GenDP_WORK_DIR/gendp

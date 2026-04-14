@@ -70,6 +70,8 @@ void pe_array::buffer_reset(int* buffer, int num) {
         buffer[i] = 0;
 }
 
+void pe_array::reset_shared_spm() { SPM_unit->reset(); }
+
 void pe_array::write_spm_magic(int addr, int value) {
     if (addr < 0 || addr >= SPM_ADDR_NUM) {
         fprintf(stderr, "write_spm_magic addr %d out of range.\n", addr);

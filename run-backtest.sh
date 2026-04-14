@@ -65,7 +65,7 @@ run_wfa() {
   python3 scripts/wfa_instruction_generator.py
   make -j ADDRESS_SANITIZER=0
   python3 scripts/wfa_check_correctness.py \
-    "$GenDP_WORK_DIR/../kernel/Wfa/Datasets/seq10k.seq" -n 1
+    "$GenDP_WORK_DIR/backtest-datasets/wfa/oneSeq.seq" -n 1
 }
 
 run_gwfa() {
@@ -77,7 +77,7 @@ run_gwfa() {
 
 # Dispatch
 case "$KERNEL" in
-  ""|"all") run_bsw; run_chain; run_phmm; run_poa ;;
+  ""|"all") run_bsw; run_chain; run_phmm; run_poa; run_wfa; run_gwfa ;;
   bsw)      run_bsw ;;
   chain)    run_chain ;;
   phmm|pairhmm) run_phmm ;;

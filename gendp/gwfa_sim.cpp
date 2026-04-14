@@ -344,8 +344,11 @@ void gwfa_simulation(
             pa->main_addressing_register,
             MAIN_ADDR_REGISTER_NUM);
         pa->main_PC = 0;
-        memset(pa->va_regfile, 0,
-            sizeof(pa->va_regfile));
+        memset(pa->va_regfile, 0, sizeof(pa->va_regfile));
+        memset(pa->s1c, 0, sizeof(pa->s1c));
+
+        // Reset shared SPM
+        pa->reset_shared_spm();
 
         // Reset PE state (SPM, registers, PCs)
         for (int pe = 0; pe < 4; pe++)
