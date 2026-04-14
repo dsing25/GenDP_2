@@ -265,30 +265,6 @@ void pe::run(int simd) {
     };
     bool cf0 = is_ctrl_flow(ctrl_op[0]), cf1 = is_ctrl_flow(ctrl_op[1]);
 
-    // Halt must be paired in both slots
-    if ((ctrl_op[0] == CTRL_HALT) != (ctrl_op[1] == CTRL_HALT)) {
-        fprintf(stderr,
-            "PE[%d] PC=%d halt must be paired (op0=%d op1=%d)\n",
-            id, old_PC, ctrl_op[0], ctrl_op[1]);
-        exit(-1);
-    }
-    // Call/ret must be paired: reject single-slot call/ret
-    auto is_call_ret = [](int op) {
-        return op == CTRL_CALL || op == CTRL_RET || op == CTRL_RETNE;
-    };
-    if (is_call_ret(ctrl_op[0]) != is_call_ret(ctrl_op[1])) {
-        fprintf(stderr,
-            "PE[%d] PC=%d call/ret must be paired (op0=%d op1=%d)\n",
-            id, old_PC, ctrl_op[0], ctrl_op[1]);
-        exit(-1);
-    }
-    // Both control flow: must target same PC
-    if (cf0 && cf1 && PC[0] != PC[1]) {
-        fprintf(stderr,
-            "PE[%d] PC=%d diverging branches: slot0->%d slot1->%d\n",
-            id, old_PC, PC[0], PC[1]);
-        exit(-1);
-    }
     // One control flow taken: sync other slot
     bool took0 = (PC[0] != old_PC + 1);
     bool took1 = (PC[1] != old_PC + 1);

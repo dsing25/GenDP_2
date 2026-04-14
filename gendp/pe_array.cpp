@@ -17,6 +17,15 @@ extern "C" {
 #ifndef GWFA_DBG_DEFAULT
 #define GWFA_DBG_DEFAULT 0
 #endif
+// Runtime override: env GWFA_DBG=1 enables debug tracing
+#ifndef GWFA_DBG_RUNTIME
+static int gwfa_dbg_level() {
+    const char *e = getenv("GWFA_DBG");
+    if (e) return atoi(e);
+    return GWFA_DBG_DEFAULT;
+}
+#define GWFA_DBG_RUNTIME gwfa_dbg_level()
+#endif
 
 PerfCounter bankConflictStalls = 0;
 PerfCounter totalSpmRequests = 0;
@@ -819,7 +828,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 sub.n_vtx = main_addressing_register[17];
                 sub.n_arc = main_addressing_register[18];
                 const uint32_t *q = (const uint32_t*)(uintptr_t)va_regfile[5];
-                gwfa_init(main_addressing_register[16], q, &sub, GWFA_DBG_DEFAULT);
+                gwfa_init(main_addressing_register[16], q, &sub, GWFA_DBG_RUNTIME);
                 // Load query (2-bit packed) into interleaved SPM
                 int32_t ql = main_addressing_register[16];
                 int q_words = (ql + 15) / 16;
