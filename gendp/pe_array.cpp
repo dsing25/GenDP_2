@@ -2551,6 +2551,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     s1c[149] = 0;
                 }
                 s1c[148] = n_total;
+                // Load boundary vd values and init PE tracking (AC-7)
+                for (int pe = 0; pe < 4; pe++) {
+                    int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
+                    spm[MERGE_META + 13] = s1c[159]; // boundary_vd[0]
+                    spm[MERGE_META + 14] = s1c[160]; // boundary_vd[1]
+                    spm[MERGE_META + 15] = s1c[161]; // boundary_vd[2]
+                    for (int i = 0; i < 6; i++) spm[976+i] = -1; // hi/lo_pos
+                    spm[982] = 0; // cumulative output count
+                }
             }
         } else if (magic_id == 38) {
             // Intv merge finalize: compute intv_n, restore gr[24]=n_a,
@@ -2568,33 +2577,21 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 s1c[149] = intv_n;
                 main_addressing_register[24] = s1c[145]; // n_a
                 main_addressing_register[28] = intv_n;
-                // Compute intv boundary positions using stored diag split vd
-                // s1c[159..161] = 3 internal boundary vd values (from M36)
-                // intv_lo: first intv whose hi > vd (hi-based boundary)
-                // intv_hi: first intv whose lo >= vd (lo-based boundary)
-                int ib = s1c[152]; // active_intv_base
-                // s1c[163..165] = intv_lo[pe] for PE 1,2,3
-                // s1c[166..168] = intv_hi[pe] for PE 0,1,2
+                // Collect per-PE intv boundary positions via elementwise min (AC-7)
+                // PE stored results in SPM[976..981]: hi_pos[0..2], lo_pos[0..2]
+                // Elementwise min: take smallest non-negative position across PEs
                 for (int b = 0; b < 3; b++) {
-                    uint32_t vd = (uint32_t)s1c[159+b];
-                    // hi-based: first intv whose lo >= vd
-                    int lo = 0, hi = intv_n;
-                    while (lo < hi) {
-                        int mid = (lo + hi) / 2;
-                        if ((uint32_t)mm[ib+2*mid] < vd)
-                            lo = mid + 1;
-                        else hi = mid;
+                    int best_hi = intv_n, best_lo = intv_n;
+                    for (int pe = 0; pe < 4; pe++) {
+                        int *spm = &SPM_unit->buffer[
+                            pe * SPM_BANK_GROUP_SIZE];
+                        int hp = spm[976+b]; // hi_pos for boundary b
+                        int lp = spm[979+b]; // lo_pos for boundary b
+                        if (hp >= 0 && hp < best_hi) best_hi = hp;
+                        if (lp >= 0 && lp < best_lo) best_lo = lp;
                     }
-                    s1c[166+b] = lo; // intv_hi for PE b
-                    // lo-based: first intv whose hi > vd
-                    lo = 0; hi = intv_n;
-                    while (lo < hi) {
-                        int mid = (lo + hi) / 2;
-                        if ((uint32_t)mm[ib+2*mid+1] <= vd)
-                            lo = mid + 1;
-                        else hi = mid;
-                    }
-                    s1c[163+b] = lo; // intv_lo for PE b+1
+                    s1c[163+b] = best_hi; // intv_lo[pe+1] (hi-based)
+                    s1c[166+b] = best_lo; // intv_hi[pe] (lo-based)
                 }
             }
         } else if (magic_id == 26) {
