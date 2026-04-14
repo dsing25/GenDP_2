@@ -50,6 +50,7 @@ class pe_array {
 
         void buffer_reset(int* buffer, int num);
         void reset_shared_spm();
+        void reset_controller_state();
         void write_spm_magic(int addr, int value);
 
         void write_s2(int addr, int value);

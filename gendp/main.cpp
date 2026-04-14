@@ -6,9 +6,7 @@
 #include "poa.h"
 #include "chain.h"
 #include "bankThrasher.h"
-#ifdef HAS_GWFA
 #include "gwfa_sim.h"
-#endif
 #include <getopt.h>
 #include <chrono>
 #include <ctime>
@@ -67,9 +65,7 @@ int main(int argc, char *argv[]) {
     else if (kernel == 4) chain_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
     else if (kernel == 5) wfa_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
     else if (kernel == 6) bankThrasher_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
-#ifdef HAS_GWFA
     else if (kernel == 7) gwfa_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
-#endif
 
     timenow = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::cout << "End Simulation: " << ctime(&timenow) << std::endl;

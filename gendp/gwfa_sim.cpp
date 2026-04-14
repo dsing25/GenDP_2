@@ -359,8 +359,9 @@ void gwfa_simulation(
         memset(pa->va_regfile, 0, sizeof(pa->va_regfile));
         memset(pa->s1c, 0, sizeof(pa->s1c));
 
-        // Reset shared SPM
+        // Reset shared SPM, S2, LSQ, event producers
         pa->reset_shared_spm();
+        pa->reset_controller_state();
 
         // Reset PE state (SPM, registers, PCs)
         for (int pe = 0; pe < 4; pe++)

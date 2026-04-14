@@ -414,6 +414,17 @@ CtrlLSQ::CtrlLSQ() {
         pendingCtrlReads[b].valid = false;
 }
 
+void CtrlLSQ::reset() {
+    for (int b = 0; b < SPM_NUM_BANKS; b++) {
+        spmBanks[b].clear();
+        pendingCtrlReads[b].valid = false;
+    }
+    for (int b = 0; b < S2_NUM_BANKS; b++)
+        s2Banks[b].clear();
+    drainPrioritySpm = 0;
+    drainPriorityS2 = 0;
+}
+
 // S2->SPM: read S2, write SPM (paired)
 void CtrlLSQ::enqueueS2ToSpm(
     int s2Addr, int spmPhysAddr, bool singleData) {

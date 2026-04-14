@@ -21,13 +21,7 @@ ifeq ($(ADDRESS_SANITIZER),1)
     LINKFLAGS += -fsanitize=address
 endif
 
-# Gate GWFA on submodule presence
-ifneq ($(wildcard kernel/Gwfa/gwfa.c),)
-    CXXFLAGS += -DHAS_GWFA
-endif
-
-OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o simulator.o \
-			$(if $(wildcard kernel/Gwfa/gwfa.c),gwfa_sim.o)
+OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o simulator.o gwfa_sim.o
 
 ifeq ($(debug),1)
 CXXFLAGS+= -DDEBUG
@@ -47,7 +41,7 @@ LIB_SIMULATOR_OBJECTS= \
 			pe.o \
 			FIFO.o \
 			pe_array.o \
-			$(if $(wildcard kernel/Gwfa/gwfa.c),gwfa_kernel.o)
+			gwfa_kernel.o
 
 BIN_PATH = ./
 
