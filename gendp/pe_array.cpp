@@ -2720,9 +2720,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     for (int i = 1; i < nt; i++)
                         if ((uint32_t)mm[tb+(i-1)*2] > (uint32_t)mm[tb+i*2])
                             { t_ok = false; break; }
+#ifdef DEBUG
                     if (!p_ok || !t_ok)
                         fprintf(stderr, "M28 INPUTS: p=%d t=%d np1=%d na=%d\n",
                             p_ok?1:0, t_ok?1:0, n_phase1, n_a);
+#endif
                 }
                 int n_tail = std::max(0, n_a - std::max(0, n_phase1));
                 if (n_phase1 < 0) n_phase1 = 0;
@@ -2805,8 +2807,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     for (int i = 1; i < n_a; i++)
                         if ((uint32_t)mm[db+(i-1)*2]
                             > (uint32_t)mm[db+i*2]) {
+#ifdef DEBUG
                             fprintf(stderr, "M36 UNSORTED[%d] np1=%d na=%d\n",
                                 i, s1c[147], n_a);
+#endif
                             break;
                         }
                 } else {
@@ -3022,6 +3026,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     int nd = s[DEDUP_META + 2];
                     int dd = gr[4] + (s1c[16+pe]
                         + s1c[20+pe]) * 2;
+#ifdef DEBUG
                     // Debug: check cross-call sorted
                     if (nd > 0 && s1c[20+pe] > 0) {
                         uint32_t prev = (uint32_t)mm[dd - 2];
@@ -3032,6 +3037,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                                 pe, prev, cur,
                                 s1c[20+pe], magic_mask);
                     }
+#endif
                     for (int j = 0; j < nd * 2; j++)
                         mm[dd + j] = s[d_off + j];
                     s1c[20 + pe] += nd;

@@ -159,9 +159,11 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_IN_BUF 5
 #define CTRL_OUT_BUF 6
 #define CTRL_IN_PORT 7
-#define CTRL_GR_LO 8   // lower 16-bit subregister of gr
+#define CTRL_IN_INSTR 8   // legacy: instruction-chain input
+#define CTRL_GR_LO 8      // lower 16-bit subregister of gr (shares code with IN_INSTR)
 #define CTRL_OUT_PORT 9
-#define CTRL_GR_HI 10  // upper 16-bit subregister of gr
+#define CTRL_OUT_INSTR 10  // legacy: instruction-chain output
+#define CTRL_GR_HI 10     // upper 16-bit subregister of gr (shares code with OUT_INSTR)
 #define CTRL_S2 15
 //FIFO [11, 12, 13, 14]
 
