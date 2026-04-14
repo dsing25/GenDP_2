@@ -4292,6 +4292,17 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                     || op == CTRL_CALL || op == CTRL_RET
                     || op == CTRL_RETNE;
             };
+            // Call/ret must be paired in both slots
+            auto is_call_ret = [](int op) {
+                return op == CTRL_CALL || op == CTRL_RET
+                    || op == CTRL_RETNE;
+            };
+            if (is_call_ret(op0) != is_call_ret(op1)) {
+                fprintf(stderr,
+                    "Controller PC=%d call/ret must be paired"
+                    " (op0=%d op1=%d)\n", old_PC, op0, op1);
+                exit(-1);
+            }
             if (is_cf(op0) && is_cf(op1)
                 && slot0_PC != main_PC) {
                 fprintf(stderr,
