@@ -54,6 +54,8 @@ void pe::reset() {
     PC[1] = 0;
     ras = 0;
     outstanding_req.clear();
+    spmReqPort = nullptr;
+    halted = false;
 }
 
 void pe::recieve_spm_data(int data[LINE_SIZE]){

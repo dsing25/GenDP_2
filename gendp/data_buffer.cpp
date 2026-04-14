@@ -201,9 +201,12 @@ SPM::~SPM() {
 }
 
 void SPM::reset() {
-    int i;
-    for (i = 0; i < buffer_size; i++)
+    for (int i = 0; i < buffer_size; i++)
         buffer[i] = 0;
+    for (int b = 0; b < SPM_NUM_BANKS; b++) {
+        requests[b] = nullptr;
+        cycles_left[b] = 0;
+    }
 }
 
 void SPM::show_data(int addr) {
