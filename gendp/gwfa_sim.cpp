@@ -25,15 +25,14 @@ static FILE *openDumpFile(
 
 static bool readLine(FILE *fp, std::string &out)
 {
-    char buf[1 << 20];
-    if (!fgets(buf, sizeof(buf), fp))
-        return false;
-    size_t len = strlen(buf);
-    while (len > 0 &&
-           (buf[len-1] == '\n' ||
-            buf[len-1] == '\r'))
-        --len;
-    out.assign(buf, len);
+    char *line = nullptr;
+    size_t cap = 0;
+    ssize_t n = getline(&line, &cap, fp);
+    if (n < 0) { free(line); return false; }
+    while (n > 0 && (line[n-1] == '\n' || line[n-1] == '\r'))
+        --n;
+    out.assign(line, (size_t)n);
+    free(line);
     return true;
 }
 
