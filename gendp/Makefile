@@ -21,6 +21,10 @@ ifeq ($(ADDRESS_SANITIZER),1)
     LINKFLAGS += -fsanitize=address
 endif
 
+# Gate GWFA on submodule presence
+ifneq ($(wildcard kernel/Gwfa/gwfa.c),)
+    CXXFLAGS += -DHAS_GWFA
+endif
 
 OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o simulator.o \
 			$(if $(wildcard kernel/Gwfa/gwfa.c),gwfa_sim.o)

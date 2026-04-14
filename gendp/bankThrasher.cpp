@@ -96,7 +96,7 @@ void bankThrasher_simulation(char *inputFileName, char *outputFileName, FILE *fp
 
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {
         unsigned long tmp[CTRL_INSTR_BUFFER_GROUP_SIZE];
-        tmp[0] = COMP_NOP_INSTRUCTION;
+        tmp[0] = CTRL_NOP_INSTRUCTION;
         tmp[1] = main_instruction[i];
         pe_array_unit->main_instruction_buffer_write_from_ddr(i, tmp);
         for (int j = 0; j < pe_group_size; j++) {
