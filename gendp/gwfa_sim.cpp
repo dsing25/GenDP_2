@@ -145,6 +145,16 @@ static subgfa_subgraph_t *buildSubgraph(
     return sub;
 }
 
+static void freeSubgraph(subgfa_subgraph_t *sub) {
+    if (!sub) return;
+    free(sub->graphSeq);
+    free(sub->seq_off);
+    free(sub->seq_len);
+    free(sub->arc);
+    free(sub->arc_off);
+    free(sub);
+}
+
 static std::vector<GwfaIterInput>
 loadGwfaDump(const std::string &dumpDir)
 {
@@ -335,6 +345,8 @@ void gwfa_simulation(
                     "for SPM (q=%d gs=%d words), "
                     "skipping\n", i, q_words, gs_words);
                 printf("qqq -1 qqq\n");
+                free(inp.q_enc); inp.q_enc = NULL;
+                freeSubgraph(inp.sub); inp.sub = NULL;
                 continue;
             }
         }

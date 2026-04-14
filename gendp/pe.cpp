@@ -270,6 +270,16 @@ void pe::run(int simd) {
             id, old_PC, ctrl_op[0], ctrl_op[1]);
         exit(-1);
     }
+    // Call/ret must be paired: reject single-slot call/ret
+    auto is_call_ret = [](int op) {
+        return op == CTRL_CALL || op == CTRL_RET || op == CTRL_RETNE;
+    };
+    if (is_call_ret(ctrl_op[0]) != is_call_ret(ctrl_op[1])) {
+        fprintf(stderr,
+            "PE[%d] PC=%d call/ret must be paired (op0=%d op1=%d)\n",
+            id, old_PC, ctrl_op[0], ctrl_op[1]);
+        exit(-1);
+    }
     // Both control flow: must target same PC
     if (cf0 && cf1 && PC[0] != PC[1]) {
         fprintf(stderr,

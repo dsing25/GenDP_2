@@ -42,7 +42,7 @@ LIB_SIMULATOR_OBJECTS= \
 			pe.o \
 			FIFO.o \
 			pe_array.o \
-			gwfa_kernel.o
+			$(if $(wildcard kernel/Gwfa/gwfa.c),gwfa_kernel.o)
 
 BIN_PATH = ./
 
