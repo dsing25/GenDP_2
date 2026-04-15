@@ -104,8 +104,9 @@ MAGIC_23_BUF1 = (23 << 8) | 1
 
 def emit_merge_loop(f):
     """Emit a PE-parallel merge loop. Caller must set gr[6]=loop bound
-    before calling. Uses PE_MERGE_PING/PONG, MAGIC_33 (reload, disabled),
-    MAGIC_35 (writeback). Returns PC after the loop."""
+    before calling. Uses PE_MERGE_PING/PONG, MAGIC_33 (reload A/B input
+    buffers from MM, overlapped with PE compute), MAGIC_35 (writeback).
+    Returns PC after the loop."""
     br_skip = f.write_count
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 6, beq))
     f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si))
@@ -197,41 +198,67 @@ def gwfa_main_instruction():
     # === STEP LOOP ===
     f.write(write_magic(4))                                                                        # PC 2: begin_step
     f.write(data_movement_instruction(gr, 0, 0, 0, 14, 0, 0, 0, 0, 0, si))                       # PC 3: gr[14]=0 (cursor)
-    # === PHASE 1 PROLOGUE (buf0, no prev writeback) ===
+    # === PHASE 1 PROLOGUE ===
+    # Prime buf0 serially (nothing to overlap on first iter), then
+    # prime buf1 inside the compute-overlap window so the SS loop
+    # can assume both buffers are always ready.
     f.write(write_magic(MAGIC_7_BUF0))                                                             # PC 4: tile_load buf0
     f.write(write_magic(MAGIC_8_BUF0))                                                             # PC 5: load_seq_info buf0
     f.write(data_movement_instruction(0, 0, 0, 0, PE_BUF0_COMPUTE, 0, 0, 0, 0, 0, set_PC))       # PC 6: set_PC buf0 compute
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 7: spin gr[13]
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_BUF0_SORT, 0, 0, 0, 0, 0, set_PC))          # PC 8: set_PC buf0 sort
+    f.write(write_magic(MAGIC_7_BUF1))                                                             # PC 7: tile_load buf1 ← overlaps compute
+    f.write(write_magic(MAGIC_8_BUF1))                                                             # PC 8: load_seq_info buf1 ← overlaps compute
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 9: spin gr[13]
-    f.write(data_movement_instruction(0, 0, 0, 0, 17, 0, 1, 0, 14, 15, bge))                     # PC 10: bge cursor>=n_a → +17 (PC 27: P1_EPIL_A)
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_BUF0_SORT, 0, 0, 0, 0, 0, set_PC))          # PC 10: set_PC buf0 sort
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 11: spin gr[13] (ctrl idle)
+    br_pro_exit = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 14, 15, bge))                      # PC 12: bge cursor>=n_a → FINALIZE_B1 (patched)
     # === PHASE 1 STEADY STATE: buf1 half ===
-    # Load+compute buf1, writeback buf0 during compute
-    f.write(write_magic(MAGIC_7_BUF1))                                                             # PC 11: tile_load buf1
-    f.write(write_magic(MAGIC_8_BUF1))                                                             # PC 12: load_seq_info buf1
+    # buf1 already primed. During buf1 compute, overlap: writeback
+    # prev buf0 output, then load NEXT buf0 input.
+    ss_buf1 = f.write_count
     f.write(data_movement_instruction(0, 0, 0, 0, PE_BUF1_COMPUTE, 0, 0, 0, 0, 0, set_PC))       # PC 13: set_PC buf1 compute
-    f.write(write_magic(MAGIC_9_BUF0))                                                             # PC 14: writeback buf0 ← overlaps PE compute
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 15: spin gr[13]
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_BUF1_SORT, 0, 0, 0, 0, 0, set_PC))          # PC 16: set_PC buf1 sort
+    f.write(write_magic(MAGIC_9_BUF0))                                                             # PC 14: writeback buf0 ← overlap
+    f.write(write_magic(MAGIC_7_BUF0))                                                             # PC 15: load NEXT buf0 ← overlap
+    f.write(write_magic(MAGIC_8_BUF0))                                                             # PC 16: load_seq_info NEXT buf0 ← overlap
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 17: spin gr[13]
-    f.write(data_movement_instruction(0, 0, 0, 0, 11, 0, 1, 0, 14, 15, bge))                     # PC 18: bge cursor>=n_a → +11 (PC 29: P1_EPIL_B)
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_BUF1_SORT, 0, 0, 0, 0, 0, set_PC))          # PC 18: set_PC buf1 sort
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 19: spin gr[13] (ctrl idle)
+    br_ss_b1_exit = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 14, 15, bge))                      # PC 20: bge cursor>=n_a → FINALIZE_B0 (patched)
     # === PHASE 1 STEADY STATE: buf0 half ===
-    # Load+compute buf0, writeback buf1 during compute
-    f.write(write_magic(MAGIC_7_BUF0))                                                             # PC 19: tile_load buf0
-    f.write(write_magic(MAGIC_8_BUF0))                                                             # PC 20: load_seq_info buf0
+    # buf0 primed by previous buf1 half's overlap. During buf0
+    # compute, overlap: writeback prev buf1 output, then load NEXT buf1.
     f.write(data_movement_instruction(0, 0, 0, 0, PE_BUF0_COMPUTE, 0, 0, 0, 0, 0, set_PC))       # PC 21: set_PC buf0 compute
-    f.write(write_magic(MAGIC_9_BUF1))                                                             # PC 22: writeback buf1 ← overlaps PE compute
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 23: spin gr[13]
-    f.write(data_movement_instruction(0, 0, 0, 0, PE_BUF0_SORT, 0, 0, 0, 0, 0, set_PC))          # PC 24: set_PC buf0 sort
+    f.write(write_magic(MAGIC_9_BUF1))                                                             # PC 22: writeback buf1 ← overlap
+    f.write(write_magic(MAGIC_7_BUF1))                                                             # PC 23: load NEXT buf1 ← overlap
+    f.write(write_magic(MAGIC_8_BUF1))                                                             # PC 24: load_seq_info NEXT buf1 ← overlap
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 25: spin gr[13]
-    f.write(data_movement_instruction(0, 0, 0, 0, -15, 0, 1, 0, 14, 15, blt))                    # PC 26: blt cursor<n_a → -15 (PC 11: SS buf1)
-    # fallthrough: cursor >= n_a → P1_EPIL_A
-    # === P1 EPILOGUE A: writeback buf0 ===
-    f.write(write_magic(MAGIC_9_BUF0))                                                             # PC 27: writeback buf0
-    f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 0, 0, 0, 0, jump))                       # PC 28: jump +2 → PC 30 (FIFO_FLUSH)
-    # === P1 EPILOGUE B: writeback buf1 ===
-    f.write(write_magic(MAGIC_9_BUF1))                                                             # PC 29: writeback buf1
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_BUF0_SORT, 0, 0, 0, 0, 0, set_PC))          # PC 26: set_PC buf0 sort
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 27: spin gr[13] (ctrl idle)
+    f.write(data_movement_instruction(0, 0, 0, 0, ss_buf1 - f.write_count, 0, 1, 0, 14, 15, blt)) # PC 28: blt cursor<n_a → SS buf1
+    # fallthrough: cursor >= n_a → FINALIZE_B1 (compute pre-loaded buf1)
+    # === FINALIZE_B1: compute pre-loaded buf1, writeback both ===
+    finalize_b1 = f.write_count
+    f.patch_imm0(br_pro_exit, finalize_b1 - br_pro_exit)
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_BUF1_COMPUTE, 0, 0, 0, 0, 0, set_PC))       # setPC buf1 compute
+    f.write(write_magic(MAGIC_9_BUF0))                                                             # m9_b0 [overlap: writeback prev buf0]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # spin
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_BUF1_SORT, 0, 0, 0, 0, 0, set_PC))          # setPC buf1 sort
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # spin
+    f.write(write_magic(MAGIC_9_BUF1))                                                             # m9_b1 writeback buf1
+    br_skip_fb0 = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, jump))                       # jump → FIFO_FLUSH (patched)
+    # === FINALIZE_B0: compute pre-loaded buf0, writeback both ===
+    finalize_b0 = f.write_count
+    f.patch_imm0(br_ss_b1_exit, finalize_b0 - br_ss_b1_exit)
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_BUF0_COMPUTE, 0, 0, 0, 0, 0, set_PC))       # setPC buf0 compute
+    f.write(write_magic(MAGIC_9_BUF1))                                                             # m9_b1 [overlap: writeback prev buf1]
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # spin
+    f.write(data_movement_instruction(0, 0, 0, 0, PE_BUF0_SORT, 0, 0, 0, 0, 0, set_PC))          # setPC buf0 sort
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # spin
+    f.write(write_magic(MAGIC_9_BUF0))                                                             # m9_b0 writeback buf0
     # fallthrough to FIFO_FLUSH
+    f.patch_imm0(br_skip_fb0, f.write_count - br_skip_fb0)
     # === FIFO FLUSH (guarded by gr[2] from magic 9) ===
     br_fifo_skip = f.write_count
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 2, beq))                        # beq gr[2]==0 → save n_phase1 (patched)
