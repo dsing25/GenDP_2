@@ -434,16 +434,29 @@ def gbv_compute_v3():
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
 
-    # PC 999 (PLACEHOLDER): Extract LSB for hinP and hinN
-    # reg[5] = reg[6] & reg[20] (hinP = HP & 1), assumes reg[20] = 1
-        # reg[4] = reg[7] & reg[20] (hinN = HN & 1)
-
     f.write(compute_instruction(BWISE_AND, INVALID, COPY, 6, 20, 0, 0, 0, 0, 5))
     f.write(compute_instruction(BWISE_AND, INVALID, COPY, 7, 20, 0, 0, 0, 0, 4))
 
     f.write(compute_instruction(RSHIFT_1, INVALID, COPY, 6, 0, 0, 0, 1, 0, 6))
     f.write(compute_instruction(RSHIFT_1, INVALID, COPY, 7, 0, 0, 0, 1, 0, 7))
 
+    f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
+    f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
+
+    # PLACEHOLDER FOR GNS NEIGHBOR
+    
+    # regfile[20] = (regfile[20] < regfile[21]) ? regfile[20] : regfile[21];  (min operation)
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, 21, 20, 20, 21, 0, 0, 20))
+    f.write(compute_instruction(INVALID, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+
+    # Check if reg[20] < reg[21] (which means reg[21] > reg[20])
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, 21, 20, 22, 0, 0, 0, 4))  # reg[4] = (reg[21] > reg[20]) ? 1 : reg[4]
+    f.write(compute_instruction(COMP_LARGER, INVALID, COPY, 21, 20, 0, 22, 0, 0, 5))  # reg[5] = (reg[20] > reg[21]) ? 1 : reg[5]
+
+    # Check if reg[20] > reg[21]
+    # If true, set hinN=1 (reg[5]=1)
+    f.write(compute_instruction(COMP_EQUAL, INVALID, COPY, 20, 21, 0, 0, 0, 0, 5))  # reg[5] = (reg[20] > reg[21]) ? 1 : reg[5]
+    f.write(compute_instruction(COMP_EQUAL, INVALID, COPY, 20, 21, 0, 0, 0, 0, 4))  # reg[5] = (reg[20] > reg[21]) ? 1 : reg[5]
 
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
     f.write(compute_instruction(16, 15, 15, 0, 0, 0, 0, 0, 0, 0))       # halt
@@ -504,8 +517,8 @@ def gbv_main_instruction():
     # PC 8: gr[12] = 0 (neighbor index counter)
     f.write(data_movement_instruction(gr, 0, 0, 0, 12, 0, 0, 0, 0, 0, si))
 
-    # PC 9: if gr[10] == 0, skip neighbor processing -> PC 20 (WAIT_FOR_PE_SETUP)
-    NEIGHBOR_SKIP_OFFSET = 11  # PC 9 -> PC 20
+    # PC 9: if gr[10] == 0, skip neighbor processing -> PC 19 (WAIT_FOR_PE_SETUP)
+    NEIGHBOR_SKIP_OFFSET = 10  # PC 9 -> PC 19
     f.write(data_movement_instruction(gr, gr, 0, 0, NEIGHBOR_SKIP_OFFSET, 0, 0, 0, 0, 10, beq))
 
     # PC 10: magic(9) - fetch basepair at position gr[14] -> gr[4] (only if neighbors exist)
@@ -524,20 +537,20 @@ def gbv_main_instruction():
     # PC 14: magic(7) - get in_neighbor[gr[5]] -> gr[5]=neighbor_id, gr[9]=neighbor_spm_addr (combined with CAM lookup)
     f.write(write_magic(7))
 
-    # PC 16: out = gr[9] (neighbor_spm_addr) -> PE
+    # PC 15: out = gr[9] (neighbor_spm_addr) -> PE
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 9, 0, mv))
 
-    # PC 17: gr[12]++ (increment neighbor index)
+    # PC 16: gr[12]++ (increment neighbor index)
     f.write(data_movement_instruction(gr, gr, 0, 0, 12, 0, 0, 0, 1, 12, addi))
 
-    # PC 18: gr[10]-- (decrement remaining count)
+    # PC 17: gr[10]-- (decrement remaining count)
     f.write(data_movement_instruction(gr, gr, 0, 0, 10, 0, 0, 0, 1, 10, subi))
 
-    # PC 19: if gr[10] != 0, loop back -> PC 13
-    NEIGHBOR_LOOP_BACK = NEIGHBOR_LOOP_START_PC - 19  # = -6
+    # PC 18: if gr[10] != 0, loop back -> PC 13
+    NEIGHBOR_LOOP_BACK = NEIGHBOR_LOOP_START_PC - 18  # = -5
     f.write(data_movement_instruction(gr, gr, 0, 0, NEIGHBOR_LOOP_BACK, 0, 0, 0, 0, 10, bne))
 
-    # PC 20: Wait for PE to complete initial setup (spin while gr[13] == 0)
+    # PC 19: Wait for PE to complete initial setup (spin while gr[13] == 0)
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 0, 13, beq))
 
     # ============================================================
@@ -547,53 +560,53 @@ def gbv_main_instruction():
     BP_DONE_PC = 27
     PE_BP_START_PC = 189  # PE PC where basepair receive starts (moved to new location)
 
-    # PC 21: BP_LOOP_START - Check if done (gr[14] >= gr[11])
+    # PC 20: BP_LOOP_START - Check if done (gr[14] >= gr[11])
     DONE_OFFSET = BP_DONE_PC - BP_LOOP_START_PC  # = 7
     f.write(data_movement_instruction(gr, gr, 0, 0, DONE_OFFSET, 0, 1, 0, 14, 11, bge))
 
-    # PC 22: set_PC to restart PE at basepair receive
+    # PC 21: set_PC to restart PE at basepair receive
     f.write(data_movement_instruction(0, 0, 0, 0, PE_BP_START_PC, 0, 0, 0, 0, 0, set_PC))
 
-    # PC 23: magic(9) - fetch basepair at position gr[14] -> gr[4]
+    # PC 22: magic(9) - fetch basepair at position gr[14] -> gr[4]
     f.write(write_magic(9))
 
-    # PC 24: out = gr[4] (basepair 0-3) -> PE gr[6]
+    # PC 23: out = gr[4] (basepair 0-3) -> PE gr[6]
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 4, 0, mv))
 
-    # PC 25: gr[14]++ (increment basepair position)
+    # PC 24: gr[14]++ (increment basepair position)
     f.write(data_movement_instruction(gr, gr, 0, 0, 14, 0, 0, 0, 1, 14, addi))
 
-    # PC 26: Wait for PE to complete (spin while gr[13] == 0)
+    # PC 25: Wait for PE to complete (spin while gr[13] == 0)
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 0, 13, beq))
 
-    # PC 27: Jump back to BP_LOOP_START -> PC 21
-    JUMP_BACK_OFFSET = BP_LOOP_START_PC - 27  # = -6
+    # PC 26: Jump back to BP_LOOP_START -> PC 20
+    JUMP_BACK_OFFSET = BP_LOOP_START_PC - 26  # = -6
     f.write(data_movement_instruction(gr, gr, 0, 0, JUMP_BACK_OFFSET, 0, 0, 0, 0, 0, beq))
 
     # ============================================================
     # Out-Neighbor Loop (Push Successors to Queue)
     # ============================================================
-    # PC 28: BP_DONE - wait for PE final sync
+    # PC 27: BP_DONE - wait for PE final sync
     f.write(data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 0, 13, beq))
 
-    # PC 29: magic(8) - get out-neighbor info
+    # PC 28: magic(8) - get out-neighbor info
     f.write(write_magic(8))
 
-    # PC 30: magic(3) - push successor to queue
+    # PC 29: magic(3) - push successor to queue
     f.write(write_magic(3))
 
     # ============================================================
     # Restart Main Loop
     # ============================================================
-    # PC 31: OUT_NEIGHBOR_DONE - jump back to queue pop -> PC 1
+    # PC 30: OUT_NEIGHBOR_DONE  jump back to set pc = 0
     RESTART_MAIN_LOOP_OFFSET = -30
     f.write(data_movement_instruction(gr, gr, 0, 0, RESTART_MAIN_LOOP_OFFSET, 0, 0, 0, 0, 0, beq))
 
-    # PC 32-131: Padding NOPs
+    # PC 31-130: Padding NOPs
     for i in range(100):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    # PC 132-133: Halt instructions
+    # PC 131-132: Halt instructions
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, halt))
 
@@ -713,9 +726,7 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    # PC 14: gr[11] = in (neighbor_id)
-    PE_NEIGHBOR_LOOP_PC = 14
-    f.write(data_movement_instruction(gr, in_port, 0, 0, 11, 0, 0, 0, 0, 0, mv))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     # PC 15: gr[12] = in (neighbor_spm_addr)
@@ -730,27 +741,46 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    # PC 18: Loop back if gr[13] != 0
-    NEIGHBOR_LOOP_BACK = 11 - 18  # Jump to PC 11
+    # Set gr[2] = 17 (SPM address for extraSlice)
+    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 17, 0, si))
+    f.write(data_movement_instruction(reg, 0, 0, 0, 20, 0, 0, 0, -1, 0, si)) # reg[20] = -1
+    # Load SPM[17] into reg[21]
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 21, 0, 0, 0, 0, 2, mv))
+    f.write(data_movement_instruction(reg, 0, 0, 0, 22, 0, 0, 0, 1, 0, si)) # reg[22] = 1
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    # PC 18: Set compute PC to GNS neighbor placeholder (compute PC 113)
+    GNS_NEIGHBOR_COMPUTE_PC = 113
+    f.write(data_movement_instruction(0, 0, 0, 0, GNS_NEIGHBOR_COMPUTE_PC, 0, 0, 0, 0, 0, set_PC))
+    f.write(data_movement_instruction(0, 0, 0, 0, GNS_NEIGHBOR_COMPUTE_PC, 0, 0, 0, 0, 0, set_PC))
+
+    # PC 19: Branch to where we call getNextSlice (originally PC 187, now PC 189 after insertion)
+    BRANCH_TO_GETNEXTSLICE_CALL = 189 - 19  # = 170
+    f.write(data_movement_instruction(gr, gr, 0, 0, BRANCH_TO_GETNEXTSLICE_CALL, 0, 0, 0, 0, 0, beq))
+    f.write(data_movement_instruction(gr, gr, 0, 0, BRANCH_TO_GETNEXTSLICE_CALL, 0, 0, 0, 0, 0, beq))
+
+    # PC 20: Loop back if gr[13] != 0
+    NEIGHBOR_LOOP_BACK = 11 - 20  # = -9 (updated offset since PC shifted by 2)
     f.write(data_movement_instruction(gr, gr, 0, 0, NEIGHBOR_LOOP_BACK, 0, 0, 0, 0, 13, bne))
     f.write(data_movement_instruction(gr, gr, 0, 0, NEIGHBOR_LOOP_BACK, 0, 0, 0, 0, 13, bne))
 
     # ============================================================
-    # Step 3: Check if had incoming neighbors (PC 19)
+    # Step 3: Check if had incoming neighbors (PC 21)
     # ============================================================
-    # PC 19: If gr[12] != 0, jump to HAS_NEIGHBORS path
+    # PC 21: If gr[12] != 0, jump to HAS_NEIGHBORS path
     HAS_NEIGHBORS_OFFSET = 20
     f.write(data_movement_instruction(gr, gr, 0, 0, HAS_NEIGHBORS_OFFSET, 0, 0, 0, 0, 12, bne))
     f.write(data_movement_instruction(gr, gr, 0, 0, HAS_NEIGHBORS_OFFSET, 0, 0, 0, 0, 12, bne))
 
     # ============================================================
-    # Step 4: Handle skipFirst Flag (PC 20+)
+    # Step 4: Handle skipFirst Flag (PC 22+)
     # ============================================================
-    # PC 20: gr[14] = gr[7] & 1 (extract skipFirst bit)
+    # PC 22: gr[14] = gr[7] & 1 (extract skipFirst bit)
     f.write(data_movement_instruction(gr, gr, 0, 0, 14, 0, 0, 0, 1, 7, ANDI))
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
-    # PC 21: If skipFirst != 0, jump to TRUE path
+    # PC 23: If skipFirst != 0, jump to TRUE path
     SKIP_FIRST_TRUE_OFFSET = 15
     f.write(data_movement_instruction(gr, gr, 0, 0, SKIP_FIRST_TRUE_OFFSET, 0, 0, 0, 0, 14, bne))
     f.write(data_movement_instruction(gr, gr, 0, 0, SKIP_FIRST_TRUE_OFFSET, 0, 0, 0, 0, 14, bne))
