@@ -472,7 +472,10 @@ bool pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     int *spm = SPM_unit->buffer;
     constexpr int ARC_META_BASE = 544;
     int total_fin0 = s1c[20];
-    int ha_off = gwfa_get_mm_ha_off();
+    constexpr int DIAG_CAP_F = (16 << 20);
+    constexpr int INTV_CAP_F = (1 << 21);
+    constexpr int HA_CAP_F   = (4 << 20);
+    constexpr int ha_off = DIAG_CAP_F * 8 + INTV_CAP_F * 6;
     int n_done = s1c[22];
 
     // === Pass 1: Greedy assign + copy S1C → SPM ===
@@ -2188,12 +2191,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // FIN_0_TILE, write A/B queues and HA buckets to MM.
             // Element-outer, PE-inner pattern.
             constexpr int A_MASK_VAL = (16 << 20) - 1;
+            constexpr int DIAG_CAP_18 = (16 << 20);
+            constexpr int INTV_CAP_18 = (1 << 21);
+            constexpr int HA_CAP_18 = (4 << 20);
+            constexpr int ha_off = DIAG_CAP_18 * 8 + INTV_CAP_18 * 6;
+            constexpr int ha_dirty_off = ha_off + HA_CAP_18;
             int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
             int *spm = SPM_unit->buffer;
             int fin0_base = (magic_mask & 2)
                 ? GWFA_FIN0B_BASE : GWFA_FIN0_BASE;
-            int ha_off = gwfa_get_mm_ha_off();
-            int ha_dirty_off = gwfa_get_mm_ha_dirty_off();
 
             // --- Phase 1: Read metadata from all 4 PEs ---
             for (int pe = 0; pe < 4; pe++) {
@@ -2364,27 +2370,27 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             constexpr int INTV_CAP_V  = (1 << 21);
             constexpr int MM_INTV     = DIAG_CAP_V * 6;
             constexpr int MM_SORT_BUF = DIAG_CAP_V * 6 + INTV_CAP_V * 6;
-            int diag_base = gr[20];
-            int n_a       = gr[24];
-            int next_intv_n = gr[28];
-            int n_phase1_v = s1c[151]; // set by ISA before sort/merge pipeline
             // Save state for later phases
-            s1c[144] = diag_base;
-            s1c[145] = n_a;
-            s1c[146] = (int)gwfa_get_intv_n();  // old intv_n
-            s1c[155] = next_intv_n;              // save for intv sort setup
-            s1c[152] = MM_INTV;   // active_intv_base
-            s1c[153] = diag_base; // active_diag_base
-            // Setup DIAG tail sort (phase 1 prefix already sorted)
-            if (n_phase1_v < 0) n_phase1_v = 0;
-            if (n_phase1_v > n_a) n_phase1_v = n_a;
-            int n_unsorted = n_a - n_phase1_v;
-            s1c[147] = n_phase1_v;
-            s1c[148] = n_a;
-            gr[3]  = diag_base + n_phase1_v * 2;
+            s1c[144] = gr[20];                       // diag_base
+            s1c[145] = gr[24];                       // n_a
+            s1c[146] = (int)gwfa_get_intv_n();       // old intv_n
+            s1c[155] = gr[28];                       // next_intv_n
+            s1c[152] = MM_INTV;                      // active_intv_base
+            s1c[153] = gr[20];                       // active_diag_base
+            // Clamp n_phase1_v to [0, n_a] using branches
+            gr[1] = s1c[151];                        // n_phase1_v
+            if (gr[1] >= 0) goto m16_clamp_hi;
+            gr[1] = 0;
+        m16_clamp_hi:
+            if (gr[1] <= gr[24]) goto m16_clamped;
+            gr[1] = gr[24];
+        m16_clamped:
+            s1c[147] = gr[1];                        // n_phase1_v
+            s1c[148] = gr[24];                       // n_a
+            gr[3]  = gr[20] + gr[1] * 2;             // diag_base + n_phase1*2
             gr[4]  = MM_SORT_BUF;
-            gr[6]  = (n_unsorted + 3) / 4;
-            gr[24] = n_unsorted;
+            gr[24] = gr[24] - gr[1];                 // n_unsorted
+            gr[6]  = (gr[24] + 3) / 4;
         } else if (magic_id == 17) {
             // Set score = gr_lo[12] (current edit distance, packed)
             gwfa_set_score(
@@ -2448,10 +2454,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // Also resets bin_counts in META for all PEs (ready for next pass).
             {
                 // Step 1: save per-PE bin counts into s1c[16..79]
-                for (int pe = 0; pe < 4; pe++) {
-                    int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
-                    for (int b = 0; b < SORT_RADIX_BINS; b++)
+                // PEs inner to avoid bank conflicts on SPM access
+                for (int b = 0; b < SORT_RADIX_BINS; b++) {
+                    for (int pe = 0; pe < 4; pe++) {
+                        int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
                         s1c[16 + pe * SORT_RADIX_BINS + b] = spm[SORT_META + b];
+                    }
                 }
                 // Step 2: global totals in s1c[0..15]
                 for (int b = 0; b < SORT_RADIX_BINS; b++) {
@@ -2475,9 +2483,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 // Step 5: zero running offsets for scatter writeback
                 for (int i = 0; i < 64; i++) s1c[80 + i] = 0;
                 // Step 6: reset bin_counts in META for all PEs
-                for (int pe = 0; pe < 4; pe++) {
-                    int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
-                    for (int b = 0; b < SORT_RADIX_BINS; b++) spm[SORT_META + b] = 0;
+                // PEs inner to avoid bank conflicts
+                for (int b = 0; b < SORT_RADIX_BINS; b++) {
+                    for (int pe = 0; pe < 4; pe++) {
+                        int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
+                        spm[SORT_META + b] = 0;
+                    }
                 }
             }
         } else if (magic_id == 24) {
@@ -2780,26 +2791,36 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         } else if (magic_id == 33) {
             // Merge tile reload (overlapped with PE compute).
             // Reloads any buffer PE zeroed during previous call.
+            // s1c lookups separated from mm[] for ISA feasibility.
             {
+                auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
                 for (int pe = 0; pe < 4; pe++) {
                     int *s = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
                     for (int buf = 0; buf < 2; buf++) {
                         if (s[MERGE_META+9+buf] == 0 && s1c[12+pe] > 0) {
                             int off = buf ? MERGE_A_BUF1 : MERGE_A_BUF0;
-                            int tile = std::min(MERGE_TILE, s1c[12+pe]);
+                            // Clamp tile via branch instead of std::min
+                            int tile = s1c[12+pe];
+                            if (tile > MERGE_TILE) tile = MERGE_TILE;
+                            // Separate s1c lookup from mm[] access
+                            gr[1] = s1c[8+pe];       // s1c → register
                             for (int j = 0; j < tile*2; j++)
-                                s[off+j] = mm[s1c[8+pe]+j];
-                            s1c[8+pe] += tile*2; s1c[12+pe] -= tile;
+                                s[off+j] = mm[gr[1]+j]; // mm[reg]
+                            s1c[8+pe] = gr[1] + tile*2;
+                            s1c[12+pe] -= tile;
                             s[MERGE_META+9+buf] = tile;
                             if (s1c[12+pe] <= 0) s[MERGE_META+5] = 1;
                         }
                         if (s[MERGE_META+11+buf] == 0 && s1c[20+pe] > 0) {
                             int off = buf ? MERGE_B_BUF1 : MERGE_B_BUF0;
-                            int tile = std::min(MERGE_TILE, s1c[20+pe]);
+                            int tile = s1c[20+pe];
+                            if (tile > MERGE_TILE) tile = MERGE_TILE;
+                            gr[1] = s1c[16+pe];      // s1c → register
                             for (int j = 0; j < tile*2; j++)
-                                s[off+j] = mm[s1c[16+pe]+j];
-                            s1c[16+pe] += tile*2; s1c[20+pe] -= tile;
+                                s[off+j] = mm[gr[1]+j]; // mm[reg]
+                            s1c[16+pe] = gr[1] + tile*2;
+                            s1c[20+pe] -= tile;
                             s[MERGE_META+11+buf] = tile;
                             if (s1c[20+pe] <= 0) s[MERGE_META+6] = 1;
                         }
