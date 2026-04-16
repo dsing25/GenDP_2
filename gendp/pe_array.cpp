@@ -2797,8 +2797,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             a_sp[p+1] = bs_target[p] - b_sp[p+1];
                         }
                     }
-                    // Load initial tiles per PE
+                    // Pre-compute tile sizes for mvdq interleaved load
                     int max_pt = 0;
+                    int a0s[4], a1s[4], b0s[4], b1s[4];
+                    int a_srcs[4], b_srcs[4];
                     for (int pe = 0; pe < 4; pe++) {
                         int pa_s = a_sp[pe];
                         int pa_n = std::max(0, a_sp[pe+1] - pa_s);
@@ -2818,29 +2820,72 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         s1c[12+pe] = std::max(0, pa_n - a0 - a1);
                         s1c[16+pe] = bbase + (pb_s + b0 + b1) * 2;
                         s1c[20+pe] = std::max(0, pb_n - b0 - b1);
-                        int *spm = &SPM_unit->buffer[
-                            pe * SPM_BANK_GROUP_SIZE];
-                        int mm_a = abase + pa_s * 2;
-                        for (int j = 0; j < a0*2; j++)
-                            spm[MERGE_A_BUF0+j] = mm[mm_a+j];
-                        for (int j = 0; j < a1*2; j++)
-                            spm[MERGE_A_BUF1+j] = mm[mm_a+a0*2+j];
-                        int mm_b = bbase + pb_s * 2;
-                        for (int j = 0; j < b0*2; j++)
-                            spm[MERGE_B_BUF0+j] = mm[mm_b+j];
-                        for (int j = 0; j < b1*2; j++)
-                            spm[MERGE_B_BUF1+j] = mm[mm_b+b0*2+j];
-                        spm[MERGE_META+0] = 0;
-                        spm[MERGE_META+1] = 0;
-                        spm[MERGE_META+4] = 0;
-                        spm[MERGE_META+5] = (pa_n<=a0+a1) ? 1 : 0;
-                        spm[MERGE_META+6] = (pb_n<=b0+b1) ? 1 : 0;
-                        spm[MERGE_META+7] = 0;
-                        spm[MERGE_META+8] = 0;
-                        spm[MERGE_META+9] = a0;
-                        spm[MERGE_META+10] = a1;
-                        spm[MERGE_META+11] = b0;
-                        spm[MERGE_META+12] = b1;
+                        int pe_spm = pe * SPM_BANK_GROUP_SIZE;
+                        int *spm2 = &SPM_unit->buffer[pe_spm];
+                        a0s[pe]=a0; a1s[pe]=a1; b0s[pe]=b0; b1s[pe]=b1;
+                        a_srcs[pe] = abase + pa_s * 2;
+                        b_srcs[pe] = bbase + pb_s * 2;
+                        spm2[MERGE_META+0] = 0;
+                        spm2[MERGE_META+1] = 0;
+                        spm2[MERGE_META+4] = 0;
+                        spm2[MERGE_META+5] = (pa_n<=a0+a1) ? 1 : 0;
+                        spm2[MERGE_META+6] = (pb_n<=b0+b1) ? 1 : 0;
+                        spm2[MERGE_META+7] = 0;
+                        spm2[MERGE_META+8] = 0;
+                        spm2[MERGE_META+9] = a0;
+                        spm2[MERGE_META+10] = a1;
+                        spm2[MERGE_META+11] = b0;
+                        spm2[MERGE_META+12] = b1;
+                    }
+                    // Interleaved mvdq tile loads across PEs
+                    int *spm = SPM_unit->buffer;
+                    // A_BUF0
+                    { int mw = 0;
+                      for (int pe=0; pe<4; pe++)
+                          if (a0s[pe]*2 > mw) mw = a0s[pe]*2;
+                      for (int j = 0; j < mw; j += 8)
+                          for (int pe = 0; pe < 4; pe++) {
+                              int w = a0s[pe]*2;
+                              if (j >= w) continue;
+                              int cnt = w-j; if (cnt>8) cnt=8;
+                              mvdq_copy(&spm[pe*SPM_BANK_GROUP_SIZE+MERGE_A_BUF0+j], &mm[a_srcs[pe]+j], cnt);
+                          }
+                    }
+                    // A_BUF1
+                    { int mw = 0;
+                      for (int pe=0; pe<4; pe++)
+                          if (a1s[pe]*2 > mw) mw = a1s[pe]*2;
+                      for (int j = 0; j < mw; j += 8)
+                          for (int pe = 0; pe < 4; pe++) {
+                              int w = a1s[pe]*2;
+                              if (j >= w) continue;
+                              int cnt = w-j; if (cnt>8) cnt=8;
+                              mvdq_copy(&spm[pe*SPM_BANK_GROUP_SIZE+MERGE_A_BUF1+j], &mm[a_srcs[pe]+a0s[pe]*2+j], cnt);
+                          }
+                    }
+                    // B_BUF0
+                    { int mw = 0;
+                      for (int pe=0; pe<4; pe++)
+                          if (b0s[pe]*2 > mw) mw = b0s[pe]*2;
+                      for (int j = 0; j < mw; j += 8)
+                          for (int pe = 0; pe < 4; pe++) {
+                              int w = b0s[pe]*2;
+                              if (j >= w) continue;
+                              int cnt = w-j; if (cnt>8) cnt=8;
+                              mvdq_copy(&spm[pe*SPM_BANK_GROUP_SIZE+MERGE_B_BUF0+j], &mm[b_srcs[pe]+j], cnt);
+                          }
+                    }
+                    // B_BUF1
+                    { int mw = 0;
+                      for (int pe=0; pe<4; pe++)
+                          if (b1s[pe]*2 > mw) mw = b1s[pe]*2;
+                      for (int j = 0; j < mw; j += 8)
+                          for (int pe = 0; pe < 4; pe++) {
+                              int w = b1s[pe]*2;
+                              if (j >= w) continue;
+                              int cnt = w-j; if (cnt>8) cnt=8;
+                              mvdq_copy(&spm[pe*SPM_BANK_GROUP_SIZE+MERGE_B_BUF1+j], &mm[b_srcs[pe]+b0s[pe]*2+j], cnt);
+                          }
                     }
                     int niter = ((max_pt + MERGE_STEP - 1)
                         / MERGE_STEP) * MERGE_STEP;

@@ -1347,37 +1347,71 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //NOP
         m13_done: ;
         } else if (magic_id == 20) {
-            // Sort bin count: accumulate bin_counts[16] in META across tiles.
-            // mask bit 0 = which TILE_BUF (0=TILE_BUF0, 1=TILE_BUF1)
+            // Sort bin count: two-element mvd loads for bandwidth.
             int tile_buf_off = (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
             int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
             int tile_n = spm[SORT_META + 32];
             int shift  = spm[SORT_META + 33];
             int *tile   = &spm[tile_buf_off];
-            int *counts = &spm[SORT_META];          // bin_counts[0..15]
-            for (int i = 0; i < tile_n; i++) {
+            int *counts = &spm[SORT_META];
+            // Process two elements per iteration (mvd: 4 words)
+            int i = 0;
+            for (; i + 1 < tile_n; i += 2) {
+                int vd0 = tile[i * 2];       // mvd: load elem 0
+                int vd1 = tile[(i+1) * 2];   // mvd: load elem 1
+                int bin0 = ((uint32_t)vd0 >> shift) & 0xF;
+                int bin1 = ((uint32_t)vd1 >> shift) & 0xF;
+                counts[bin0]++;
+                counts[bin1]++;
+            }
+            // Peel: handle odd last element
+            if (i < tile_n) {
                 int bin = ((uint32_t)tile[i * 2] >> shift) & 0xF;
                 counts[bin]++;
             }
         } else if (magic_id == 21) {
-            // Sort scatter: scatter tile elements into BIN_SPMIONS; write tile_bin_counts.
-            // mask bit 0 = which TILE_BUF / BIN_SPM (0=ping, 1=pong)
+            // Sort scatter: two-element mvd loads for bandwidth.
             int tile_buf_off = (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
-            int bin_reg_off  = (magic_mask & 1) ? SORT_BIN_SPM1  : SORT_BIN_SPM0;
+            int bin_spm_off  = (magic_mask & 1) ? SORT_BIN_SPM1  : SORT_BIN_SPM0;
             int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
             int tile_n = spm[SORT_META + 32];
             int shift  = spm[SORT_META + 33];
             int *tile            = &spm[tile_buf_off];
-            int *tile_bin_counts = &spm[SORT_META + 16];   // [16..31]
+            int *tile_bin_counts = &spm[SORT_META + 16];
             int bin_cursors[SORT_RADIX_BINS] = {};
             for (int b = 0; b < SORT_RADIX_BINS; b++) tile_bin_counts[b] = 0;
-            for (int i = 0; i < tile_n; i++) {
-                int vd  = tile[i * 2];
-                int k   = tile[i * 2 + 1];
+            // Process two elements per iteration (mvd: 4 words)
+            int i = 0;
+            for (; i + 1 < tile_n; i += 2) {
+                // mvd: load element 0 (vd, k)
+                int vd0 = tile[i * 2];
+                int k0  = tile[i * 2 + 1];
+                // mvd: load element 1 (vd, k)
+                int vd1 = tile[(i+1) * 2];
+                int k1  = tile[(i+1) * 2 + 1];
+                // Scatter element 0
+                int bin0 = ((uint32_t)vd0 >> shift) & 0xF;
+                int off0 = bin0 * SORT_BIN_REGION_SIZE * 2 + bin_cursors[bin0] * 2;
+                spm[bin_spm_off + off0]     = vd0;
+                spm[bin_spm_off + off0 + 1] = k0;
+                bin_cursors[bin0]++;
+                tile_bin_counts[bin0]++;
+                // Scatter element 1
+                int bin1 = ((uint32_t)vd1 >> shift) & 0xF;
+                int off1 = bin1 * SORT_BIN_REGION_SIZE * 2 + bin_cursors[bin1] * 2;
+                spm[bin_spm_off + off1]     = vd1;
+                spm[bin_spm_off + off1 + 1] = k1;
+                bin_cursors[bin1]++;
+                tile_bin_counts[bin1]++;
+            }
+            // Peel: handle odd last element
+            if (i < tile_n) {
+                int vd = tile[i * 2];
+                int k  = tile[i * 2 + 1];
                 int bin = ((uint32_t)vd >> shift) & 0xF;
                 int off = bin * SORT_BIN_REGION_SIZE * 2 + bin_cursors[bin] * 2;
-                spm[bin_reg_off + off]     = vd;
-                spm[bin_reg_off + off + 1] = k;
+                spm[bin_spm_off + off]     = vd;
+                spm[bin_spm_off + off + 1] = k;
                 bin_cursors[bin]++;
                 tile_bin_counts[bin]++;
             }
