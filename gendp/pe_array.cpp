@@ -2659,7 +2659,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
         } else if (magic_id == 28) {
             // Diag merge split + tile load.
-            // Check inputs sorted, do PE merge, check output sorted.
+            // Interleaved binary search across PEs for split points,
+            // then load initial tiles. Inlined from merge_split_and_load.
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
@@ -2668,18 +2669,112 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 constexpr int MM_SORT_BUF = DIAG_CAP_V * 6 + INTV_CAP_V * 6;
                 int n_phase1  = s1c[147];
                 int n_a       = s1c[148];
-                int intv_n    = s1c[146]; // old intv_n (new intv_n not known yet)
-                int diag_base = s1c[153]; // active_diag_base
-                int n_tail = std::max(0, n_a - std::max(0, n_phase1));
+                int intv_n    = s1c[146];
+                int diag_base = s1c[153];
                 if (n_phase1 < 0) n_phase1 = 0;
                 if (n_phase1 > n_a) n_phase1 = n_a;
-                n_tail = n_a - n_phase1;
-                if (!merge_split_and_load(mm, SPM_unit->buffer,
-                    SPM_BANK_GROUP_SIZE, s1c, gr,
-                    diag_base, n_phase1,
-                    diag_base + n_phase1 * 2, n_tail,
-                    MM_SORT_BUF))
-                    gr[6] = 0;
+                int n_tail = n_a - n_phase1;
+                int abase = diag_base;
+                int bbase = diag_base + n_phase1 * 2;
+                if (n_phase1 <= 0 || n_tail <= 0) {
+                    gr[6] = 0; // skip merge
+                } else {
+                    int n_total = n_phase1 + n_tail;
+                    int nape = (n_total + 3) / 4;
+                    int a_sp[5], b_sp[5];
+                    a_sp[0] = 0; b_sp[0] = 0;
+                    a_sp[4] = n_phase1; b_sp[4] = n_tail;
+                    // Interleaved binary search: 3 searches (pe=1,2,3)
+                    // one step per PE per round with waitLSQ between
+                    int bs_lo[3], bs_hi[3], bs_target[3];
+                    for (int p = 0; p < 3; p++) {
+                        bs_target[p] = std::min((p+1) * nape, n_total);
+                        bs_lo[p] = std::max(0, bs_target[p] - n_tail);
+                        bs_hi[p] = std::min(n_phase1, bs_target[p]);
+                    }
+                    bool any_active = true;
+                    while (any_active) {
+                        any_active = false;
+                        for (int p = 0; p < 3; p++) {
+                            if (bs_lo[p] >= bs_hi[p]) continue;
+                            any_active = true;
+                            int mid = (bs_lo[p] + bs_hi[p]) / 2;
+                            int bi2 = bs_target[p] - mid;
+                            // MM lookups for this PE's search step
+                            uint32_t b_val = (bi2 > 0)
+                                ? (uint32_t)mm[bbase + (bi2-1)*2] : 0;
+                            uint32_t a_val = (mid < n_phase1)
+                                ? (uint32_t)mm[abase + mid*2]
+                                : 0xFFFFFFFF;
+                            // waitLSQ (after all PE lookups this round)
+                            if (bi2 > 0 && mid < n_phase1
+                                && b_val > a_val)
+                                bs_lo[p] = mid + 1;
+                            else bs_hi[p] = mid;
+                        }
+                    }
+                    for (int p = 0; p < 3; p++) {
+                        a_sp[p+1] = bs_lo[p];
+                        b_sp[p+1] = bs_target[p] - bs_lo[p];
+                        if (a_sp[p+1] < a_sp[p]) {
+                            a_sp[p+1] = a_sp[p];
+                            b_sp[p+1] = bs_target[p] - a_sp[p+1];
+                        }
+                        if (b_sp[p+1] < b_sp[p]) {
+                            b_sp[p+1] = b_sp[p];
+                            a_sp[p+1] = bs_target[p] - b_sp[p+1];
+                        }
+                    }
+                    // Load initial tiles per PE
+                    int max_pt = 0;
+                    for (int pe = 0; pe < 4; pe++) {
+                        int pa_s = a_sp[pe];
+                        int pa_n = std::max(0, a_sp[pe+1] - pa_s);
+                        int pb_s = b_sp[pe];
+                        int pb_n = std::max(0, b_sp[pe+1] - pb_s);
+                        int pt = pa_n + pb_n;
+                        if (pt > max_pt) max_pt = pt;
+                        s1c[pe]     = pt;
+                        s1c[4+pe]   = 0;
+                        int a0 = std::min(MERGE_TILE, pa_n);
+                        int a1 = std::min(MERGE_TILE,
+                            std::max(0, pa_n - a0));
+                        int b0 = std::min(MERGE_TILE, pb_n);
+                        int b1 = std::min(MERGE_TILE,
+                            std::max(0, pb_n - b0));
+                        s1c[8+pe]  = abase + (pa_s + a0 + a1) * 2;
+                        s1c[12+pe] = std::max(0, pa_n - a0 - a1);
+                        s1c[16+pe] = bbase + (pb_s + b0 + b1) * 2;
+                        s1c[20+pe] = std::max(0, pb_n - b0 - b1);
+                        int *spm = &SPM_unit->buffer[
+                            pe * SPM_BANK_GROUP_SIZE];
+                        int mm_a = abase + pa_s * 2;
+                        for (int j = 0; j < a0*2; j++)
+                            spm[MERGE_A_BUF0+j] = mm[mm_a+j];
+                        for (int j = 0; j < a1*2; j++)
+                            spm[MERGE_A_BUF1+j] = mm[mm_a+a0*2+j];
+                        int mm_b = bbase + pb_s * 2;
+                        for (int j = 0; j < b0*2; j++)
+                            spm[MERGE_B_BUF0+j] = mm[mm_b+j];
+                        for (int j = 0; j < b1*2; j++)
+                            spm[MERGE_B_BUF1+j] = mm[mm_b+b0*2+j];
+                        spm[MERGE_META+0] = 0;
+                        spm[MERGE_META+1] = 0;
+                        spm[MERGE_META+4] = 0;
+                        spm[MERGE_META+5] = (pa_n<=a0+a1) ? 1 : 0;
+                        spm[MERGE_META+6] = (pb_n<=b0+b1) ? 1 : 0;
+                        spm[MERGE_META+7] = 0;
+                        spm[MERGE_META+8] = 0;
+                        spm[MERGE_META+9] = a0;
+                        spm[MERGE_META+10] = a1;
+                        spm[MERGE_META+11] = b0;
+                        spm[MERGE_META+12] = b1;
+                    }
+                    int niter = ((max_pt + MERGE_STEP - 1)
+                        / MERGE_STEP) * MERGE_STEP;
+                    gr[6] = (niter == 0) ? 0 : niter;
+                    gr[4] = MM_SORT_BUF;
+                }
                 gr[3]=diag_base; gr[24]=n_a; gr[28]=intv_n;
             }
         } else if (magic_id == 33) {
