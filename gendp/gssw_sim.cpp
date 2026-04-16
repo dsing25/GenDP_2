@@ -6,25 +6,24 @@
 #include <cstring>
 #include <string>
 #include <sstream>
-#include <emmintrin.h>   // SSE2
-#include <smmintrin.h>   // SSE4.1
+#include <cstdint>
 
-// ---- Inlined GSSW structs and constants from gssw.h ----
+// ---- 4-wide SIMD: each "vector" is 4 packed uint8 in a uint32 ----
 
 #define GSSW_READ_LEN  148
-#define GSSW_SEG_LEN   10
+#define GSSW_SEG_LEN   37                           // ceil(148 / 4)
 
-// SPM fixed-region offsets (bytes)
+// SPM fixed-region offsets (bytes). Must match pe.cpp exactly.
 #define GSSW_PROF_OFF   0
-#define GSSW_HPING_OFF  (40 * 16)
-#define GSSW_HPONG_OFF  (50 * 16)
-#define GSSW_E_OFF      (60 * 16)
-#define GSSW_F_OFF      (70 * 16)
-#define GSSW_BEST_OFF   (80 * 16)
-#define GSSW_GRAPH_OFF  (90 * 16)
+#define GSSW_HPING_OFF  (4 * GSSW_SEG_LEN * 4)       // 4 nt × segLen × 4B
+#define GSSW_HPONG_OFF  (GSSW_HPING_OFF + GSSW_SEG_LEN * 4)
+#define GSSW_E_OFF      (GSSW_HPONG_OFF + GSSW_SEG_LEN * 4)
+#define GSSW_F_OFF      (GSSW_E_OFF     + GSSW_SEG_LEN * 4)
+#define GSSW_BEST_OFF   (GSSW_F_OFF     + GSSW_SEG_LEN * 4)
+#define GSSW_GRAPH_OFF  (GSSW_BEST_OFF  + GSSW_SEG_LEN * 4)
 
 struct gssw_profile {
-    __m128i* profile_byte;
+    uint32_t* profile_byte;   // 4 nt × segLen uint32s (4 lanes each)
     const int8_t* read;
     int32_t readLen;
     uint8_t bias;
@@ -58,9 +57,8 @@ struct gssw_spm_node_desc {
     int16_t seq_len;
     int16_t next_off;
     int16_t next_len;
-    int8_t  _pad[8];
-    __m128i hSeed[GSSW_SEG_LEN];
-    __m128i eSeed[GSSW_SEG_LEN];
+    uint32_t hSeed[GSSW_SEG_LEN];
+    uint32_t eSeed[GSSW_SEG_LEN];
 };
 
 static inline uint64_t gssw_spm_size(
@@ -72,7 +70,7 @@ static inline uint64_t gssw_spm_size(
     sz += (uint64_t)num_nodes * sizeof(gssw_spm_node_desc);
     uint64_t nexts_bytes =
         (uint64_t)total_nexts * sizeof(int16_t);
-    nexts_bytes = (nexts_bytes + 15) & ~15ULL;
+    nexts_bytes = (nexts_bytes + 3) & ~3ULL;
     sz += nexts_bytes;
     sz += total_seq;
     return sz;
@@ -86,7 +84,7 @@ static void gssw_spm_pack(uint8_t* SPM,
 {
     const int32_t segLen = GSSW_SEG_LEN;
     memcpy(SPM + GSSW_PROF_OFF, prof->profile_byte,
-           4 * segLen * sizeof(__m128i));
+           4 * segLen * sizeof(uint32_t));
     memset(SPM + GSSW_HPING_OFF, 0,
            (GSSW_GRAPH_OFF - GSSW_HPING_OFF));
 
@@ -106,9 +104,8 @@ static void gssw_spm_pack(uint8_t* SPM,
         dst->seq_len  = src->seq_len;
         dst->next_off = src->next_off;
         dst->next_len = src->next_len;
-        memset(dst->_pad, 0, sizeof(dst->_pad));
-        memset(dst->hSeed, 0, segLen * sizeof(__m128i));
-        memset(dst->eSeed, 0, segLen * sizeof(__m128i));
+        memset(dst->hSeed, 0, segLen * sizeof(uint32_t));
+        memset(dst->eSeed, 0, segLen * sizeof(uint32_t));
     }
 
     int16_t* childIds = (int16_t*)(
@@ -118,7 +115,7 @@ static void gssw_spm_pack(uint8_t* SPM,
            graph->total_nexts * sizeof(int16_t));
     uint64_t nexts_bytes =
         (uint64_t)graph->total_nexts * sizeof(int16_t);
-    uint64_t nexts_padded = (nexts_bytes + 15) & ~15ULL;
+    uint64_t nexts_padded = (nexts_bytes + 3) & ~3ULL;
     if (nexts_padded > nexts_bytes)
         memset((uint8_t*)childIds + nexts_bytes, 0,
                nexts_padded - nexts_bytes);
@@ -236,6 +233,12 @@ static bool parseGraphSoA(FILE *fp,
 
 // ---- Parse one profile from matchProfiles.txt ----
 
+// On-disk matchProfiles.txt is in 16-wide striped format:
+//   bytes[nt][seg16*16 + lane16] holds the score for read position
+//   (lane16 * 10 + seg16) vs reference nucleotide nt, where segLen16=10.
+// We re-stripe to 4-wide:
+//   profile_uint[nt][seg4]'s byte lane4 holds the score for read pos
+//   (lane4 * 37 + seg4), where segLen4=37.
 static bool parseProfile(FILE *fp, gssw_profile **out)
 {
     std::string line;
@@ -247,23 +250,35 @@ static bool parseProfile(FILE *fp, gssw_profile **out)
         ss >> readLen;
     }
 
-    int32_t segLen = (readLen + 15) / 16;
-    int32_t n = 4; // nucleotides
+    const int32_t segLen16 = (readLen + 15) / 16;  // 10
+    const int32_t segLen4  = (readLen + 3)  / 4;   // 37
+    const int32_t n = 4;                            // nucleotides
+
     gssw_profile* p = (gssw_profile*)
         calloc(1, sizeof(gssw_profile));
     p->readLen = readLen;
     p->bias = 4;
     p->read = NULL;
-    p->profile_byte = (__m128i*)
-        aligned_alloc(16, n * segLen * sizeof(__m128i));
+    p->profile_byte = (uint32_t*)
+        calloc(n * segLen4, sizeof(uint32_t));
 
-    uint8_t* bytes = (uint8_t*)p->profile_byte;
+    uint8_t* prof_bytes = (uint8_t*)p->profile_byte;
     for (int32_t base = 0; base < n; base++) {
         readLine(fp, line);
         std::istringstream ss(line);
-        for (int32_t j = 0; j < segLen * 16; j++) {
+        // Read all 16-wide bytes (segLen16 * 16 = 160 per row).
+        // Un-stripe to linear, then re-stripe to 4-wide.
+        for (int32_t j = 0; j < segLen16 * 16; j++) {
             int v; ss >> v;
-            bytes[base * segLen * 16 + j] = (uint8_t)v;
+            int32_t seg16  = j / 16;
+            int32_t lane16 = j % 16;
+            int32_t rp = lane16 * segLen16 + seg16;
+            if (rp >= readLen) continue; // padding
+            int32_t lane4 = rp / segLen4;
+            int32_t seg4  = rp % segLen4;
+            // byte layout within uint32: lane l is bits [l*8, l*8+7]
+            prof_bytes[(base * segLen4 + seg4) * 4 + lane4]
+                = (uint8_t)v;
         }
     }
 
