@@ -362,93 +362,6 @@ void pe_array::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, LoadRe
     }
 }
 
-// Merge path split + ping-pong tile load for PE-parallel merge.
-// A[abase..abase+n_a*2), B[bbase..bbase+n_b*2) → SPM per PE.
-// Sets s1c[0..23], META, gr[4]=out_mm, gr[6]=loop bound.
-// Returns true if merge was set up, false if skipped (nothing to merge).
-static bool merge_split_and_load(
-    int *mm, int *spm_buf, int spm_group,
-    int *s1c_arr, int *gr_arr,
-    int abase, int n_a_total, int bbase, int n_b_total,
-    int out_mm)
-{
-    if (n_a_total <= 0 || n_b_total <= 0) return false;
-    int n_total = n_a_total + n_b_total;
-    int nape = (n_total + 3) / 4;
-    int a_sp[5], b_sp[5];
-    a_sp[0] = 0; b_sp[0] = 0;
-    a_sp[4] = n_a_total; b_sp[4] = n_b_total;
-    for (int p = 1; p < 4; p++) {
-        int target = p * nape;
-        if (target >= n_total) target = n_total;
-        int lo = std::max(0, target - n_b_total);
-        int hi = std::min(n_a_total, target);
-        while (lo < hi) {
-            int mid = (lo + hi) / 2;
-            int bi2 = target - mid;
-            if (bi2 > 0 && mid < n_a_total
-                && (uint32_t)mm[bbase + (bi2-1)*2]
-                   > (uint32_t)mm[abase + mid*2])
-                lo = mid + 1;
-            else hi = mid;
-        }
-        a_sp[p] = lo; b_sp[p] = target - lo;
-        if (a_sp[p] < a_sp[p-1]) {
-            a_sp[p] = a_sp[p-1];
-            b_sp[p] = target - a_sp[p];
-        }
-        if (b_sp[p] < b_sp[p-1]) {
-            b_sp[p] = b_sp[p-1];
-            a_sp[p] = target - b_sp[p];
-        }
-    }
-    // Verify splits are monotonic
-    for (int p = 1; p <= 4; p++) {
-        if (a_sp[p] < a_sp[p-1] || b_sp[p] < b_sp[p-1])
-            fprintf(stderr, "SPLIT non-mono p=%d a=[%d,%d] b=[%d,%d]\n",
-                p, a_sp[p-1], a_sp[p], b_sp[p-1], b_sp[p]);
-    }
-    int max_pt = 0;
-    for (int pe = 0; pe < 4; pe++) {
-        int pa_s = a_sp[pe];
-        int pa_n = std::max(0, a_sp[pe+1] - pa_s);
-        int pb_s = b_sp[pe];
-        int pb_n = std::max(0, b_sp[pe+1] - pb_s);
-        int pt = pa_n + pb_n;
-        if (pt > max_pt) max_pt = pt;
-        s1c_arr[pe]     = pt;
-        s1c_arr[4+pe]   = 0;
-        int a0 = std::min(MERGE_TILE, pa_n);
-        int a1 = std::min(MERGE_TILE, std::max(0, pa_n - a0));
-        int b0 = std::min(MERGE_TILE, pb_n);
-        int b1 = std::min(MERGE_TILE, std::max(0, pb_n - b0));
-        // s1c tracks remaining AFTER both tiles loaded
-        s1c_arr[8+pe]  = abase + (pa_s + a0 + a1) * 2;
-        s1c_arr[12+pe] = std::max(0, pa_n - a0 - a1);
-        s1c_arr[16+pe] = bbase + (pb_s + b0 + b1) * 2;
-        s1c_arr[20+pe] = std::max(0, pb_n - b0 - b1);
-        int *spm = &spm_buf[pe * spm_group];
-        int mm_a = abase + pa_s * 2;
-        for (int j = 0; j < a0*2; j++) spm[MERGE_A_BUF0+j] = mm[mm_a+j];
-        for (int j = 0; j < a1*2; j++) spm[MERGE_A_BUF1+j] = mm[mm_a+a0*2+j];
-        int mm_b = bbase + pb_s * 2;
-        for (int j = 0; j < b0*2; j++) spm[MERGE_B_BUF0+j] = mm[mm_b+j];
-        for (int j = 0; j < b1*2; j++) spm[MERGE_B_BUF1+j] = mm[mm_b+b0*2+j];
-        spm[MERGE_META+0] = 0;  spm[MERGE_META+1] = 0;
-        spm[MERGE_META+4] = 0;
-        spm[MERGE_META+5] = (pa_n <= a0 + a1) ? 1 : 0;
-        spm[MERGE_META+6] = (pb_n <= b0 + b1) ? 1 : 0;
-        spm[MERGE_META+7] = 0;  spm[MERGE_META+8] = 0;
-        spm[MERGE_META+9] = a0; spm[MERGE_META+10] = a1;
-        spm[MERGE_META+11] = b0; spm[MERGE_META+12] = b1;
-    }
-    // Input-capped: loop bound based on max inputs per PE, stepped by MERGE_STEP
-    int niter = ((max_pt + MERGE_STEP - 1) / MERGE_STEP) * MERGE_STEP;
-    gr_arr[6] = (niter == 0) ? 0 : niter;
-    gr_arr[4] = out_mm;
-    return true;
-}
-
 // Copy up to 8 words between two int arrays
 inline void mvdq_copy(int *dst, const int *src, int n) {
     for (int i = 0; i < n && i < 8; i++) dst[i] = src[i];
@@ -2495,15 +2408,27 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     int w = tile_ns[pe] * 2;
                     if (w > max_words) max_words = w;
                 }
-                // Phase 2: interleaved mvdq (round-robin across PEs)
-                for (int j = 0; j < max_words; j += 8) {
-                    for (int pe = 0; pe < 4; pe++) {
-                        int words = tile_ns[pe] * 2;
-                        if (j >= words) continue;
-                        int n = words - j;
-                        if (n > 8) n = 8;
-                        mvdq_copy(&spm[spm_dsts[pe] + j],
-                                  &mm[mm_srcs[pe] + j], n);
+                // Phase 2: full-tile fast path + peeled final
+                // Common case: all PEs have SORT_TILE elements (no checks)
+                int full_words = SORT_TILE * 2; // full tile word count
+                bool all_full = (max_words == full_words);
+                if (all_full) {
+                    // Fast path: no per-PE bounds check needed
+                    for (int j = 0; j < full_words; j += 8)
+                        for (int pe = 0; pe < 4; pe++)
+                            mvdq_copy(&spm[spm_dsts[pe] + j],
+                                      &mm[mm_srcs[pe] + j], 8);
+                } else {
+                    // Peeled: per-PE bounds checks for final iteration
+                    for (int j = 0; j < max_words; j += 8) {
+                        for (int pe = 0; pe < 4; pe++) {
+                            int words = tile_ns[pe] * 2;
+                            if (j >= words) continue;
+                            int n = words - j;
+                            if (n > 8) n = 8;
+                            mvdq_copy(&spm[spm_dsts[pe] + j],
+                                      &mm[mm_srcs[pe] + j], n);
+                        }
                     }
                 }
                 gr[2] = cursor + SORT_TILE;
@@ -3270,31 +3195,39 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int mm_intv_out = gr[7];
 
                 // Gather deduped diags → diag_base
-                // Boundary max-merge: if last diag of PE n has same vd
-                // as first diag of PE n+1, keep the one with larger k.
+                // Bulk mvdq per PE, boundary max-merge at PE seams only.
+                // Within each PE, output is already unique (no dup vd).
                 int n_a_final = 0;
                 uint32_t last_vd = 0xFFFFFFFF;
                 for (int pe = 0; pe < 4; pe++) {
                     int base = s1c[16 + pe];
                     int cnt  = s1c[20 + pe];
-                    for (int i = 0; i < cnt; i++) {
-                        uint32_t vd = (uint32_t)mm[
-                            mm_sort_buf + (base+i)*2];
-                        int k = mm[mm_sort_buf + (base+i)*2 + 1];
-                        if (n_a_final > 0 && vd == last_vd) {
-                            // Same vd at PE boundary: keep max k
-                            int prev_k = mm[
-                                diag_base + (n_a_final-1)*2 + 1];
-                            if (k > prev_k)
-                                mm[diag_base + (n_a_final-1)*2+1]
-                                    = k;
-                        } else {
-                            mm[diag_base + n_a_final*2] = (int)vd;
-                            mm[diag_base + n_a_final*2+1] = k;
-                            last_vd = vd;
-                            n_a_final++;
+                    if (cnt <= 0) continue;
+                    int skip = 0;
+                    // Boundary check: first element vs last output
+                    if (n_a_final > 0) {
+                        uint32_t vd0 = (uint32_t)mm[
+                            mm_sort_buf + base*2];
+                        if (vd0 == last_vd) {
+                            int k0 = mm[mm_sort_buf + base*2 + 1];
+                            int pk = mm[diag_base+(n_a_final-1)*2+1];
+                            if (k0 > pk)
+                                mm[diag_base+(n_a_final-1)*2+1] = k0;
+                            skip = 1; // skip merged element
                         }
                     }
+                    // Bulk mvdq copy interior (skip boundary element)
+                    int src = mm_sort_buf + (base + skip) * 2;
+                    int dst = diag_base + n_a_final * 2;
+                    int words = (cnt - skip) * 2;
+                    for (int j = 0; j < words; j += 8) {
+                        int c = words - j; if (c > 8) c = 8;
+                        mvdq_copy(&mm[dst + j], &mm[src + j], c);
+                    }
+                    n_a_final += cnt - skip;
+                    if (cnt > skip)
+                        last_vd = (uint32_t)mm[mm_sort_buf
+                            + (base + cnt - 1) * 2];
                 }
                 // Gather intv from MM_DEDUP_INTV_OUT → MM_INTV
                 // Boundary merge-adjacent at PE seams using local
