@@ -3070,6 +3070,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 // Loop bound: max(diag_n + intv_n) across PEs
                 int max_total = 0;
                 int diag_out_cum = 0, intv_out_cum = 0;
+                int dd0[4], dd1[4], d_srcs[4];
+                int ii0[4], ii1[4], i_srcs[4];
                 for (int pe = 0; pe < 4; pe++) {
                     int d_n = splits[pe+1] - splits[pe];
                     int iv_s = std::min(intv_lo[pe], intv_hi[pe]);
@@ -3078,35 +3080,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     int total = d_n + iv_n;
                     if (total > max_total) max_total = total;
 
-                    // Load first 2 tiles of diags into BUF0+BUF1
-                    int d0 = std::min(DEDUP_TILE, d_n);
-                    int d1 = std::min(DEDUP_TILE,
-                        std::max(0, d_n - d0));
-                    int *spm = &SPM_unit->buffer[
-                        pe * SPM_BANK_GROUP_SIZE];
+                    // Pre-compute tile sizes for mvdq interleaved load
+                    int d0 = (d_n < DEDUP_TILE) ? d_n : DEDUP_TILE;
+                    int d1r = d_n - d0; if (d1r < 0) d1r = 0;
+                    int d1 = (d1r < DEDUP_TILE) ? d1r : DEDUP_TILE;
                     int d_src = diag_base + splits[pe] * 2;
-                    for (int j = 0; j < d0 * 2; j++)
-                        spm[DEDUP_DIAG_BUF0 + j] = mm[d_src + j];
-                    for (int j = 0; j < d1 * 2; j++)
-                        spm[DEDUP_DIAG_BUF1 + j] =
-                            mm[d_src + d0*2 + j];
-
-                    // Load first 2 tiles of intv into BUF0+BUF1
-                    int i0 = std::min(DEDUP_TILE, iv_n);
-                    int i1 = std::min(DEDUP_TILE,
-                        std::max(0, iv_n - i0));
+                    int i0 = (iv_n < DEDUP_TILE) ? iv_n : DEDUP_TILE;
+                    int i1r = iv_n - i0; if (i1r < 0) i1r = 0;
+                    int i1 = (i1r < DEDUP_TILE) ? i1r : DEDUP_TILE;
                     int i_src = intv_base + iv_s * 2;
-                    for (int j = 0; j < i0 * 2; j++)
-                        spm[DEDUP_INTV_BUF0 + j] = mm[i_src + j];
-                    for (int j = 0; j < i1 * 2; j++)
-                        spm[DEDUP_INTV_BUF1 + j] =
-                            mm[i_src + i0*2 + j];
-
+                    dd0[pe]=d0; dd1[pe]=d1; d_srcs[pe]=d_src;
+                    ii0[pe]=i0; ii1[pe]=i1; i_srcs[pe]=i_src;
                     // s1c: track MM sources and remaining
-                    s1c[pe]      = d_src + (d0+d1) * 2; // diag_mm_src
-                    s1c[4 + pe]  = d_n - d0 - d1;       // diag_remaining
-                    s1c[8 + pe]  = i_src + (i0+i1) * 2; // intv_mm_src
-                    s1c[12 + pe] = iv_n - i0 - i1;      // intv_remaining
+                    s1c[pe]      = d_src + (d0+d1) * 2;
+                    s1c[4 + pe]  = d_n - d0 - d1;
+                    s1c[8 + pe]  = i_src + (i0+i1) * 2;
+                    s1c[12 + pe] = iv_n - i0 - i1;
                     s1c[16 + pe] = diag_out_cum;         // diag_out_base
                     s1c[20 + pe] = 0;                    // diag_out_cursor
                     s1c[24 + pe] = intv_out_cum;         // intv_out_base
@@ -3114,28 +3103,46 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     diag_out_cum += d_n;  // max possible output
                     intv_out_cum += iv_n;
 
-                    // Init all 20 META words
-                    spm[DEDUP_META + 0] = (int)0xFFFFFFFF; // pending_vd
-                    spm[DEDUP_META + 1] = 0;     // pending_k
-                    spm[DEDUP_META + 2] = 0;     // n_diag_out
-                    spm[DEDUP_META + 3] = 0;     // n_intv_out
-                    spm[DEDUP_META + 4] = 0;     // diag_cursor
-                    spm[DEDUP_META + 5] = 0;     // intv_cursor
-                    spm[DEDUP_META + 6] = 0;     // diag_which (start at BUF0)
-                    spm[DEDUP_META + 7] = 0;     // intv_which (start at BUF0)
-                    spm[DEDUP_META + 8] = 0;     // diag_exhausted
-                    spm[DEDUP_META + 9] = 0;     // intv_exhausted
-                    spm[DEDUP_META + 10] = d0;   // diag BUF0 tile_n
-                    spm[DEDUP_META + 11] = d1;   // diag BUF1 tile_n
-                    spm[DEDUP_META + 12] = i0;   // intv BUF0 tile_n
-                    spm[DEDUP_META + 13] = i1;   // intv BUF1 tile_n
-                    spm[DEDUP_META + 14] = (int)0xFFFFFFFF; // cur_intv_lo
-                    spm[DEDUP_META + 15] = 0;    // cur_intv_hi
-                    spm[DEDUP_META + 16] = 0;    // state = X
-                    spm[DEDUP_META + 17] = 0;    // pe_done
-                    spm[DEDUP_META + 18] = 0;    // new_vd
-                    spm[DEDUP_META + 19] = 0;    // new_k
+                    // Init META words (per PE, using pre-computed sizes)
+                    int *spm2 = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
+                    spm2[DEDUP_META+0] = (int)0xFFFFFFFF;
+                    spm2[DEDUP_META+1] = 0;
+                    for (int m = 2; m < 10; m++) spm2[DEDUP_META+m] = 0;
+                    spm2[DEDUP_META+10] = dd0[pe];
+                    spm2[DEDUP_META+11] = dd1[pe];
+                    spm2[DEDUP_META+12] = ii0[pe];
+                    spm2[DEDUP_META+13] = ii1[pe];
+                    spm2[DEDUP_META+14] = (int)0xFFFFFFFF;
+                    for (int m = 15; m < 20; m++) spm2[DEDUP_META+m] = 0;
                 }
+                // Interleaved mvdq tile loads across PEs
+                int *spm = SPM_unit->buffer;
+                #define M29_MVDQ(buf_off, sizes, srcs, extra) do { \
+                    int mw = 0; \
+                    for (int pe=0; pe<4; pe++) { \
+                        int w = sizes[pe]*2; if (w > mw) mw = w; } \
+                    for (int j = 0; j < mw; j += 8) \
+                        for (int pe = 0; pe < 4; pe++) { \
+                            int w = sizes[pe]*2; \
+                            if (j >= w) continue; \
+                            int cnt = w-j; if (cnt>8) cnt=8; \
+                            mvdq_copy(&spm[pe*SPM_BANK_GROUP_SIZE \
+                                +buf_off+j], &mm[srcs[pe]+extra+j], cnt); \
+                        } \
+                } while(0)
+                // Diag BUF0 and BUF1
+                M29_MVDQ(DEDUP_DIAG_BUF0, dd0, d_srcs, 0);
+                { int d1_srcs[4];
+                  for (int pe=0; pe<4; pe++) d1_srcs[pe] = d_srcs[pe] + dd0[pe]*2;
+                  M29_MVDQ(DEDUP_DIAG_BUF1, dd1, d1_srcs, 0);
+                }
+                // Intv BUF0 and BUF1
+                M29_MVDQ(DEDUP_INTV_BUF0, ii0, i_srcs, 0);
+                { int i1_srcs[4];
+                  for (int pe=0; pe<4; pe++) i1_srcs[pe] = i_srcs[pe] + ii0[pe]*2;
+                  M29_MVDQ(DEDUP_INTV_BUF1, ii1, i1_srcs, 0);
+                }
+                #undef M29_MVDQ
                 int niter = ((max_total + DEDUP_TILE - 1)
                     / DEDUP_TILE) * DEDUP_TILE;
                 gr[6] = (niter == 0) ? DEDUP_TILE : niter;
