@@ -2351,12 +2351,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             if (gr[1] <= gr[24]) goto m16_clamped;
             gr[1] = gr[24];
         m16_clamped:
-            s1c[147] = gr[1];                        // n_phase1_v
-            s1c[148] = gr[24];                       // n_a
-            gr[3]  = gr[20] + gr[1] * 2;             // diag_base + n_phase1*2
-            gr[4]  = MM_SORT_BUF;
-            gr[24] = gr[24] - gr[1];                 // n_unsorted
-            gr[6]  = (gr[24] + 3) / 4;
+            s1c[147] = gr[1];                        // mv: n_phase1_v
+            s1c[148] = gr[24];                       // mv: n_a
+            gr[7]  = gr[1] + gr[1];                  // add: 2 * n_phase1
+            gr[4]  = MM_SORT_BUF;                    // si (constexpr)
+            //NOP
+            gr[3]  = gr[20] + gr[7];                 // add: diag_base + 2*n_phase1
+            gr[24] = gr[24] - gr[1];                 // sub: n_unsorted
+            //NOP
+            gr[6]  = gr[24] + 3;                     // addi
+            //NOP
+            gr[6]  = (unsigned)gr[6] >> 2;           // shifti_r (div 4)
         } else if (magic_id == 17) {
             // Set score = gr_lo[12] (current edit distance, packed)
             gwfa_set_score(
@@ -2412,49 +2417,49 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[2] = cursor + SORT_TILE;
             }
         } else if (magic_id == 19) {
-            // Sort prefix-sum: read per-PE bin_counts, compute global prefix sums,
-            // per-PE start offsets, and running offsets; store in s1c[].
-            // s1c[0..15]  = global prefix sums (diag units)
-            // s1c[16..79] = pe_start_in_bin[pe][b] = s1c[16+pe*16+b]
-            // s1c[80..143]= tile_cumulative[pe][b] = 0 (reset; updated by magic 25)
-            // Also resets bin_counts in META for all PEs (ready for next pass).
+            // Sort prefix-sum: ISA-lowered, gr[7]-gr[10] for temp
+            // (gr[1]-gr[4] are live across this magic from sort loop).
             {
-                // Step 1: save per-PE bin counts into s1c[16..79]
-                // PEs inner to avoid bank conflicts on SPM access
+                int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
+                int *spm = SPM_unit->buffer;
+                // Step 1: save per-PE bin counts → s1c[16..79]
                 for (int b = 0; b < SORT_RADIX_BINS; b++) {
                     for (int pe = 0; pe < 4; pe++) {
-                        int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
-                        s1c[16 + pe * SORT_RADIX_BINS + b] = spm[SORT_META + b];
+                        gr[7] = spm[pe * SPM_BANK_GROUP_SIZE + SORT_META + b];
+                        s1c[16 + pe * SORT_RADIX_BINS + b] = gr[7];
                     }
                 }
-                // Step 2: global totals in s1c[0..15]
+                // Step 2: global totals → s1c[0..15]
                 for (int b = 0; b < SORT_RADIX_BINS; b++) {
-                    s1c[b] = 0;
-                    for (int pe = 0; pe < 4; pe++) s1c[b] += s1c[16 + pe * SORT_RADIX_BINS + b];
-                }
-                // Step 3: convert per-PE counts to per-PE start offsets within each bin
-                for (int b = 0; b < SORT_RADIX_BINS; b++) {
-                    int cumsum = 0;
+                    gr[7] = 0;
                     for (int pe = 0; pe < 4; pe++) {
-                        int cnt = s1c[16 + pe * SORT_RADIX_BINS + b];
-                        s1c[16 + pe * SORT_RADIX_BINS + b] = cumsum;
-                        cumsum += cnt;
+                        gr[8] = s1c[16 + pe * SORT_RADIX_BINS + b];
+                        gr[7] = gr[7] + gr[8];
+                    }
+                    s1c[b] = gr[7];
+                }
+                // Step 3: per-PE prefix sums within each bin
+                for (int b = 0; b < SORT_RADIX_BINS; b++) {
+                    gr[9] = 0;                            // cumsum
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[7] = s1c[16 + pe * SORT_RADIX_BINS + b];
+                        s1c[16 + pe * SORT_RADIX_BINS + b] = gr[9];
+                        gr[9] = gr[9] + gr[7];
                     }
                 }
-                // Step 4: global prefix sums in s1c[0..15]
-                int total = 0;
+                // Step 4: global prefix sums
+                gr[10] = 0;                               // total
                 for (int b = 0; b < SORT_RADIX_BINS; b++) {
-                    int cnt = s1c[b]; s1c[b] = total; total += cnt;
+                    gr[7] = s1c[b];
+                    s1c[b] = gr[10];
+                    gr[10] = gr[10] + gr[7];
                 }
-                // Step 5: zero running offsets for scatter writeback
+                // Step 5: zero running offsets
                 for (int i = 0; i < 64; i++) s1c[80 + i] = 0;
-                // Step 6: reset bin_counts in META for all PEs
-                // PEs inner to avoid bank conflicts
+                // Step 6: reset bin_counts (PEs inner)
                 for (int b = 0; b < SORT_RADIX_BINS; b++) {
-                    for (int pe = 0; pe < 4; pe++) {
-                        int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
-                        spm[SORT_META + b] = 0;
-                    }
+                    for (int pe = 0; pe < 4; pe++)
+                        spm[pe * SPM_BANK_GROUP_SIZE + SORT_META + b] = 0;
                 }
             }
         } else if (magic_id == 24) {
@@ -2716,18 +2721,21 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
             }
         } else if (magic_id == 39) {
-            // Intv sort setup: reads saved state, sets gr for intv sort.
+            // Intv sort setup: ISA-lowered register operations.
             {
-                auto &gr = main_addressing_register;
+                int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
                 constexpr int DIAG_CAP_V  = (16 << 20);
                 constexpr int INTV_CAP_V  = (1 << 21);
                 constexpr int MM_INTV     = DIAG_CAP_V * 6;
                 constexpr int MM_NEXT_INTV = MM_INTV + INTV_CAP_V * 2;
                 constexpr int MM_SWAP     = MM_NEXT_INTV + INTV_CAP_V * 2;
-                gr[24] = s1c[155];                       // next_intv_n
-                gr[3]  = MM_NEXT_INTV;                   // src base
-                gr[4]  = MM_SWAP;                        // dst base
-                gr[6]  = (gr[24] + 3) / 4;              // n_per_pe
+                gr[24] = s1c[155];                       // mv s1c→gr
+                gr[3]  = MM_NEXT_INTV;                   // si (constexpr)
+                //NOP
+                gr[4]  = MM_SWAP;                        // si (constexpr)
+                gr[6]  = gr[24] + 3;                     // addi
+                //NOP
+                gr[6]  = (unsigned)gr[6] >> 2;           // shifti_r (div by 4)
             }
         } else if (magic_id == 28) {
             // Diag merge split + tile load.
