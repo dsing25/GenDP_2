@@ -2301,9 +2301,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 for (int pe = 0; pe < 4; pe++) {
                     int pe_spm = pe * SPM_BANK_GROUP_SIZE;
                     int pe_start = pe * n_a_per_pe;
-                    int pe_remain = std::min(n_a_per_pe, n_a - pe_start);
-                    int remaining = std::max(0, pe_remain - cursor);
-                    tile_ns[pe] = std::min(SORT_TILE, remaining);
+                    int pe_remain = n_a_per_pe;
+                    if (pe_remain > n_a - pe_start) pe_remain = n_a - pe_start;
+                    int remaining = pe_remain - cursor;
+                    if (remaining < 0) remaining = 0;
+                    tile_ns[pe] = remaining;
+                    if (tile_ns[pe] > SORT_TILE) tile_ns[pe] = SORT_TILE;
                     mm_srcs[pe] = gr[3] + (pe_start + cursor) * 2;
                     spm_dsts[pe] = pe_spm + tile_buf_off;
                     spm[pe_spm + SORT_META + 32] = tile_ns[pe];
@@ -2322,7 +2325,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     for (int pe = 0; pe < 4; pe++) {
                         int words = tile_ns[pe] * 2;
                         if (j >= words) continue;
-                        int n = std::min(8, words - j);
+                        int n = words - j; if (n > 8) n = 8;
                         mvdq_copy(&spm[spm_dsts[pe] + j],
                                   &mm[mm_srcs[pe] + j], n);
                     }
@@ -2693,9 +2696,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     // one step per PE per round with waitLSQ between
                     int bs_lo[3], bs_hi[3], bs_target[3];
                     for (int p = 0; p < 3; p++) {
-                        bs_target[p] = std::min((p+1) * nape, n_total);
-                        bs_lo[p] = std::max(0, bs_target[p] - n_tail);
-                        bs_hi[p] = std::min(n_phase1, bs_target[p]);
+                        bs_target[p] = (p+1) * nape;
+                        if (bs_target[p] > n_total) bs_target[p] = n_total;
+                        bs_lo[p] = bs_target[p] - n_tail;
+                        if (bs_lo[p] < 0) bs_lo[p] = 0;
+                        bs_hi[p] = bs_target[p];
+                        if (bs_hi[p] > n_phase1) bs_hi[p] = n_phase1;
                     }
                     bool any_active = true;
                     while (any_active) {
@@ -2736,23 +2742,27 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     int a_srcs[4], b_srcs[4];
                     for (int pe = 0; pe < 4; pe++) {
                         int pa_s = a_sp[pe];
-                        int pa_n = std::max(0, a_sp[pe+1] - pa_s);
+                        int pa_n = a_sp[pe+1] - pa_s;
+                        if (pa_n < 0) pa_n = 0;
                         int pb_s = b_sp[pe];
-                        int pb_n = std::max(0, b_sp[pe+1] - pb_s);
+                        int pb_n = b_sp[pe+1] - pb_s;
+                        if (pb_n < 0) pb_n = 0;
                         int pt = pa_n + pb_n;
                         if (pt > max_pt) max_pt = pt;
                         s1c[pe]     = pt;
                         s1c[4+pe]   = 0;
-                        int a0 = std::min(MERGE_TILE, pa_n);
-                        int a1 = std::min(MERGE_TILE,
-                            std::max(0, pa_n - a0));
-                        int b0 = std::min(MERGE_TILE, pb_n);
-                        int b1 = std::min(MERGE_TILE,
-                            std::max(0, pb_n - b0));
+                        int a0 = pa_n; if (a0 > MERGE_TILE) a0 = MERGE_TILE;
+                        int a1r = pa_n - a0; if (a1r < 0) a1r = 0;
+                        int a1 = a1r; if (a1 > MERGE_TILE) a1 = MERGE_TILE;
+                        int b0 = pb_n; if (b0 > MERGE_TILE) b0 = MERGE_TILE;
+                        int b1r = pb_n - b0; if (b1r < 0) b1r = 0;
+                        int b1 = b1r; if (b1 > MERGE_TILE) b1 = MERGE_TILE;
                         s1c[8+pe]  = abase + (pa_s + a0 + a1) * 2;
-                        s1c[12+pe] = std::max(0, pa_n - a0 - a1);
+                        int rem_a = pa_n - a0 - a1; if (rem_a < 0) rem_a = 0;
+                        s1c[12+pe] = rem_a;
                         s1c[16+pe] = bbase + (pb_s + b0 + b1) * 2;
-                        s1c[20+pe] = std::max(0, pb_n - b0 - b1);
+                        int rem_b = pb_n - b0 - b1; if (rem_b < 0) rem_b = 0;
+                        s1c[20+pe] = rem_b;
                         int pe_spm = pe * SPM_BANK_GROUP_SIZE;
                         int *spm2 = &SPM_unit->buffer[pe_spm];
                         a0s[pe]=a0; a1s[pe]=a1; b0s[pe]=b0; b1s[pe]=b1;
@@ -2999,8 +3009,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int ii0[4], ii1[4], i_srcs[4];
                 for (int pe = 0; pe < 4; pe++) {
                     int d_n = splits[pe+1] - splits[pe];
-                    int iv_s = std::min(intv_lo[pe], intv_hi[pe]);
-                    int iv_e = std::max(intv_lo[pe], intv_hi[pe]);
+                    int iv_s = intv_lo[pe];
+                    if (iv_s > intv_hi[pe]) iv_s = intv_hi[pe];
+                    int iv_e = intv_lo[pe];
+                    if (iv_e < intv_hi[pe]) iv_e = intv_hi[pe];
                     int iv_n = iv_e - iv_s;
                     int total = d_n + iv_n;
                     if (total > max_total) max_total = total;
@@ -3230,31 +3242,44 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             + (base + cnt - 1) * 2];
                 }
                 // Gather intv from MM_DEDUP_INTV_OUT → MM_INTV
-                // Boundary merge-adjacent at PE seams using local
-                // variable instead of MM read-back (avoids MM latency).
+                // Gather intv: bulk mvdq per PE interior, scalar seam
+                // merge at PE boundaries only. PE 23 already merges
+                // adjacent intvs within each PE's output.
                 int intv_n = 0;
                 uint32_t last_intv_hi = 0;
                 for (int pe = 0; pe < 4; pe++) {
                     int base = s1c[24 + pe];
                     int cnt  = s1c[28 + pe];
-                    for (int i = 0; i < cnt; i++) {
-                        uint32_t lo = (uint32_t)mm[
-                            mm_intv_out + (base+i)*2];
-                        uint32_t hi = (uint32_t)mm[
-                            mm_intv_out + (base+i)*2+1];
-                        if (intv_n > 0 && lo <= last_intv_hi) {
-                            if (hi > last_intv_hi) {
-                                last_intv_hi = hi;
-                                mm[MM_INTV2+(intv_n-1)*2+1] =
-                                    (int)hi;
+                    if (cnt <= 0) continue;
+                    int skip = 0;
+                    // Boundary merge: check first intv vs last output
+                    if (intv_n > 0) {
+                        uint32_t lo0 = (uint32_t)mm[
+                            mm_intv_out + base*2];
+                        uint32_t hi0 = (uint32_t)mm[
+                            mm_intv_out + base*2 + 1];
+                        if (lo0 <= last_intv_hi) {
+                            // Merge into last output
+                            if (hi0 > last_intv_hi) {
+                                last_intv_hi = hi0;
+                                mm[MM_INTV2+(intv_n-1)*2+1]
+                                    = (int)hi0;
                             }
-                        } else {
-                            mm[MM_INTV2 + intv_n*2] = (int)lo;
-                            mm[MM_INTV2 + intv_n*2+1] = (int)hi;
-                            last_intv_hi = hi;
-                            intv_n++;
+                            skip = 1;
                         }
                     }
+                    // Bulk mvdq copy PE interior
+                    int src = mm_intv_out + (base + skip) * 2;
+                    int dst = MM_INTV2 + intv_n * 2;
+                    int words = (cnt - skip) * 2;
+                    for (int j = 0; j < words; j += 8) {
+                        int c = words - j; if (c > 8) c = 8;
+                        mvdq_copy(&mm[dst + j], &mm[src + j], c);
+                    }
+                    intv_n += cnt - skip;
+                    if (cnt > skip)
+                        last_intv_hi = (uint32_t)mm[mm_intv_out
+                            + (base + cnt - 1) * 2 + 1];
                 }
 
                 // Clear sort/dedup SPM region per PE

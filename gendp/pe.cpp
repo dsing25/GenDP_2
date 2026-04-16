@@ -1347,26 +1347,33 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //NOP
         m13_done: ;
         } else if (magic_id == 20) {
-            // Sort bin count: two-element mvd loads for bandwidth.
+            // Sort bin count: contiguous (vd,k,vd,k) mvd loads.
+            // Each element is 2 words (vd,k); load 4 contiguous words
+            // per iteration to process 2 elements.
             int tile_buf_off = (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
             int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
             int tile_n = spm[SORT_META + 32];
             int shift  = spm[SORT_META + 33];
             int *tile   = &spm[tile_buf_off];
             int *counts = &spm[SORT_META];
-            // Process two elements per iteration (mvd: 4 words)
+            // Process two elements: load contiguous (vd0,k0,vd1,k1)
             int i = 0;
             for (; i + 1 < tile_n; i += 2) {
-                int vd0 = tile[i * 2];       // mvd: load elem 0
-                int vd1 = tile[(i+1) * 2];   // mvd: load elem 1
+                // mvd: 4 contiguous words (vd0, k0, vd1, k1)
+                int vd0 = tile[i * 2];
+                int k0  = tile[i * 2 + 1];   // loaded but unused
+                int vd1 = tile[i * 2 + 2];
+                int k1  = tile[i * 2 + 3];   // loaded but unused
+                (void)k0; (void)k1;
                 int bin0 = ((uint32_t)vd0 >> shift) & 0xF;
                 int bin1 = ((uint32_t)vd1 >> shift) & 0xF;
                 counts[bin0]++;
                 counts[bin1]++;
             }
-            // Peel: handle odd last element
+            // Peel: odd last element
             if (i < tile_n) {
-                int bin = ((uint32_t)tile[i * 2] >> shift) & 0xF;
+                int vd = tile[i * 2];
+                int bin = ((uint32_t)vd >> shift) & 0xF;
                 counts[bin]++;
             }
         } else if (magic_id == 21) {
