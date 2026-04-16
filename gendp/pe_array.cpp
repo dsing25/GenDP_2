@@ -901,10 +901,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 main_addressing_register[28] = 0;
             }
             main_addressing_register[15] = gwfa_get_n_a();
-        } else if (magic_id == 2) {
-            // GWFA extend (tiled): one step at distance gr[12].
-            int done = gwfa_extend_step_tiled(main_addressing_register[12], SPM_unit->buffer);
-            if (done) write_spm_magic(32767, 1);
         } else if (magic_id == 3) {
             // GWFA print score, zero va_regfile
             printf("qqq %d qqq\n", gwfa_get_score());
@@ -1434,11 +1430,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             mm[gr[7]] = gr[3];                 // mv MM ← gr (fifo_vd)
             mm[gr[7] + 1] = gr[4];             // mv MM ← gr (fifo_k)
             gr[24] = gr[24] + 1;               // addi (s_B_n++)
-        } else if (magic_id == 10) {
-            // GWFA phase 2: cross-node propagation, update n_a in gr[15]
-            int done = gwfa_phase2(main_addressing_register[12]);
-            main_addressing_register[15] = gwfa_get_n_a();
-            if (done) write_spm_magic(32767, 1);
         } else if (magic_id == 14) {
             // Phase 2 tile load: pop A queue (MM) → SPM
             // ISA-like: all state in gr[]/spm[]/s1c[]/mm[]/s2[]
@@ -2522,7 +2513,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             {
                 int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
                 int *mm = gwfa_get_mm();
-                int bin_reg_off = (magic_mask & 1) ? SORT_BIN_REG1 : SORT_BIN_REG0;
+                int bin_reg_off = (magic_mask & 1) ? SORT_BIN_SPM1 : SORT_BIN_SPM0;
                 for (int pe = 0; pe < 4; pe++) {
                     int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
                     int *tbc = &spm[SORT_META + 16];  // tile_bin_counts[16]
@@ -2533,7 +2524,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                                        + s1c[80 + pe * SORT_RADIX_BINS + b];
                         int mm_dst = gr[4] + diag_off * 2;
                         int spm_src = pe * SPM_BANK_GROUP_SIZE + bin_reg_off
-                                      + b * SORT_BIN_REGION_SIZE * 2;
+                                      + b * SORT_BIN_SPMION_SIZE * 2;
                         for (int j = 0; j < n * 2; j++)
                             mm[mm_dst + j] = SPM_unit->buffer[spm_src + j];
                         s1c[80 + pe * SORT_RADIX_BINS + b] += n;
@@ -2643,41 +2634,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         }
                         s1c[163+b] = lo; // intv_lo[pe+1]
                     }
-                }
-            }
-        } else if (magic_id == 26) {
-            // New+old intv merge split + load (pointer-swap version).
-            {
-                auto &gr = main_addressing_register;
-                int *mm = gwfa_get_mm();
-                constexpr int DIAG_CAP_V  = (16 << 20);
-                constexpr int INTV_CAP_V  = (1 << 21);
-                constexpr int MM_INTV     = DIAG_CAP_V * 6;
-                constexpr int MM_NEXT_INTV = MM_INTV + INTV_CAP_V * 2;
-                constexpr int MM_SWAP     = MM_NEXT_INTV + INTV_CAP_V * 2;
-                int intv_n  = s1c[146];
-                int n_new   = s1c[154];
-                int n_total = n_new + intv_n;
-                int active_intv = s1c[152];
-                if (n_new <= 0 || intv_n <= 0) {
-                    if (n_new > 0)
-                        s1c[152] = MM_SWAP; // new intv already at MM_SWAP
-                    // else: active_intv stays
-                    s1c[148] = n_total;
-                    s1c[149] = -1;
-                    gr[6] = 0;
-                } else {
-                    // Merge: new is at MM_SWAP, old is at active_intv
-                    int out_buf = (active_intv == MM_INTV) ? MM_NEXT_INTV
-                                                           : MM_INTV;
-                    merge_split_and_load(mm, SPM_unit->buffer,
-                        SPM_BANK_GROUP_SIZE, s1c, gr,
-                        MM_SWAP, n_new,
-                        active_intv, intv_n,
-                        out_buf);
-                    s1c[152] = out_buf;
-                    s1c[148] = n_total;
-                    s1c[149] = 0;
                 }
             }
         } else if (magic_id == 39) {

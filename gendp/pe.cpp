@@ -1360,10 +1360,10 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 counts[bin]++;
             }
         } else if (magic_id == 21) {
-            // Sort scatter: scatter tile elements into BIN_REGIONS; write tile_bin_counts.
-            // mask bit 0 = which TILE_BUF / BIN_REG (0=ping, 1=pong)
+            // Sort scatter: scatter tile elements into BIN_SPMIONS; write tile_bin_counts.
+            // mask bit 0 = which TILE_BUF / BIN_SPM (0=ping, 1=pong)
             int tile_buf_off = (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
-            int bin_reg_off  = (magic_mask & 1) ? SORT_BIN_REG1  : SORT_BIN_REG0;
+            int bin_reg_off  = (magic_mask & 1) ? SORT_BIN_SPM1  : SORT_BIN_SPM0;
             int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
             int tile_n = spm[SORT_META + 32];
             int shift  = spm[SORT_META + 33];
@@ -1375,7 +1375,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 int vd  = tile[i * 2];
                 int k   = tile[i * 2 + 1];
                 int bin = ((uint32_t)vd >> shift) & 0xF;
-                int off = bin * SORT_BIN_REGION_SIZE * 2 + bin_cursors[bin] * 2;
+                int off = bin * SORT_BIN_SPMION_SIZE * 2 + bin_cursors[bin] * 2;
                 spm[bin_reg_off + off]     = vd;
                 spm[bin_reg_off + off + 1] = k;
                 bin_cursors[bin]++;
