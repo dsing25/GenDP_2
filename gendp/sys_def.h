@@ -211,21 +211,21 @@ inline int get_base_opcode(int opcode) {
 // GWFA dedup/sort phase SPM layout (per-PE, reuses stale extend buffers at base 0)
 // Sequences start at per-PE local address GWFA_Q_START/4 = 6016; must stay below.
 #define SORT_TILE            80   // diags per PE per tile (multiple of 8 for mvdq)
-#define SORT_BIN_SPMION_SIZE 80   // max diags per bin per tile (>= SORT_TILE)
+#define SORT_BIN_REGION_SIZE 80   // max diags per bin per tile (>= SORT_TILE)
 #define SORT_RADIX_BINS      16   // 2^4 bins per radix pass
 #define SORT_RADIX_PASSES    8    // 8 passes * 4 bits = 32-bit key
 // SPM word offsets (per PE, relative to GWFA_DEDUP_BASE = 0):
 //   [0..159]    TILE_BUF0  ping tile (SORT_TILE*2 words)
 //   [160..319]  TILE_BUF1  pong tile
-//   [320..2879] BIN_SPM0   ping scatter bins (SORT_RADIX_BINS * SORT_BIN_SPMION_SIZE * 2)
+//   [320..2879] BIN_SPM0   ping scatter bins (SORT_RADIX_BINS * SORT_BIN_REGION_SIZE * 2)
 //   [2880..5439] BIN_SPM1  pong scatter bins
 //   [5440..5473] SORT_META  metadata (bin_counts[16], tile_bin_counts[16], tile_n, shift)
 //   Total: 5474 < GWFA_Q_START/4 = 6016 ✓
 #define SORT_TILE_BUF0  0
 #define SORT_TILE_BUF1  (SORT_TILE * 2)
 #define SORT_BIN_SPM0   (SORT_TILE * 4)
-#define SORT_BIN_SPM1   (SORT_TILE * 4 + SORT_RADIX_BINS * SORT_BIN_SPMION_SIZE * 2)
-#define SORT_META       (SORT_TILE * 4 + 2 * SORT_RADIX_BINS * SORT_BIN_SPMION_SIZE * 2)
+#define SORT_BIN_SPM1   (SORT_TILE * 4 + SORT_RADIX_BINS * SORT_BIN_REGION_SIZE * 2)
+#define SORT_META       (SORT_TILE * 4 + 2 * SORT_RADIX_BINS * SORT_BIN_REGION_SIZE * 2)
 // SORT_META sub-offsets: [0..15]=bin_counts (accumulated), [16..31]=tile_bin_counts (per-tile),
 //                        [32]=tile_n, [33]=shift
 

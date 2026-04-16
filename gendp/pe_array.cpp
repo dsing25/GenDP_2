@@ -2463,52 +2463,79 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
             }
         } else if (magic_id == 24) {
-            // Sort scatter tile load: MM → SPM TILE_BUF (same as magic 18, no bin_count reset).
-            // gr[1]=pass, gr[2]=cursor, gr[3]=src MM base, gr[24]=n_a.
-            // mask bit 0 = ping/pong. Advances gr[2] by SORT_TILE.
+            // Sort scatter tile load: MM → SPM TILE_BUF.
+            // Interleaved mvdq round-robin across PEs (like magic 34).
             {
                 int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
                 int *mm = gwfa_get_mm();
-                int tile_buf_off = (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
+                int *spm = SPM_unit->buffer;
+                int tile_buf_off = (magic_mask & 1)
+                    ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
                 int n_a = gr[24];
                 int cursor = gr[2];
                 int shift = gr[1] * 4;
                 int n_a_per_pe = (n_a + 3) / 4;
+                // Phase 1: compute tile sizes and write metadata
+                int tile_ns[4], mm_srcs[4], spm_dsts[4];
+                int max_words = 0;
                 for (int pe = 0; pe < 4; pe++) {
+                    int pe_spm = pe * SPM_BANK_GROUP_SIZE;
                     int pe_start = pe * n_a_per_pe;
-                    int pe_remain = std::min(n_a_per_pe, n_a - pe_start);
-                    int remaining = std::max(0, pe_remain - cursor);
-                    int tile_n = std::min(SORT_TILE, remaining);
-                    int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
-                    int mm_src = gr[3] + (pe_start + cursor) * 2;
-                    for (int j = 0; j < tile_n * 2; j++)
-                        spm[tile_buf_off + j] = mm[mm_src + j];
-                    spm[SORT_META + 32] = tile_n;
-                    spm[SORT_META + 33] = shift;
+                    int pe_remain = n_a_per_pe;
+                    if (pe_remain > n_a - pe_start)
+                        pe_remain = n_a - pe_start;
+                    int remaining = pe_remain - cursor;
+                    if (remaining < 0) remaining = 0;
+                    tile_ns[pe] = (remaining < SORT_TILE)
+                        ? remaining : SORT_TILE;
+                    mm_srcs[pe] = gr[3] + (pe_start + cursor) * 2;
+                    spm_dsts[pe] = pe_spm + tile_buf_off;
+                    spm[pe_spm + SORT_META + 32] = tile_ns[pe];
+                    spm[pe_spm + SORT_META + 33] = shift;
+                    int w = tile_ns[pe] * 2;
+                    if (w > max_words) max_words = w;
+                }
+                // Phase 2: interleaved mvdq (round-robin across PEs)
+                for (int j = 0; j < max_words; j += 8) {
+                    for (int pe = 0; pe < 4; pe++) {
+                        int words = tile_ns[pe] * 2;
+                        if (j >= words) continue;
+                        int n = words - j;
+                        if (n > 8) n = 8;
+                        mvdq_copy(&spm[spm_dsts[pe] + j],
+                                  &mm[mm_srcs[pe] + j], n);
+                    }
                 }
                 gr[2] = cursor + SORT_TILE;
             }
         } else if (magic_id == 25) {
             // Sort scatter writeback: SPM BIN_REGIONS → MM dst.
-            // gr[4]=dst MM base, s1c[0..15]=prefix sums, s1c[16..79]=pe_start_in_bin,
-            // s1c[80..143]=tile_cumulative (updated here). mask bit 0 = which BIN_REG.
+            // PEs inner for bank conflict avoidance, mvdq per bin.
             {
                 int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
                 int *mm = gwfa_get_mm();
-                int bin_reg_off = (magic_mask & 1) ? SORT_BIN_SPM1 : SORT_BIN_SPM0;
-                for (int pe = 0; pe < 4; pe++) {
-                    int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
-                    int *tbc = &spm[SORT_META + 16];  // tile_bin_counts[16]
-                    for (int b = 0; b < SORT_RADIX_BINS; b++) {
-                        int n = tbc[b];
+                int *spm = SPM_unit->buffer;
+                int bin_spm_off = (magic_mask & 1)
+                    ? SORT_BIN_SPM1 : SORT_BIN_SPM0;
+                // Bins outer, PEs inner (round-robin bank access)
+                for (int b = 0; b < SORT_RADIX_BINS; b++) {
+                    for (int pe = 0; pe < 4; pe++) {
+                        int pe_spm = pe * SPM_BANK_GROUP_SIZE;
+                        int n = spm[pe_spm + SORT_META + 16 + b];
                         if (n == 0) continue;
-                        int diag_off = s1c[b] + s1c[16 + pe * SORT_RADIX_BINS + b]
-                                       + s1c[80 + pe * SORT_RADIX_BINS + b];
+                        int diag_off = s1c[b]
+                            + s1c[16 + pe * SORT_RADIX_BINS + b]
+                            + s1c[80 + pe * SORT_RADIX_BINS + b];
                         int mm_dst = gr[4] + diag_off * 2;
-                        int spm_src = pe * SPM_BANK_GROUP_SIZE + bin_reg_off
-                                      + b * SORT_BIN_SPMION_SIZE * 2;
-                        for (int j = 0; j < n * 2; j++)
-                            mm[mm_dst + j] = SPM_unit->buffer[spm_src + j];
+                        int spm_src = pe_spm + bin_spm_off
+                            + b * SORT_BIN_REGION_SIZE * 2;
+                        // mvdq writeback
+                        for (int j = 0; j < n * 2; j += 8) {
+                            int cnt = n * 2 - j;
+                            if (cnt > 8) cnt = 8;
+                            mvdq_copy(&mm[mm_dst + j],
+                                      &spm[spm_src + j], cnt);
+                        }
                         s1c[80 + pe * SORT_RADIX_BINS + b] += n;
                     }
                 }

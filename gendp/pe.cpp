@@ -1375,7 +1375,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 int vd  = tile[i * 2];
                 int k   = tile[i * 2 + 1];
                 int bin = ((uint32_t)vd >> shift) & 0xF;
-                int off = bin * SORT_BIN_SPMION_SIZE * 2 + bin_cursors[bin] * 2;
+                int off = bin * SORT_BIN_REGION_SIZE * 2 + bin_cursors[bin] * 2;
                 spm[bin_reg_off + off]     = vd;
                 spm[bin_reg_off + off + 1] = k;
                 bin_cursors[bin]++;
