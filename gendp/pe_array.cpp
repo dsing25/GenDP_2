@@ -2612,27 +2612,32 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         s1c[166+b] = best_lo; // intv_hi[pe]
                     }
                 } else {
-                    // No merge: compute boundaries via binary search
+                    // No merge: compute boundaries via fused binary search
+                    // Both hi and lo searches run in parallel per boundary
                     for (int b = 0; b < 3; b++) {
                         uint32_t vd = (uint32_t)s1c[159+b];
-                        // hi-based: first intv whose lo >= vd
-                        int lo = 0, hi = intv_n;
-                        while (lo < hi) {
-                            int mid = (lo + hi) / 2;
-                            if ((uint32_t)mm[ib+2*mid] < vd)
-                                lo = mid + 1;
-                            else hi = mid;
+                        // hi search: first intv whose .lo >= vd
+                        int h_lo = 0, h_hi = intv_n;
+                        // lo search: first intv whose .hi > vd
+                        int l_lo = 0, l_hi = intv_n;
+                        while (h_lo < h_hi || l_lo < l_hi) {
+                            if (h_lo < h_hi) {
+                                int mid = (h_lo + h_hi) / 2;
+                                uint32_t val = (uint32_t)mm[ib + 2*mid];
+                                // waitLSQ
+                                if (val < vd) h_lo = mid + 1;
+                                else h_hi = mid;
+                            }
+                            if (l_lo < l_hi) {
+                                int mid = (l_lo + l_hi) / 2;
+                                uint32_t val = (uint32_t)mm[ib + 2*mid + 1];
+                                // waitLSQ
+                                if (val <= vd) l_lo = mid + 1;
+                                else l_hi = mid;
+                            }
                         }
-                        s1c[166+b] = lo; // intv_hi[pe]
-                        // lo-based: first intv whose hi > vd
-                        lo = 0; hi = intv_n;
-                        while (lo < hi) {
-                            int mid = (lo + hi) / 2;
-                            if ((uint32_t)mm[ib+2*mid+1] <= vd)
-                                lo = mid + 1;
-                            else hi = mid;
-                        }
-                        s1c[163+b] = lo; // intv_lo[pe+1]
+                        s1c[166+b] = h_lo; // intv_hi[pe]
+                        s1c[163+b] = l_lo; // intv_lo[pe+1]
                     }
                 }
             }
@@ -2665,23 +2670,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int n_a       = s1c[148];
                 int intv_n    = s1c[146]; // old intv_n (new intv_n not known yet)
                 int diag_base = s1c[153]; // active_diag_base
-                // Check inputs sorted (no static, every call)
-                if (n_phase1 > 0 && n_phase1 < n_a) {
-                    bool p_ok = true, t_ok = true;
-                    for (int i = 1; i < n_phase1; i++)
-                        if ((uint32_t)mm[diag_base+(i-1)*2] > (uint32_t)mm[diag_base+i*2])
-                            { p_ok = false; break; }
-                    int tb = diag_base + n_phase1 * 2;
-                    int nt = n_a - n_phase1;
-                    for (int i = 1; i < nt; i++)
-                        if ((uint32_t)mm[tb+(i-1)*2] > (uint32_t)mm[tb+i*2])
-                            { t_ok = false; break; }
-#ifdef DEBUG
-                    if (!p_ok || !t_ok)
-                        fprintf(stderr, "M28 INPUTS: p=%d t=%d np1=%d na=%d\n",
-                            p_ok?1:0, t_ok?1:0, n_phase1, n_a);
-#endif
-                }
                 int n_tail = std::max(0, n_a - std::max(0, n_phase1));
                 if (n_phase1 < 0) n_phase1 = 0;
                 if (n_phase1 > n_a) n_phase1 = n_a;
@@ -2758,35 +2746,21 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int n_a = gr[24];
                 if (gr[6] != 0) {
                     s1c[153] = gr[4]; // active_diag_base = MM_SORT_BUF
-                    // Check output sorted
-                    int db = s1c[153];
-                    for (int i = 1; i < n_a; i++)
-                        if ((uint32_t)mm[db+(i-1)*2]
-                            > (uint32_t)mm[db+i*2]) {
-#ifdef DEBUG
-                            fprintf(stderr, "M36 UNSORTED[%d] np1=%d na=%d\n",
-                                i, s1c[147], n_a);
-#endif
-                            break;
-                        }
                 } else {
                     s1c[153] = gr[3]; // active_diag_base = original diag_base
                 }
-                // Compute and store diag split metadata for dedup (AC-6)
+                // Compute diag split metadata for dedup.
+                // Mid-diagonal start: use nominal splits directly.
+                // Boundary fixup happens in magic 32 finalize (max merge).
                 int db = s1c[153];
                 int nape = (n_a + 3) / 4;
-                // 5 split indices in s1c[154..158]
+                // 5 split indices in s1c[154..158]: nominal positions
                 s1c[154] = 0;
-                s1c[158] = n_a;
                 for (int pe = 1; pe < 4; pe++) {
                     int nom = pe * nape;
-                    if (nom >= n_a) { s1c[154+pe] = n_a; continue; }
-                    uint32_t prev_vd = (uint32_t)mm[db + 2*(nom-1)];
-                    int i = nom;
-                    while (i < n_a && (uint32_t)mm[db+2*i] == prev_vd)
-                        i++;
-                    s1c[154+pe] = i;
+                    s1c[154+pe] = (nom < n_a) ? nom : n_a;
                 }
+                s1c[158] = n_a;
                 // 4 boundary vd values in s1c[159..162]
                 // vd at split[1], split[2], split[3] (internal boundaries)
                 // + sentinel for split[4]=n_a (use vd at n_a-1 or max)
@@ -3023,18 +2997,37 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int mm_intv_out = gr[7];
 
                 // Gather deduped diags → diag_base
+                // Boundary max-merge: if last diag of PE n has same vd
+                // as first diag of PE n+1, keep the one with larger k.
                 int n_a_final = 0;
+                uint32_t last_vd = 0xFFFFFFFF;
                 for (int pe = 0; pe < 4; pe++) {
                     int base = s1c[16 + pe];
                     int cnt  = s1c[20 + pe];
-                    for (int j = 0; j < cnt * 2; j++)
-                        mm[diag_base + n_a_final*2 + j] =
-                            mm[mm_sort_buf + base*2 + j];
-                    n_a_final += cnt;
+                    for (int i = 0; i < cnt; i++) {
+                        uint32_t vd = (uint32_t)mm[
+                            mm_sort_buf + (base+i)*2];
+                        int k = mm[mm_sort_buf + (base+i)*2 + 1];
+                        if (n_a_final > 0 && vd == last_vd) {
+                            // Same vd at PE boundary: keep max k
+                            int prev_k = mm[
+                                diag_base + (n_a_final-1)*2 + 1];
+                            if (k > prev_k)
+                                mm[diag_base + (n_a_final-1)*2+1]
+                                    = k;
+                        } else {
+                            mm[diag_base + n_a_final*2] = (int)vd;
+                            mm[diag_base + n_a_final*2+1] = k;
+                            last_vd = vd;
+                            n_a_final++;
+                        }
+                    }
                 }
-                // Gather merged intv from MM_DEDUP_INTV_OUT → MM_INTV
-                // with boundary merge-adjacent at PE seams
+                // Gather intv from MM_DEDUP_INTV_OUT → MM_INTV
+                // Boundary merge-adjacent at PE seams using local
+                // variable instead of MM read-back (avoids MM latency).
                 int intv_n = 0;
+                uint32_t last_intv_hi = 0;
                 for (int pe = 0; pe < 4; pe++) {
                     int base = s1c[24 + pe];
                     int cnt  = s1c[28 + pe];
@@ -3043,16 +3036,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             mm_intv_out + (base+i)*2];
                         uint32_t hi = (uint32_t)mm[
                             mm_intv_out + (base+i)*2+1];
-                        if (intv_n > 0
-                            && lo <= (uint32_t)mm[
-                                MM_INTV2+(intv_n-1)*2+1]) {
-                            if (hi > (uint32_t)mm[
-                                    MM_INTV2+(intv_n-1)*2+1])
+                        if (intv_n > 0 && lo <= last_intv_hi) {
+                            if (hi > last_intv_hi) {
+                                last_intv_hi = hi;
                                 mm[MM_INTV2+(intv_n-1)*2+1] =
                                     (int)hi;
+                            }
                         } else {
                             mm[MM_INTV2 + intv_n*2] = (int)lo;
                             mm[MM_INTV2 + intv_n*2+1] = (int)hi;
+                            last_intv_hi = hi;
                             intv_n++;
                         }
                     }
