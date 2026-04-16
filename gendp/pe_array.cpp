@@ -462,12 +462,12 @@ inline int pe_array_read_gr(int *gr, int src, int idx) {
     return val;
 }
 
-// Load one batch of fin0 diags into FIN_0_TILE (ISA-style).
-// Single-pass assign+copy, then batched S2 and MM loads.
-// Multi-pass state in s1c[22]=n_done, s1c[24..31]=diag_done bitmap.
+// Load one batch of fin0 diags into FIN_0_TILE.
+// Two-loop design: round-robin common case + per-PE fallback.
+// Multi-pass state: s1c[22]=cursor, s1c[23]=arc_data_ptr.
 // s1c[0..3]=nd, s1c[4..7]=na, s1c[8..11]=pe_spm_base, s1c[12..15]=pai
-// Returns true if more passes needed.
-bool pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
+// Sets gr[2]=1 if more passes needed, 0 if done.
+void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
     int *spm = SPM_unit->buffer;
     constexpr int ARC_META_BASE = 544;
@@ -476,118 +476,92 @@ bool pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     constexpr int INTV_CAP_F = (1 << 21);
     constexpr int HA_CAP_F   = (4 << 20);
     constexpr int ha_off = DIAG_CAP_F * 8 + INTV_CAP_F * 6;
-    int n_done = s1c[22];
+    int cursor = s1c[22];
 
-    // === Pass 1: Greedy assign + copy S1C → SPM ===
-    // Iterates all fin0 diags. For each unprocessed diag, finds
-    // best PE (least arcs with capacity), copies arc_meta, arcs
-    // (pvw,ow only), and diag data from S1C to that PE's FIN0 tile.
-    // ts_off and HA slots are filled by Passes 2 and 3.
+    // === Pass 1: Round-robin + fallback assignment ===
+    // Common case: assign diags sequentially to PEs in round-robin.
+    // Fallback: if round-robin PE is full, fill remaining PEs one by one.
+    // No bitmap needed — unloaded diags are simply cursor..total_fin0-1.
     for (int pe = 0; pe < 4; pe++) {
-        s1c[pe] = 0;                                     // si: nd=0
-        s1c[4 + pe] = 0;                                // si: na=0
-        s1c[8 + pe] = pe * SPM_BANK_GROUP_SIZE + fin0_base; // si
+        s1c[pe] = 0;                                     // nd=0
+        s1c[4 + pe] = 0;                                // na=0
+        s1c[8 + pe] = pe * SPM_BANK_GROUP_SIZE + fin0_base;
     }
-    // Arc data read pointer (advances linearly through S1C)
-    gr[11] = s1c[21];                                     // mv: total_diags
-    //NOP
-    gr[11] = gr[11] + gr[11];                            // add: 2*total_diags
-    //NOP
-    gr[11] = gr[11] + ARC_META_BASE;                     // addi: arc_data_start
-    gr[2] = total_fin0;                                  // mv
-    gr[14] = 0;                                          // si: di=0
-    //NOP
-f0b_p1:
-    if (gr[14] >= gr[2]) goto f0b_p1_done;               // bge
-    //NOP
-    // Read nv (always, to advance arc_data_ptr)
-    gr[9] = gr[14] + gr[14];                             // add: 2*di
-    //NOP
-    gr[10] = s1c[ARC_META_BASE + gr[9] + 1];            // mv: hi
-    gr[1] = s1c[ARC_META_BASE + gr[9]];                 // mv: lo
-    //NOP
-    gr[10] = gr[10] - gr[1];                             // sub: nv
-    // Check done bitmap
-    gr[7] = gr[14] >> 5;                                 // shifti_r
-    gr[8] = gr[14] & 31;                                 // andi
-    //NOP
-    gr[7] = s1c[24 + gr[7]];                            // mv: word
-    //NOP
-    gr[7] = (unsigned)gr[7] >> gr[8];                    // shift_r
-    gr[7] = gr[7] & 1;                                  // andi
-    //NOP
-    if (gr[7] != 0) goto f0b_p1_advance;                // bne: done
-    //NOP
-    // Find best PE (least arcs, has capacity)
-    gr[3] = -1;                                          // si: best=-1
-    gr[4] = 0x7FFFFFFF;                                  // si: best_na
-    for (int pe = 0; pe < 4; pe++) {
-        gr[7] = s1c[pe];                                 // mv: nd[pe]
-        gr[8] = s1c[4 + pe];                             // mv: na[pe]
-        //NOP
-        if (gr[7] >= FIN0_N_MAX_DIAGS) continue;         // bge: full
-        gr[7] = gr[8] + gr[10];                          // add: na+nv
-        //NOP
-        if (gr[7] > FIN0_N_MAX_ARCS) continue;           // bgt: overflow
-        if (gr[8] >= gr[4]) continue;                    // bge: not better
-        gr[3] = pe;                                      // mv: best=pe
-        gr[4] = gr[8];                                   // mv: best_na
+    // Arc data pointer: resume from saved position or compute initial
+    if (cursor == 0) {
+        gr[11] = s1c[21] * 2 + ARC_META_BASE;           // arc_data_start
+    } else {
+        gr[11] = s1c[23];                                // resume arc_ptr
     }
-    //NOP
-    if (gr[3] < 0) goto f0b_p1_advance;                 // blt: no fit
-    //NOP
-    {
-        // gr[3]=best, gr[10]=nv, gr[9]=2*di, gr[11]=arc_data_ptr
-        int best = gr[3];
-        gr[5] = s1c[8 + best];                          // mv: pe_spm
-        gr[6] = s1c[best];                               // mv: nd
-        gr[7] = gr[6] + gr[6];                          // add: 2*nd
-        //NOP
+
+    // Helper: assign one diag at cursor to target PE
+    // Copies diag data, arc metadata, and arc (pvw,ow) to SPM
+    auto assign_diag = [&](int di, int pe_idx) {
+        gr[5] = s1c[8 + pe_idx];                         // pe_spm
+        gr[6] = s1c[pe_idx];                              // nd
+        gr[7] = gr[6] + gr[6];                           // 2*nd
+        gr[9] = di + di;                                  // 2*di
         // Arc metadata → SPM
-        spm[gr[5]+FIN0_ARCMETA+gr[7]]   = s1c[ARC_META_BASE+gr[9]];     // mvd
-        spm[gr[5]+FIN0_ARCMETA+gr[7]+1] = s1c[ARC_META_BASE+gr[9]+1];   // mvd
+        spm[gr[5]+FIN0_ARCMETA+gr[7]]   = s1c[ARC_META_BASE+gr[9]];
+        spm[gr[5]+FIN0_ARCMETA+gr[7]+1] = s1c[ARC_META_BASE+gr[9]+1];
         // Diag data → SPM
-        spm[gr[5]+FIN0_DIAGS+gr[7]]   = s1c[32+gr[9]];                  // mvd
-        spm[gr[5]+FIN0_DIAGS+gr[7]+1] = s1c[32+gr[9]+1];                // mvd
-        // Arcs (pvw, ow) → SPM; ts_off slot left for Pass 2
-        gr[8] = s1c[4 + best];                          // mv: na
-        gr[1] = gr[11];                                  // mv: arc_data_ptr
-        gr[4] = 0;                                       // si: a=0
-        //NOP
-    f0b_p1_arcs:
-        if (gr[4] >= gr[10]) goto f0b_p1_arcs_done;     // bge
-        //NOP
-        gr[7] = gr[8] + gr[8];                          // add: 2*na
-        gr[7] = gr[7] + gr[8];                          // add: 3*na
-        //NOP
-        gr[7] = gr[5] + FIN0_ARCS + gr[7];             // add: spm dst
-        //NOP
-        spm[gr[7]]   = s1c[gr[1]];                      // mv: pvw
-        spm[gr[7]+1] = s1c[gr[1]+1];                    // mv: ow
-        gr[8] = gr[8] + 1;                              // addi: na++
-        gr[1] = gr[1] + 2;                              // addi: ptr+=2
-        gr[4] = gr[4] + 1;                              // addi: a++
-        goto f0b_p1_arcs;
-    f0b_p1_arcs_done:
-        s1c[4 + best] = gr[8];                          // mv: na
-        s1c[best] = gr[6] + 1;                          // addi: nd++
-        // Mark done bitmap
-        gr[7] = gr[14] >> 5;                            // shifti_r
-        gr[8] = gr[14] & 31;                            // andi
-        //NOP
-        gr[9] = 1 << gr[8];                             // shift_l
-        //NOP
-        s1c[24 + gr[7]] = s1c[24 + gr[7]] | gr[9];     // or
-        n_done++;
+        spm[gr[5]+FIN0_DIAGS+gr[7]]   = s1c[32+gr[9]];
+        spm[gr[5]+FIN0_DIAGS+gr[7]+1] = s1c[32+gr[9]+1];
+        // Arc count
+        gr[10] = s1c[ARC_META_BASE+gr[9]+1] - s1c[ARC_META_BASE+gr[9]];
+        // Copy arcs (pvw, ow) → SPM
+        gr[8] = s1c[4 + pe_idx];                         // na
+        gr[1] = gr[11];                                   // arc_data_ptr
+        for (int a = 0; a < gr[10]; a++) {
+            int dst_off = (gr[8] + a) * 3;
+            spm[gr[5] + FIN0_ARCS + dst_off]     = s1c[gr[1] + a*2];
+            spm[gr[5] + FIN0_ARCS + dst_off + 1] = s1c[gr[1] + a*2 + 1];
+        }
+        s1c[4 + pe_idx] = gr[8] + gr[10];               // na += nv
+        s1c[pe_idx] = gr[6] + 1;                         // nd++
+        gr[11] = gr[11] + gr[10] * 2;                    // arc_ptr += 2*nv
+    };
+
+    // Round-robin common-case loop: one diag per PE cycling 0,1,2,3
+    {
+        int pe_rr = cursor % 4;
+    f0b_rr:
+        if (cursor >= total_fin0) goto f0b_rr_done;
+        // Read arc count for capacity check
+        gr[9] = cursor + cursor;
+        gr[10] = s1c[ARC_META_BASE + gr[9]+1] - s1c[ARC_META_BASE + gr[9]];
+        // Check PE capacity
+        if (s1c[pe_rr] >= FIN0_N_MAX_DIAGS) goto f0b_rr_break;
+        gr[7] = s1c[4 + pe_rr] + gr[10];
+        if (gr[7] > FIN0_N_MAX_ARCS) goto f0b_rr_break;
+        assign_diag(cursor, pe_rr);
+        cursor++;
+        pe_rr = (pe_rr + 1) & 3;
+        goto f0b_rr;
+    f0b_rr_break:
+        (void)0;
+    f0b_rr_done:
+        (void)0;
     }
-f0b_p1_advance:
-    gr[7] = gr[10] + gr[10];                            // add: 2*nv
-    //NOP
-    gr[11] = gr[11] + gr[7];                            // add: arc_data_ptr
-    gr[14] = gr[14] + 1;                                // addi: di++
-    goto f0b_p1;
-f0b_p1_done:
-    s1c[22] = n_done;                                   // mv: update
+
+    // Per-PE fallback loop: fill remaining PEs sequentially
+    for (int pe = 0; pe < 4 && cursor < total_fin0; pe++) {
+    f0b_mv:
+        if (cursor >= total_fin0) goto f0b_mv_next;
+        gr[9] = cursor + cursor;
+        gr[10] = s1c[ARC_META_BASE + gr[9]+1] - s1c[ARC_META_BASE + gr[9]];
+        if (s1c[pe] >= FIN0_N_MAX_DIAGS) goto f0b_mv_next;
+        gr[7] = s1c[4 + pe] + gr[10];
+        if (gr[7] > FIN0_N_MAX_ARCS) goto f0b_mv_next;
+        assign_diag(cursor, pe);
+        cursor++;
+        goto f0b_mv;
+    f0b_mv_next:
+        (void)0;
+    }
+
+    s1c[22] = cursor;
+    s1c[23] = gr[11]; // save arc_ptr for next pass
 
     // === Pass 2: Batch S2 loads for ts_off (PE-inner) ===
     {
@@ -716,7 +690,7 @@ f0b_p1_done:
         spm[gr[7] + FIN0_META + 4] = 0;                  // si
     }
 
-    return n_done < total_fin0; // true = more passes needed
+    gr[2] = (cursor < total_fin0) ? 1 : 0;
 }
 
 int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting) {
@@ -2160,16 +2134,14 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 (void)0;
 
                 // === Section 6 (15a): Init + load first FIN0 batch ===
-                // Multi-pass state in s1c[22]=n_done, s1c[24..31]=bitmap.
+                // Multi-pass state: s1c[22]=cursor, s1c[23]=arc_ptr.
                 // gr[2] = 1 if more passes needed, 0 if done.
-                // ISA flow handles: set_PC FIN0 → spin → magic 18 → loop.
                 {
                     int fin0_base = (magic_mask & 2)
                         ? GWFA_FIN0B_BASE : GWFA_FIN0_BASE;
                     s1c[22] = 0;
-                    for (int i = 24; i < 32; i++) s1c[i] = 0;
-                    bool more = fin0_load_batch(fin0_base, magic_mask);
-                    gr[2] = more ? 1 : 0;
+                    s1c[23] = 0;
+                    fin0_load_batch(fin0_base, magic_mask);
                 }
             }
 
@@ -2184,8 +2156,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
             int fin0_base = (magic_mask & 2)
                 ? GWFA_FIN0B_BASE : GWFA_FIN0_BASE;
-            bool more = fin0_load_batch(fin0_base, magic_mask);
-            gr[2] = more ? 1 : 0;
+            fin0_load_batch(fin0_base, magic_mask);
         } else if (magic_id == 18) {
             // Magic 18: FIN0 writeback — read PE output from
             // FIN_0_TILE, write A/B queues and HA buckets to MM.

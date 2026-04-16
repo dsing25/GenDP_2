@@ -33,7 +33,7 @@ class pe_array {
         int *mm;               // Main memory (4GB block)
 
         void run(int cycle_limit, int simd, int setting, int main_instruction_setting);
-        bool fin0_load_batch(int fin0_base, int magic_mask);
+        void fin0_load_batch(int fin0_base, int magic_mask);
         void show_gr();
         void show_compute_instruction_buffer();
         void poa_show_output_buffer(int len_y, int len_x, FILE* fp);
