@@ -1383,9 +1383,12 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             }
         } else if (magic_id == 22) {
             // Merge: input-capped two-pointer merge with ping-pong tiles.
-            // Two-level loop: outer handles buffer switch (special case),
-            // inner is tight merge core with pre-computed bounds.
-            // Unified merge handles single-stream drain (BL-drain-budget).
+            // PE consumes up to MERGE_STEP inputs per call. Exits when budget
+            // reached or both streams have no available data (need reload).
+            // META: [0]=ai, [1]=bi, [4]=out_n,
+            //   [5]=a_done, [6]=b_done, [7]=a_which, [8]=b_which,
+            //   [9]=a_tile_n_buf0, [10]=a_tile_n_buf1,
+            //   [11]=b_tile_n_buf0, [12]=b_tile_n_buf1
             int out_off = (magic_mask & 1) ? MERGE_OUT1 : MERGE_OUT0;
             int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
             int ai  = spm[MERGE_META + 0];
@@ -1396,26 +1399,31 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             int b_n = spm[MERGE_META + 11 + bw];
             int ab  = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
             int bb  = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
+            int ad  = spm[MERGE_META + 5];
+            int bd  = spm[MERGE_META + 6];
             int *out = &spm[out_off];
             int oi = 0;
-            int ai0 = ai, bi0 = bi;
-            // Boundary tracking
+            int ai0 = ai, bi0 = bi; // initial cursors for input budget
+            // Boundary vd values for intv tracking (AC-7)
+            // Loaded by controller into MERGE_META[13-15]
             uint32_t bvd[3] = {(uint32_t)spm[MERGE_META+13],
                                (uint32_t)spm[MERGE_META+14],
                                (uint32_t)spm[MERGE_META+15]};
+            // Boundary positions stored at SPM[976..981], initialized to -1
+            // [976..978] = hi_pos[0..2]: first output where hi > bvd
+            // [979..981] = lo_pos[0..2]: first output where lo >= bvd
+            // [982] = cumulative output count across calls
             int cum_oi = spm[982];
-            int pe_global_base = spm[983];
-            // Outer loop: manage buffer state, budget
-        m22_outer:
-            if ((ai - ai0) + (bi - bi0) >= MERGE_STEP) goto m22_done;
-            {
-                // Try buffer switch if current tile exhausted
+            int pe_global_base = spm[983]; // global output base for this PE
+            while ((ai - ai0) + (bi - bi0) < MERGE_STEP) {
+                // Switch A buffer if current exhausted
                 if (ai >= a_n) {
                     int o = aw ^ 1;
                     int on = spm[MERGE_META + 9 + o];
                     if (on > 0) {
                         spm[MERGE_META + 9 + aw] = 0;
-                        aw = o; ab = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
+                        aw = o;
+                        ab = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
                         ai = 0; ai0 -= a_n; a_n = on;
                     }
                 }
@@ -1424,45 +1432,41 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                     int on = spm[MERGE_META + 11 + o];
                     if (on > 0) {
                         spm[MERGE_META + 11 + bw] = 0;
-                        bw = o; bb = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
+                        bw = o;
+                        bb = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
                         bi = 0; bi0 -= b_n; b_n = on;
                     }
                 }
-                // Compute available counts for tight inner loop
-                int a_avail = a_n - ai;
-                int b_avail = b_n - bi;
-                if (a_avail <= 0 && b_avail <= 0) goto m22_done;
-                int left = MERGE_STEP - ((ai - ai0) + (bi - bi0));
-                // Tight merge core: no buffer checks inside
-            m22_inner:
-                if (left <= 0) goto m22_outer;
-                if (ai >= a_n && bi >= b_n) goto m22_outer;
-                if (ai >= a_n || (bi < b_n && (uint32_t)spm[bb+bi*2]
-                                    < (uint32_t)spm[ab+ai*2])) {
-                    out[oi*2]   = spm[bb+bi*2];
-                    out[oi*2+1] = spm[bb+bi*2+1]; bi++; oi++;
-                } else {
-                    out[oi*2]   = spm[ab+ai*2];
-                    out[oi*2+1] = spm[ab+ai*2+1]; ai++; oi++;
+                bool aa = (ai < a_n), ba = (bi < b_n);
+                if (!aa && !ba) {
+                    // Force budget satisfied to exit loop cleanly
+                    ai0 = ai - MERGE_STEP; bi0 = bi;
+                    continue;
                 }
-                // Track intv boundary crossings
+                // Pick next element: drain single stream or merge two
+                if (!aa || (ba && (uint32_t)spm[bb+bi*2]
+                                < (uint32_t)spm[ab+ai*2])) {
+                    out[oi*2]=spm[bb+bi*2];
+                    out[oi*2+1]=spm[bb+bi*2+1]; bi++; oi++;
+                } else {
+                    out[oi*2]=spm[ab+ai*2];
+                    out[oi*2+1]=spm[ab+ai*2+1]; ai++; oi++;
+                }
+                // Track intv boundary crossings (AC-7)
                 int gpos = pe_global_base + cum_oi + oi - 1;
                 uint32_t out_lo = (uint32_t)out[(oi-1)*2];
                 uint32_t out_hi = (uint32_t)out[(oi-1)*2+1];
                 for (int b = 0; b < 3; b++) {
                     if (spm[976+b] < 0 && out_hi > bvd[b])
-                        spm[976+b] = gpos;
+                        spm[976+b] = gpos; // hi_pos: first hi > bvd
                     if (spm[979+b] < 0 && out_lo >= bvd[b])
-                        spm[979+b] = gpos;
+                        spm[979+b] = gpos; // lo_pos: first lo >= bvd
                 }
-                left--;
-                goto m22_inner;
             }
-        m22_done:
             spm[MERGE_META+0]=ai; spm[MERGE_META+1]=bi;
             spm[MERGE_META+4]=oi;
             spm[MERGE_META+7]=aw; spm[MERGE_META+8]=bw;
-            spm[982] = cum_oi + oi;
+            spm[982] = cum_oi + oi; // update cumulative output count
         } else if (magic_id == 23) {
             // Tiled dedup: state machine with TILE_SIZE counter,
             // dual input ping-pong, inline intv merge-adjacent.
