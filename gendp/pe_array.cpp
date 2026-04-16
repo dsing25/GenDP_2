@@ -2505,34 +2505,42 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
         } else if (magic_id == 25) {
             // Sort scatter writeback: SPM BIN_REGIONS → MM dst.
-            // PEs inner for bank conflict avoidance, mvdq per bin.
+            // Chunk outer, PE inner: true round-robin streaming.
             {
                 int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
                 int *mm = gwfa_get_mm();
                 int *spm = SPM_unit->buffer;
                 int bin_spm_off = (magic_mask & 1)
                     ? SORT_BIN_SPM1 : SORT_BIN_SPM0;
-                // Bins outer, PEs inner (round-robin bank access)
                 for (int b = 0; b < SORT_RADIX_BINS; b++) {
+                    // Pre-compute per-PE metadata for this bin
+                    int ns[4], mm_dsts[4], spm_srcs[4];
+                    int max_words = 0;
                     for (int pe = 0; pe < 4; pe++) {
                         int pe_spm = pe * SPM_BANK_GROUP_SIZE;
-                        int n = spm[pe_spm + SORT_META + 16 + b];
-                        if (n == 0) continue;
+                        ns[pe] = spm[pe_spm + SORT_META + 16 + b];
                         int diag_off = s1c[b]
                             + s1c[16 + pe * SORT_RADIX_BINS + b]
                             + s1c[80 + pe * SORT_RADIX_BINS + b];
-                        int mm_dst = gr[4] + diag_off * 2;
-                        int spm_src = pe_spm + bin_spm_off
+                        mm_dsts[pe] = gr[4] + diag_off * 2;
+                        spm_srcs[pe] = pe_spm + bin_spm_off
                             + b * SORT_BIN_REGION_SIZE * 2;
-                        // mvdq writeback
-                        for (int j = 0; j < n * 2; j += 8) {
-                            int cnt = n * 2 - j;
-                            if (cnt > 8) cnt = 8;
-                            mvdq_copy(&mm[mm_dst + j],
-                                      &spm[spm_src + j], cnt);
-                        }
-                        s1c[80 + pe * SORT_RADIX_BINS + b] += n;
+                        int w = ns[pe] * 2;
+                        if (w > max_words) max_words = w;
                     }
+                    // Interleaved mvdq: chunk outer, PE inner
+                    for (int j = 0; j < max_words; j += 8) {
+                        for (int pe = 0; pe < 4; pe++) {
+                            int words = ns[pe] * 2;
+                            if (j >= words) continue;
+                            int cnt = words - j;
+                            if (cnt > 8) cnt = 8;
+                            mvdq_copy(&mm[mm_dsts[pe] + j],
+                                      &spm[spm_srcs[pe] + j], cnt);
+                        }
+                    }
+                    for (int pe = 0; pe < 4; pe++)
+                        s1c[80 + pe * SORT_RADIX_BINS + b] += ns[pe];
                 }
             }
         } else if (magic_id == 37) {
@@ -2556,13 +2564,75 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     // else: active_intv stays (old intv already there)
                     gr[6] = 0; s1c[149] = -1;
                 } else {
-                    // Merge: output to opposite buffer from active_intv
+                    // Merge: inlined interleaved binary search + load
                     int out_buf = (active_intv == MM_INTV) ? MM_SWAP : MM_INTV;
-                    merge_split_and_load(mm, SPM_unit->buffer,
-                        SPM_BANK_GROUP_SIZE, s1c, gr,
-                        MM_NEXT_INTV, n_new,
-                        active_intv, intv_n,
-                        out_buf);
+                    int abase = MM_NEXT_INTV, bbase = active_intv;
+                    int n_total2 = n_new + intv_n;
+                    int nape = (n_total2 + 3) / 4;
+                    int a_sp[5], b_sp[5];
+                    a_sp[0] = 0; b_sp[0] = 0;
+                    a_sp[4] = n_new; b_sp[4] = intv_n;
+                    // Interleaved binary search for split points
+                    int bs_lo[3], bs_hi[3], bs_tgt[3];
+                    for (int p = 0; p < 3; p++) {
+                        bs_tgt[p] = ((p+1)*nape < n_total2) ? (p+1)*nape : n_total2;
+                        bs_lo[p] = (bs_tgt[p] - intv_n > 0) ? bs_tgt[p] - intv_n : 0;
+                        bs_hi[p] = (n_new < bs_tgt[p]) ? n_new : bs_tgt[p];
+                    }
+                    bool any = true;
+                    while (any) {
+                        any = false;
+                        for (int p = 0; p < 3; p++) {
+                            if (bs_lo[p] >= bs_hi[p]) continue;
+                            any = true;
+                            int mid = (bs_lo[p] + bs_hi[p]) / 2;
+                            int bi2 = bs_tgt[p] - mid;
+                            uint32_t bv = (bi2 > 0) ? (uint32_t)mm[bbase+(bi2-1)*2] : 0;
+                            uint32_t av = (mid < n_new) ? (uint32_t)mm[abase+mid*2] : 0xFFFFFFFF;
+                            // waitLSQ
+                            if (bi2 > 0 && mid < n_new && bv > av) bs_lo[p] = mid+1;
+                            else bs_hi[p] = mid;
+                        }
+                    }
+                    for (int p = 0; p < 3; p++) {
+                        a_sp[p+1] = bs_lo[p]; b_sp[p+1] = bs_tgt[p] - bs_lo[p];
+                        if (a_sp[p+1] < a_sp[p]) { a_sp[p+1] = a_sp[p]; b_sp[p+1] = bs_tgt[p] - a_sp[p+1]; }
+                        if (b_sp[p+1] < b_sp[p]) { b_sp[p+1] = b_sp[p]; a_sp[p+1] = bs_tgt[p] - b_sp[p+1]; }
+                    }
+                    // Load initial tiles per PE
+                    int max_pt = 0;
+                    for (int pe = 0; pe < 4; pe++) {
+                        int pa_s = a_sp[pe], pa_n = a_sp[pe+1] - pa_s;
+                        int pb_s = b_sp[pe], pb_n = b_sp[pe+1] - pb_s;
+                        if (pa_n < 0) pa_n = 0; if (pb_n < 0) pb_n = 0;
+                        int pt = pa_n + pb_n;
+                        if (pt > max_pt) max_pt = pt;
+                        s1c[pe] = pt; s1c[4+pe] = 0;
+                        int a0 = (pa_n < MERGE_TILE) ? pa_n : MERGE_TILE;
+                        int a1 = (pa_n-a0 < MERGE_TILE) ? (pa_n-a0>0?pa_n-a0:0) : MERGE_TILE;
+                        int b0 = (pb_n < MERGE_TILE) ? pb_n : MERGE_TILE;
+                        int b1 = (pb_n-b0 < MERGE_TILE) ? (pb_n-b0>0?pb_n-b0:0) : MERGE_TILE;
+                        s1c[8+pe] = abase + (pa_s+a0+a1)*2;
+                        s1c[12+pe] = (pa_n-a0-a1 > 0) ? pa_n-a0-a1 : 0;
+                        s1c[16+pe] = bbase + (pb_s+b0+b1)*2;
+                        s1c[20+pe] = (pb_n-b0-b1 > 0) ? pb_n-b0-b1 : 0;
+                        int *spm2 = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
+                        int mm_a = abase + pa_s*2;
+                        for (int j = 0; j < a0*2; j++) spm2[MERGE_A_BUF0+j] = mm[mm_a+j];
+                        for (int j = 0; j < a1*2; j++) spm2[MERGE_A_BUF1+j] = mm[mm_a+a0*2+j];
+                        int mm_b = bbase + pb_s*2;
+                        for (int j = 0; j < b0*2; j++) spm2[MERGE_B_BUF0+j] = mm[mm_b+j];
+                        for (int j = 0; j < b1*2; j++) spm2[MERGE_B_BUF1+j] = mm[mm_b+b0*2+j];
+                        spm2[MERGE_META+0]=0; spm2[MERGE_META+1]=0; spm2[MERGE_META+4]=0;
+                        spm2[MERGE_META+5]=(pa_n<=a0+a1)?1:0;
+                        spm2[MERGE_META+6]=(pb_n<=b0+b1)?1:0;
+                        spm2[MERGE_META+7]=0; spm2[MERGE_META+8]=0;
+                        spm2[MERGE_META+9]=a0; spm2[MERGE_META+10]=a1;
+                        spm2[MERGE_META+11]=b0; spm2[MERGE_META+12]=b1;
+                    }
+                    int niter = ((max_pt+MERGE_STEP-1)/MERGE_STEP)*MERGE_STEP;
+                    gr[6] = (niter == 0) ? 0 : niter;
+                    gr[4] = out_buf;
                     s1c[152] = out_buf;
                     s1c[149] = 0;
                 }
@@ -2646,8 +2716,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
             }
         } else if (magic_id == 39) {
-            // Intv sort setup (after diag merge, DIAG-first order).
-            // Reads saved state from magic 16. Sets up gr for intv sort.
+            // Intv sort setup: reads saved state, sets gr for intv sort.
             {
                 auto &gr = main_addressing_register;
                 constexpr int DIAG_CAP_V  = (16 << 20);
@@ -2655,11 +2724,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 constexpr int MM_INTV     = DIAG_CAP_V * 6;
                 constexpr int MM_NEXT_INTV = MM_INTV + INTV_CAP_V * 2;
                 constexpr int MM_SWAP     = MM_NEXT_INTV + INTV_CAP_V * 2;
-                int next_intv_n = s1c[155]; // saved by magic 16
-                gr[3]  = MM_NEXT_INTV;
-                gr[4]  = MM_SWAP;
-                gr[6]  = (next_intv_n + 3) / 4;
-                gr[24] = next_intv_n;
+                gr[24] = s1c[155];                       // next_intv_n
+                gr[3]  = MM_NEXT_INTV;                   // src base
+                gr[4]  = MM_SWAP;                        // dst base
+                gr[6]  = (gr[24] + 3) / 4;              // n_per_pe
             }
         } else if (magic_id == 28) {
             // Diag merge split + tile load.
@@ -2797,9 +2865,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             int tile = s1c[12+pe];
                             if (tile > MERGE_TILE) tile = MERGE_TILE;
                             // Separate s1c lookup from mm[] access
-                            gr[1] = s1c[8+pe];       // s1c → register
-                            for (int j = 0; j < tile*2; j++)
-                                s[off+j] = mm[gr[1]+j]; // mm[reg]
+                            gr[1] = s1c[8+pe];
+                            for (int j = 0; j < tile*2; j += 8) {
+                                int cnt = tile*2 - j;
+                                if (cnt > 8) cnt = 8;
+                                mvdq_copy(&s[off+j], &mm[gr[1]+j], cnt);
+                            }
                             s1c[8+pe] = gr[1] + tile*2;
                             s1c[12+pe] -= tile;
                             s[MERGE_META+9+buf] = tile;
@@ -2809,9 +2880,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             int off = buf ? MERGE_B_BUF1 : MERGE_B_BUF0;
                             int tile = s1c[20+pe];
                             if (tile > MERGE_TILE) tile = MERGE_TILE;
-                            gr[1] = s1c[16+pe];      // s1c → register
-                            for (int j = 0; j < tile*2; j++)
-                                s[off+j] = mm[gr[1]+j]; // mm[reg]
+                            gr[1] = s1c[16+pe];
+                            for (int j = 0; j < tile*2; j += 8) {
+                                int cnt = tile*2 - j;
+                                if (cnt > 8) cnt = 8;
+                                mvdq_copy(&s[off+j], &mm[gr[1]+j], cnt);
+                            }
                             s1c[16+pe] = gr[1] + tile*2;
                             s1c[20+pe] -= tile;
                             s[MERGE_META+11+buf] = tile;
@@ -2825,24 +2899,39 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
             }
         } else if (magic_id == 35) {
-            // Merge writeback only (reload moved to magic 33).
-            // mask bit 0 = output ping/pong.
+            // Merge writeback: SPM output → MM.
+            // Chunk outer, PE inner: round-robin streaming.
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
+                int *spm = SPM_unit->buffer;
                 int out_off = (magic_mask & 1) ? MERGE_OUT1 : MERGE_OUT0;
                 int mm_out = gr[4];
-                int cum = 0;
+                // Pre-compute per-PE output info
+                int out_ns[4], mm_dsts[4], spm_srcs[4];
+                int max_words = 0, cum = 0;
                 for (int pe = 0; pe < 4; pe++) {
-                    int *s = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
-                    int out_n = s[MERGE_META + 4];
-                    int dst = mm_out + (cum + s1c[4+pe]) * 2;
-                    for (int j = 0; j < out_n*2; j++)
-                        mm[dst+j] = s[out_off+j];
-                    s1c[4+pe] += out_n;
+                    int pe_spm = pe * SPM_BANK_GROUP_SIZE;
+                    out_ns[pe] = spm[pe_spm + MERGE_META + 4];
+                    mm_dsts[pe] = mm_out + (cum + s1c[4+pe]) * 2;
+                    spm_srcs[pe] = pe_spm + out_off;
+                    int w = out_ns[pe] * 2;
+                    if (w > max_words) max_words = w;
                     cum += s1c[pe];
                 }
-                // Input-capped: advance unconditionally each iteration
+                // Interleaved mvdq: chunk outer, PE inner
+                for (int j = 0; j < max_words; j += 8) {
+                    for (int pe = 0; pe < 4; pe++) {
+                        int words = out_ns[pe] * 2;
+                        if (j >= words) continue;
+                        int cnt = words - j;
+                        if (cnt > 8) cnt = 8;
+                        mvdq_copy(&mm[mm_dsts[pe] + j],
+                                  &spm[spm_srcs[pe] + j], cnt);
+                    }
+                }
+                for (int pe = 0; pe < 4; pe++)
+                    s1c[4+pe] += out_ns[pe];
                 gr[2] += MERGE_STEP;
             }
         } else if (magic_id == 36) {
@@ -3005,8 +3094,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
         } else if (magic_id == 30) {
             // Dedup reload: refill exhausted input buffers from MM.
-            // Scans META[10..13] for zeroed tile counts. Loads next
-            // tile from s1c-tracked MM source if data remains.
+            // Conditional per-PE reload with mvdq_copy for transfers.
             {
                 int *mm = gwfa_get_mm();
                 for (int pe = 0; pe < 4; pe++) {
@@ -3018,11 +3106,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             && s1c[4+pe] > 0) {
                             int off = buf ? DEDUP_DIAG_BUF1
                                           : DEDUP_DIAG_BUF0;
-                            int tile = std::min(DEDUP_TILE,
-                                s1c[4+pe]);
-                            for (int j = 0; j < tile*2; j++)
-                                s[off+j] = mm[s1c[pe]+j];
-                            s1c[pe] += tile * 2;
+                            int tile = s1c[4+pe];
+                            if (tile > DEDUP_TILE) tile = DEDUP_TILE;
+                            int src = s1c[pe];
+                            for (int j = 0; j < tile*2; j += 8) {
+                                int cnt = tile*2 - j;
+                                if (cnt > 8) cnt = 8;
+                                mvdq_copy(&s[off+j], &mm[src+j], cnt);
+                            }
+                            s1c[pe] = src + tile * 2;
                             s1c[4+pe] -= tile;
                             s[DEDUP_META+10+buf] = tile;
                         }
@@ -3033,11 +3125,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             && s1c[12+pe] > 0) {
                             int off = buf ? DEDUP_INTV_BUF1
                                           : DEDUP_INTV_BUF0;
-                            int tile = std::min(DEDUP_TILE,
-                                s1c[12+pe]);
-                            for (int j = 0; j < tile*2; j++)
-                                s[off+j] = mm[s1c[8+pe]+j];
-                            s1c[8+pe] += tile * 2;
+                            int tile = s1c[12+pe];
+                            if (tile > DEDUP_TILE) tile = DEDUP_TILE;
+                            int src = s1c[8+pe];
+                            for (int j = 0; j < tile*2; j += 8) {
+                                int cnt = tile*2 - j;
+                                if (cnt > 8) cnt = 8;
+                                mvdq_copy(&s[off+j], &mm[src+j], cnt);
+                            }
+                            s1c[8+pe] = src + tile * 2;
                             s1c[12+pe] -= tile;
                             s[DEDUP_META+12+buf] = tile;
                         }
@@ -3046,47 +3142,55 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
         } else if (magic_id == 31) {
             // Dedup writeback: DIAG_OUTx + INTV_OUTx → MM.
-            // mask bit 0 = ping/pong output buffer.
-            // gr[4]=MM_SORT_BUF (diag output), gr[7]=MM_DEDUP_INTV_OUT.
-            // s1c: [16..19]=diag_out_base, [20..23]=diag_out_cursor,
-            //   [24..27]=intv_out_base, [28..31]=intv_out_cursor.
-            // Increments gr[2] by DEDUP_TILE.
+            // Chunk outer, PE inner: round-robin streaming.
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
+                int *spm = SPM_unit->buffer;
                 int d_off = (magic_mask & 1)
                     ? DEDUP_DIAG_OUT1 : DEDUP_DIAG_OUT0;
                 int i_off = (magic_mask & 1)
                     ? DEDUP_INTV_OUT1 : DEDUP_INTV_OUT0;
+                // Pre-compute per-PE diag and intv output info
+                int nds[4], nis[4], d_dsts[4], i_dsts[4];
+                int d_srcs[4], i_srcs2[4];
+                int max_d = 0, max_i = 0;
                 for (int pe = 0; pe < 4; pe++) {
-                    int *s = &SPM_unit->buffer[
-                        pe * SPM_BANK_GROUP_SIZE];
-                    // Diag output → MM_SORT_BUF
-                    int nd = s[DEDUP_META + 2];
-                    int dd = gr[4] + (s1c[16+pe]
-                        + s1c[20+pe]) * 2;
-#ifdef DEBUG
-                    // Debug: check cross-call sorted
-                    if (nd > 0 && s1c[20+pe] > 0) {
-                        uint32_t prev = (uint32_t)mm[dd - 2];
-                        uint32_t cur = (uint32_t)s[d_off];
-                        if (prev > cur)
-                            fprintf(stderr, "M31 PE%d cross-call"
-                                " unsort %u>%u cur=%d mask=%d\n",
-                                pe, prev, cur,
-                                s1c[20+pe], magic_mask);
+                    int pe_spm = pe * SPM_BANK_GROUP_SIZE;
+                    nds[pe] = spm[pe_spm + DEDUP_META + 2];
+                    nis[pe] = spm[pe_spm + DEDUP_META + 3];
+                    d_dsts[pe] = gr[4] + (s1c[16+pe]+s1c[20+pe])*2;
+                    d_srcs[pe] = pe_spm + d_off;
+                    i_dsts[pe] = gr[7] + (s1c[24+pe]+s1c[28+pe])*2;
+                    i_srcs2[pe] = pe_spm + i_off;
+                    if (nds[pe]*2 > max_d) max_d = nds[pe]*2;
+                    if (nis[pe]*2 > max_i) max_i = nis[pe]*2;
+                }
+                // Diag writeback: chunk outer, PE inner
+                for (int j = 0; j < max_d; j += 8) {
+                    for (int pe = 0; pe < 4; pe++) {
+                        int w = nds[pe] * 2;
+                        if (j >= w) continue;
+                        int cnt = w - j;
+                        if (cnt > 8) cnt = 8;
+                        mvdq_copy(&mm[d_dsts[pe]+j],
+                                  &spm[d_srcs[pe]+j], cnt);
                     }
-#endif
-                    for (int j = 0; j < nd * 2; j++)
-                        mm[dd + j] = s[d_off + j];
-                    s1c[20 + pe] += nd;
-                    // Intv output → MM_DEDUP_INTV_OUT
-                    int ni = s[DEDUP_META + 3];
-                    int id2 = gr[7] + (s1c[24+pe]
-                        + s1c[28+pe]) * 2;
-                    for (int j = 0; j < ni * 2; j++)
-                        mm[id2 + j] = s[i_off + j];
-                    s1c[28 + pe] += ni;
+                }
+                // Intv writeback: chunk outer, PE inner
+                for (int j = 0; j < max_i; j += 8) {
+                    for (int pe = 0; pe < 4; pe++) {
+                        int w = nis[pe] * 2;
+                        if (j >= w) continue;
+                        int cnt = w - j;
+                        if (cnt > 8) cnt = 8;
+                        mvdq_copy(&mm[i_dsts[pe]+j],
+                                  &spm[i_srcs2[pe]+j], cnt);
+                    }
+                }
+                for (int pe = 0; pe < 4; pe++) {
+                    s1c[20+pe] += nds[pe];
+                    s1c[28+pe] += nis[pe];
                 }
                 gr[2] += DEDUP_TILE;
             }
