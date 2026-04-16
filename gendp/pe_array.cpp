@@ -494,47 +494,41 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         gr[11] = s1c[23];                                // resume arc_ptr
     }
 
-    // Helper: assign one diag at cursor to target PE
-    // Copies diag data, arc metadata, and arc (pvw,ow) to SPM
-    auto assign_diag = [&](int di, int pe_idx) {
-        gr[5] = s1c[8 + pe_idx];                         // pe_spm
-        gr[6] = s1c[pe_idx];                              // nd
-        gr[7] = gr[6] + gr[6];                           // 2*nd
-        gr[9] = di + di;                                  // 2*di
-        // Arc metadata → SPM
-        spm[gr[5]+FIN0_ARCMETA+gr[7]]   = s1c[ARC_META_BASE+gr[9]];
-        spm[gr[5]+FIN0_ARCMETA+gr[7]+1] = s1c[ARC_META_BASE+gr[9]+1];
-        // Diag data → SPM
-        spm[gr[5]+FIN0_DIAGS+gr[7]]   = s1c[32+gr[9]];
-        spm[gr[5]+FIN0_DIAGS+gr[7]+1] = s1c[32+gr[9]+1];
-        // Arc count
-        gr[10] = s1c[ARC_META_BASE+gr[9]+1] - s1c[ARC_META_BASE+gr[9]];
-        // Copy arcs (pvw, ow) → SPM
-        gr[8] = s1c[4 + pe_idx];                         // na
-        gr[1] = gr[11];                                   // arc_data_ptr
-        for (int a = 0; a < gr[10]; a++) {
-            int dst_off = (gr[8] + a) * 3;
-            spm[gr[5] + FIN0_ARCS + dst_off]     = s1c[gr[1] + a*2];
-            spm[gr[5] + FIN0_ARCS + dst_off + 1] = s1c[gr[1] + a*2 + 1];
-        }
-        s1c[4 + pe_idx] = gr[8] + gr[10];               // na += nv
-        s1c[pe_idx] = gr[6] + 1;                         // nd++
-        gr[11] = gr[11] + gr[10] * 2;                    // arc_ptr += 2*nv
-    };
+    // Inline assignment: copy diag+arcmeta+arcs from s1c to PE's SPM
+    // Arcs use scalar copy (3-word dst stride vs 2-word src stride)
+    #define F0B_ASSIGN(di, pe_idx) do { \
+        gr[5] = s1c[8 + (pe_idx)]; \
+        gr[6] = s1c[(pe_idx)]; \
+        gr[7] = gr[6] + gr[6]; \
+        gr[9] = (di) + (di); \
+        spm[gr[5]+FIN0_ARCMETA+gr[7]]   = s1c[ARC_META_BASE+gr[9]]; \
+        spm[gr[5]+FIN0_ARCMETA+gr[7]+1] = s1c[ARC_META_BASE+gr[9]+1]; \
+        spm[gr[5]+FIN0_DIAGS+gr[7]]   = s1c[32+gr[9]]; \
+        spm[gr[5]+FIN0_DIAGS+gr[7]+1] = s1c[32+gr[9]+1]; \
+        gr[10] = s1c[ARC_META_BASE+gr[9]+1] - s1c[ARC_META_BASE+gr[9]]; \
+        gr[8] = s1c[4 + (pe_idx)]; \
+        gr[1] = gr[11]; \
+        for (int a_ = 0; a_ < gr[10]; a_++) { \
+            int dst_ = (gr[8] + a_) * 3; \
+            spm[gr[5]+FIN0_ARCS+dst_]   = s1c[gr[1]+a_*2]; \
+            spm[gr[5]+FIN0_ARCS+dst_+1] = s1c[gr[1]+a_*2+1]; \
+        } \
+        s1c[4+(pe_idx)] = gr[8] + gr[10]; \
+        s1c[(pe_idx)] = gr[6] + 1; \
+        gr[11] = gr[11] + gr[10] * 2; \
+    } while(0)
 
     // Round-robin common-case loop: one diag per PE cycling 0,1,2,3
     {
         int pe_rr = cursor % 4;
     f0b_rr:
         if (cursor >= total_fin0) goto f0b_rr_done;
-        // Read arc count for capacity check
         gr[9] = cursor + cursor;
         gr[10] = s1c[ARC_META_BASE + gr[9]+1] - s1c[ARC_META_BASE + gr[9]];
-        // Check PE capacity
         if (s1c[pe_rr] >= FIN0_N_MAX_DIAGS) goto f0b_rr_break;
         gr[7] = s1c[4 + pe_rr] + gr[10];
         if (gr[7] > FIN0_N_MAX_ARCS) goto f0b_rr_break;
-        assign_diag(cursor, pe_rr);
+        F0B_ASSIGN(cursor, pe_rr);
         cursor++;
         pe_rr = (pe_rr + 1) & 3;
         goto f0b_rr;
@@ -544,7 +538,7 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         (void)0;
     }
 
-    // Per-PE fallback loop: fill remaining PEs sequentially
+    // Per-PE fallback: fill remaining PEs sequentially
     for (int pe = 0; pe < 4 && cursor < total_fin0; pe++) {
     f0b_mv:
         if (cursor >= total_fin0) goto f0b_mv_next;
@@ -553,12 +547,13 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         if (s1c[pe] >= FIN0_N_MAX_DIAGS) goto f0b_mv_next;
         gr[7] = s1c[4 + pe] + gr[10];
         if (gr[7] > FIN0_N_MAX_ARCS) goto f0b_mv_next;
-        assign_diag(cursor, pe);
+        F0B_ASSIGN(cursor, pe);
         cursor++;
         goto f0b_mv;
     f0b_mv_next:
         (void)0;
     }
+    #undef F0B_ASSIGN
 
     s1c[22] = cursor;
     s1c[23] = gr[11]; // save arc_ptr for next pass
