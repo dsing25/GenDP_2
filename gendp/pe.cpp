@@ -56,6 +56,10 @@ void pe::reset() {
     outstanding_req.clear();
     spmReqPort = nullptr;
     halted = false;
+    // Clear forwarded in_port/out_port values so a reused PE does not
+    // leak a previous case's data into the next case's early reads.
+    load_data = 0;
+    store_data = 0;
 }
 
 void pe::recieve_spm_data(int data[LINE_SIZE]){

@@ -4550,7 +4550,11 @@ bool pe_array::willStallPair(
 
 
 void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_setting) {
-    int i, j, flag, old_PC;
+    int i, j, old_PC;
+    // Initialize flag to 0 so that a pair-stalled cycle (where the
+    // `if (!pairStalls)` block is skipped) does not leave flag at a
+    // previous/undefined value for the end-of-cycle `flag == -1` check.
+    int flag = 0;
     cycle = 0;
 
     while (1) {
