@@ -532,19 +532,21 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
             gr[7] = s1c[8 + pe];                         // mv: pe_spm
             gr[9] = gr[14] + gr[14];                     // add: 2*d
             //NOP
-            // Read diag from SPM for i_val
+            // Read diag from SPM for i_val (pipelined loads, rule 6)
             gr[3] = spm[gr[7] + FIN0_DIAGS + gr[9]];     // mv: vd
             gr[4] = spm[gr[7] + FIN0_DIAGS + gr[9] + 1]; // mv: k
-            //NOP
+            //NOP                                         // SPM lat 1/2
+            //NOP                                         // SPM lat 2/2
             gr[5] = gr[3] & 0xFFFF;                      // andi: vd.lo
             //NOP
             gr[5] = gr[5] - GWF_DIAG_SHIFT;              // subi
             //NOP
             gr[5] = gr[5] + gr[4];                       // add: i_val
-            // Arc count from SPM arcmeta
+            // Arc count from SPM arcmeta (pipelined loads, rule 6)
             gr[8] = spm[gr[7] + FIN0_ARCMETA + gr[9]];   // mv: lo
             gr[13] = spm[gr[7] + FIN0_ARCMETA + gr[9]+1]; // mv: hi
-            //NOP
+            //NOP                                         // SPM lat 1/2
+            //NOP                                         // SPM lat 2/2
             gr[10] = gr[13] - gr[8];                      // sub: nv
             gr[1] = 0;                                   // si: a=0
             //NOP
