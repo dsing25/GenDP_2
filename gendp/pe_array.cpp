@@ -3181,6 +3181,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     if (s1c[200+pe]*2 > max_i) max_i = s1c[200+pe]*2;
                 }
                 // Seam metadata: first-write-once, last-update-each.
+                // Each SPM load lands in gr (controller SPM dest
+                // rule — CLAUDE.md §SPM), then waits two non-SPM
+                // cycles, then migrates to s1c. Loads are serialized
+                // through gr[11] (single-register ping-pong) so only
+                // one SPM request is in flight at a time. gr[11] is
+                // the only live-safe scratch slot we can clobber
+                // here: gr[12] is the GWFA wavefront-distance
+                // counter (magic 3/5/7 live state), gr[13] is the
+                // PE-sync AND (pe_array::tick line 4713), and
+                // gr[7..10] is the AC-7 protected band.
                 // s1c[28+pe] is the pre-increment cumulative intv
                 // cursor; == 0 iff magic 31 has never produced intv
                 // output for this PE, so this is the first nonzero
@@ -3192,11 +3202,23 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     int last_src  = pe_spm + i_off
                         + (s1c[200+pe] - 1) * 2;
                     if (s1c[28+pe] == 0) {
-                        s1c[176+pe] = spm[first_src];
-                        s1c[180+pe] = spm[first_src + 1];
+                        gr[11] = spm[first_src];            // mv: SPM->gr
+                        //NOP                                // SPM lat 1/2
+                        //NOP                                // SPM lat 2/2
+                        s1c[176+pe] = gr[11];               // mv: gr->s1c
+                        gr[11] = spm[first_src + 1];        // mv: SPM->gr
+                        //NOP                                // SPM lat 1/2
+                        //NOP                                // SPM lat 2/2
+                        s1c[180+pe] = gr[11];               // mv: gr->s1c
                     }
-                    s1c[184+pe] = spm[last_src];
-                    s1c[188+pe] = spm[last_src + 1];
+                    gr[11] = spm[last_src];                 // mv: SPM->gr
+                    //NOP                                    // SPM lat 1/2
+                    //NOP                                    // SPM lat 2/2
+                    s1c[184+pe] = gr[11];                   // mv: gr->s1c
+                    gr[11] = spm[last_src + 1];             // mv: SPM->gr
+                    //NOP                                    // SPM lat 1/2
+                    //NOP                                    // SPM lat 2/2
+                    s1c[188+pe] = gr[11];                   // mv: gr->s1c
                 }
                 // Diag writeback: chunk outer, PE inner, monotonic
                 // per-PE MM cursor advances after each mvdq_copy.
