@@ -1858,7 +1858,7 @@ m23_end:    ;
             //  gr[4]:    nd_word_off (current node desc in SPM)
             //  gr[5]:    hPing_word_base (swaps with gr[6])
             //  gr[6]:    hPong_word_base
-            //  gr[7]:    seq_byte_base = graphSeq_bytes + seq_off
+            //  gr[7]:    seq_base_idx = graphSeq_word_base*16 + seq_off  (2-bit index)
             //  gr[8]:    vP_word_base = PROF_WOFF + seq[col]*segLen
             //  gr[9]:    graphSeq_word_base (kernel const)
             //  gr[10]:   sync flag (set by instr stream)
@@ -1872,6 +1872,15 @@ m23_end:    ;
             auto &gr  = *addr_regfile_unit;
             int  *reg = regfile_unit->register_file;
             int  *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+            int tmp;
+
+            // mvi2-style 2-bit extract from per-PE virtual SPM.
+            // bp is a 2-bit base index; 16 bases pack into one 32-bit
+            // word, little-endian within the word.
+            auto gssw_mvi2_ld = [&](int bp) -> int {
+                return (int)(((uint32_t)spm[bp >> 4]
+                    >> ((bp & 0xF) << 1)) & 0x3);
+            };
 
             // === A. PROLOGUE: broadcast constants ===
             //COMP
@@ -1885,6 +1894,7 @@ m23_end:    ;
                 reg[3] = 0;                       // vZero
             }
 
+            //zkn rname registers so you cand do mvd here
             // Load numNodes and total_nexts from meta
             gr.st(1, spm[GSSW_META_WOFF + 0], CTRL_GR_HI);   // numNodes
             gr.st(12, spm[GSSW_META_WOFF + 1]);              // total_nexts (scratch)
@@ -1941,11 +1951,11 @@ m23_end:    ;
             gr.st(2, gr.at(12, CTRL_GR_HI), CTRL_GR_HI);     // seq_len → gr[2] hi
             gr.st(3, gr.at(13, CTRL_GR_HI), CTRL_GR_HI);     // next_len → gr[3] hi
 
-            // seq_byte_base = graphSeq_word_base*4 + seq_off
-            gr.st(7, gr.at(9) << 2);                         // graphSeq_byte_base
+            // seq_base_idx = graphSeq_word_base*16 + seq_off (2-bit index)
+            gr.st(7, gr.at(9) << 4);                         // graphSeq_base_idx
             //NOP
 
-            gr.st(7, gr.at(7) + gr.at(12, CTRL_GR_LO));      // + seq_off → seq_byte_base
+            gr.st(7, gr.at(7) + gr.at(12, CTRL_GR_LO));      // + seq_off → seq_base_idx
             //NOP
 
             // === C. SEED LOAD: hPing[j] = nd.hSeed[j], pvE[j] = nd.eSeed[j] ===
@@ -1956,6 +1966,29 @@ m23_end:    ;
             gr.st(3, 0, CTRL_GR_LO);                         // j = 0
         m_101_seed_load:
             if (gr.at(3, CTRL_GR_LO) >= GSSW_SEG_LEN) goto m_101_seed_load_done;
+
+            //zkn you can't do spm->spm in one instruction. Need to load to registers first. Use mvd 
+            //as well, so this will look like:
+            /*
+             * reg[1,2] = nd.hSeed[j:j+1] //mvd
+             * NOP
+             *
+             * reg[3,4] = nd.eSeed[j:j+1] //mvd
+             * NOP
+             *
+             * hping[j:j+1] = reg[1,2] //mvd
+             * NOP
+             * 
+             * pvE[j:j+1] = reg[3,4] //mvd
+             * NOP
+             */
+            //you also can do spm[const+reg] or spm[reg+reg]. You cannot do spm[reg+reg+const].
+            //I recommend before you enter this loop you set gr4 = gr4+GSSW_ND_ESEED_W and another 
+            //gr for GSSW_ND_HSEED_W. Then inside the loop you can do spm[gr4+gr3] to get eSeed and 
+            //spm[gr5+gr3] to get hSeed.
+            //You can also use auto increment on gr3 so that you don't need a seperate instruction 
+            //for j++
+
             // hPing[j] = nd.hSeed[j]
             spm[gr.at(5) + gr.at(3, CTRL_GR_LO)]
                 = spm[gr.at(4) + GSSW_ND_HSEED_W + gr.at(3, CTRL_GR_LO)];
@@ -1969,224 +2002,218 @@ m23_end:    ;
             // === D. COLUMN LOOP ===
             gr.st(2, 0, CTRL_GR_LO);                         // col = 0
         m_101_col:
+            // Extract seq[col] via mvi2 and compute vP_word_base
+            gr.st(13, gssw_mvi2_ld(gr.at(7) + gr.at(2, CTRL_GR_LO)));              // seq[col] → gr[13]
             if (gr.at(2, CTRL_GR_LO) >= gr.at(2, CTRL_GR_HI)) goto m_101_col_done;
-
-            // Extract seq[col] byte and compute vP_word_base
-            gr.st(11, gr.at(7) + gr.at(2, CTRL_GR_LO));      // seq_byte_addr
-            //NOP
-
-            gr.st(12, gr.at(11) & 3);                        // byte offset in word
-            gr.st(13, gr.at(11) >> 2);                       // word index
-
-            gr.st(13, spm[gr.at(13)]);                       // load seq word
-            //NOP
-
-            // Branch on byte offset
-            if (gr.at(12) == 0) goto m_101_seq_b0;
-            if (gr.at(12) == 1) goto m_101_seq_b1;
-            if (gr.at(12) == 2) goto m_101_seq_b2;
-            // fallthrough: byte 3
-            gr.st(13, (gr.at(13) >> 24) & 0xFF);
-            goto m_101_seq_done;
-        m_101_seq_b0:
-            gr.st(13, gr.at(13) & 0xFF);
-            goto m_101_seq_done;
-        m_101_seq_b1:
-            gr.st(13, (gr.at(13) >> 8) & 0xFF);
-            goto m_101_seq_done;
-        m_101_seq_b2:
-            gr.st(13, (gr.at(13) >> 16) & 0xFF);
-        m_101_seq_done:
-            // vP_word_base = PROF_WOFF + seq[col] * segLen
-            // segLen = 37 = 32 + 4 + 1 = s<<5 + s<<2 + s
-            gr.st(11, gr.at(13) << 5);
-            gr.st(12, gr.at(13) << 2);
-
-            gr.st(8, gr.at(11) + gr.at(12));                 // 36*s
-            //NOP
-
-            gr.st(8, gr.at(8) + gr.at(13));                  // 37*s
-            //NOP
-
-            gr.st(8, gr.at(8) + GSSW_PROF_WOFF);             // vP_word_base → gr[8]
-            //NOP
 
             // === E. COLUMN COMPUTE ===
             // Init: vMaxColumn = 0, vH = hPing[segLen-1] << 1, vF = 0, zero pvF[]
+            //set comp PC
             reg[4] = spm[gr.at(5) + (GSSW_SEG_LEN - 1)];     // vH = hPing[seg-1]
-            //NOP
+            
 
-            //COMP: slli vH
-            reg[4] = gssw4_slli_si128(reg[4], 1);
-            reg[7] = reg[3];                                  // vMaxColumn = 0
-
-            reg[5] = reg[3];                                  // vF = 0
-            //NOP
+            reg[6] = spm[GSSW_E_WOFF + 0];                    // e
+            reg[5] = 0;                                  // vF = 0
+            {
+                gr.st(8, gr.at(13) * GSSW_SEG_LEN + GSSW_PROF_WOFF); //scalar operation on gr
+                gr.st(3, 0, CTRL_GR_LO);
+            }
 
             // Zero pvF[0..seg-1]
-            gr.st(3, 0, CTRL_GR_LO);
+            //slli vH. Note gssw4_slli_si128 is acutally a scalar isntruction not vector. it's just left shift
+            reg[4] = reg[4] << 8;
+            {
+                reg[7] = 0;                                  // vMaxColumn = 0
+                //halt
+            }
+
+            //zero initializer loop
+            {
+                //halt
+                //halt
+            }
         m_101_pvF_zero:
-            if (gr.at(3, CTRL_GR_LO) >= GSSW_SEG_LEN) goto m_101_pvF_zero_done;
-            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[3];
-            gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);
-            goto m_101_pvF_zero;
-        m_101_pvF_zero_done:
+            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[3]; gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_pvF_zero;
 
             // Prologue: profScore = vP[0], e = pvE[0]
             reg[8] = spm[gr.at(8) + 0];                       // profScore
-            reg[6] = spm[GSSW_E_WOFF + 0];                    // e
+            //set comp pc
 
             // --- Main inner segment loop ---
             gr.st(3, 0, CTRL_GR_LO);                          // j = 0
-        m_101_main:
-            if (gr.at(3, CTRL_GR_LO) >= GSSW_SEG_LEN) goto m_101_main_done;
-
-            //1st: vH = subs(adds(vH, profScore), vBias)
-            //COMP
-            reg[4] = gssw4_subs_epu8(gssw4_adds_epu8(reg[4], reg[8]), reg[0]);
             //NOP
+            {
+                //NOP
+            }
+        m_101_main:
+
+            //zkn TODO Currently we are doing one step at a time, we always do just a sinlge load and only use one compute instruction. We need to improve this. Instead we will do mvd to two adjacent registers, and then we can issue two compute instructions one on each register. This will probably require some register remapping which you will need to do.
+            //1st: vH = subs(adds(vH, profScore), vBias)
+            {
+                //COMP
+                reg[4] = gssw4_subs_epu8(gssw4_adds_epu8(reg[4], reg[8]), reg[0]);
+            }
+            reg[8] = spm[gr.at(8) + gr.at(3, CTRL_GR_LO) + 1]; // profScore = vP[j+1]
             //NOP
 
             //2nd: vH = max(max(vH, e), vF)
-            //COMP
-            reg[4] = gssw4_max_epu8(gssw4_max_epu8(reg[4], reg[6]), reg[5]);
+            {
+                reg[4] = gssw4_max_epu8(gssw4_max_epu8(reg[4], reg[6]), reg[5]);
+            }
             //NOP
-            //NOP
+            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[5];  // pvF[j] = vF
 
             spm[gr.at(6) + gr.at(3, CTRL_GR_LO)] = reg[4];    // hPong[j] = vH
             //3rd
-            //COMP
-            reg[7] = gssw4_max_epu8(reg[7], reg[4]);          // vMaxColumn = max(.., vH)
+            {
+                reg[7] = gssw4_max_epu8(reg[7], reg[4]);          // vMaxColumn = max(.., vH)
+            }
             //NOP
 
             //4th: e = max(subs(e, vGapE), subs(vH, vGapO))
-            //COMP
-            reg[6] = gssw4_max_epu8(gssw4_subs_epu8(reg[6], reg[2]),
+            {
+                reg[6] = gssw4_max_epu8(gssw4_subs_epu8(reg[6], reg[2]),
                                     gssw4_subs_epu8(reg[4], reg[1]));
-            reg[8] = spm[gr.at(8) + gr.at(3, CTRL_GR_LO) + 1]; // profScore = vP[j+1]
-            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[5];  // pvF[j] = vF
+            }
+            //zkn watch this one. We are initiating a load to reg4 in the isa, but it will not resolve until spm latency later (i.e. two clock cycles. Therefore we are safe to use reg4 old value in the next instruction. This is correct, but you'll want to check and make sure the simulator doesn't have a wierd quirk which makes this impossible.
+            tmp = spm[gr.at(5) + gr.at(3, CTRL_GR_LO)];     // vH = hPing[j]
 
             //5th: vF = max(subs(vF, vGapE), subs(vH, vGapO))
-            //COMP
-            reg[5] = gssw4_max_epu8(gssw4_subs_epu8(reg[5], reg[2]),
+            {
+                reg[5] = gssw4_max_epu8(gssw4_subs_epu8(reg[5], reg[2]),
                                     gssw4_subs_epu8(reg[4], reg[1]));
-            reg[4] = spm[gr.at(5) + gr.at(3, CTRL_GR_LO)];     // vH = hPing[j]
+            }
             spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[6];  // pvE[j] = e
+            //set comp PC
 
-            reg[6] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1]; // e = pvE[j+1]
-            gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);     // j++
-            goto m_101_main;
+            reg[4] = tmp; //mv resolves one cycle later
+            reg[6] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1];gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);     //mvd with j++ e = pvE[j+1]  // j++
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_main;
+            {
+                //NOP
+            }
+
         m_101_main_done:
 
             // --- Lazy-F loop setup ---
             gr.st(3, 0, CTRL_GR_LO);                          // j = 0
             reg[4] = spm[gr.at(6) + 0];                        // vH = hPong[0]
-
-            //COMP: vF <<= 1 byte
-            reg[5] = gssw4_slli_si128(reg[5], 1);
-            //NOP
-
-            //COMP: vTemp = cmpgt(vF, vH)
-            reg[9] = gssw4_cmpgt_epu8(reg[5], reg[4]);
-            gr.st(13, 0);                                      // cmp = 0 (init)
-
-            gr.st(13, gssw4_movemask_epi8(reg[9]));            // cmp = movemask(vTemp)
+            
             reg[9] = spm[GSSW_F_WOFF + 0];                     // vTemp = pvF[0]
+            reg[5] = reg[5] << 8;
 
-            //COMP: vTemp = cmpgt(vF, pvF[0])
-            reg[9] = gssw4_cmpgt_epu8(reg[5], reg[9]);
             //NOP
+            //set pc
 
-            gr.st(13, gr.at(13) | gssw4_movemask_epi8(reg[9]));
-            //NOP
+            //gr13 should be remapped to a reg instead of gr because we're using it in simd mode
+            //COMP: cmp |= any_cmpgt(vF, pvF[0])
+            {
+                gr.st(13, gssw4_cmpgt_any_epu8(reg[5], reg[4]) | gssw4_cmpgt_any_epu8(reg[5], reg[9]));
+                //NOP
+            }
 
+            {
+                //halt
+            }
         m_101_lazyf:
+            reg[6] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)];  // e = pvE[j]
             if (gr.at(13) == 0) goto m_101_lazyf_done;
 
-            //1st
-            //COMP cmp2
-            reg[7] = gssw4_max_epu8(reg[7], gssw4_max_epu8(reg[4], reg[5]));
-            //COMP cmp1
-            reg[4] = gssw4_max_epu8(reg[4], reg[5]);
-            reg[6] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)];  // e = pvE[j]
             reg[9] = spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)];  // vTemp = pvF[j]
+            //NOP
+            //1st
+            {
+                //COMP cmp2
+                reg[7] = gssw4_max_epu8(reg[7], gssw4_max_epu8(reg[4], reg[5]));
+                //COMP cmp1
+                reg[4] = gssw4_max_epu8(reg[4], reg[5]);
+            }
 
-            //5th
-            //COMP cmp1: vF = subs(vF, vGapE)
-            reg[5] = gssw4_subs_epu8(reg[5], reg[2]);
-            //cmp2 NOP
-            spm[gr.at(6) + gr.at(3, CTRL_GR_LO)] = reg[4];     // hPong[j] = vH
+            {
+                //COMP cmp1: vF = subs(vF, vGapE)
+                reg[5] = gssw4_subs_epu8(reg[5], reg[2]);
+                //cmp2 nop
+            }
+            spm[gr.at(6) + gr.at(3, CTRL_GR_LO)] = reg[4]; gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);    //mv and autoincrement j++     // hPong[j] = vH
             //NOP
 
-            //3rd
-            //COMP: e = max(e, subs(vH, vGapO))
-            reg[6] = gssw4_max_epu8(reg[6], gssw4_subs_epu8(reg[4], reg[1]));
-            //COMP: vTemp = max(vTemp, vF)
-            reg[9] = gssw4_max_epu8(reg[9], reg[5]);
+            reg[4] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO)];      // vH = hPong[j]
+            {
+                //COMP: e = max(e, subs(vH, vGapO))
+                reg[6] = gssw4_max_epu8(reg[6], gssw4_subs_epu8(reg[4], reg[1]));
+                //COMP: vTemp = max(vTemp, vF)
+                reg[9] = gssw4_max_epu8(reg[9], reg[5]);
+            }
 
-            gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);    // j++
-            //NOP
+            //set PC
+            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[6];   // pvE[j] = e
+            {
+                //NOP
+                //COMP: cmp |= any_cmpgt(vF, vTemp)
+                gr.st(13, gssw4_cmpgt_any_epu8(reg[5], reg[4]) | gssw4_cmpgt_any_epu8(reg[5], reg[9]));
+            }
 
-            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_lazyf_normal;
 
+            {
+                //NOP
+                //NOP
+            }
+
+            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[9];   // pvF[j] = vTemp
+            //goto m_101_lazyf;
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_lazyf;
+
+        m_101_lazyf_wrap:
             // --- Wraparound (rare) ---
             reg[4] = spm[gr.at(6) + 0];                         // vH = hPong[0]
+            //NOP
+
+            reg[5] = reg[5] << 8;
             reg[9] = spm[GSSW_F_WOFF + 0];                      // vTemp = pvF[0]
 
+            //set PC
             spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[6];   // pvE[j] = e (j=segLen)
+
             spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[9];   // pvF[j] = vTemp
-
-            //COMP: vF <<= 1 byte
-            reg[5] = gssw4_slli_si128(reg[5], 1);
-            //NOP
-
-            //NOP
-            //NOP
-
             gr.st(3, 0, CTRL_GR_LO);                            // j = 0
-            //NOP
+            {
+                //NOP
+                //NOP
+            }
 
-            //COMP cmp1: cmp = cmpgt(vF, vH) | cmpgt(vF, vTemp)
-            reg[11] = gssw4_cmpgt_epu8(reg[5], reg[4]);
-            //cmp2 NOP
-
-            //COMP: reg[12] = cmpgt(vF, vTemp)
-            reg[12] = gssw4_cmpgt_epu8(reg[5], reg[9]);
-            //NOP
-
-            gr.st(13, gssw4_movemask_epi8(reg[11]) | gssw4_movemask_epi8(reg[12]));
-            goto m_101_lazyf;
-
-        m_101_lazyf_normal:
-            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[6];   // pvE[j] = e
-            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[9];   // pvF[j] = vTemp
-
-            //COMP cmp1
-            reg[11] = gssw4_cmpgt_epu8(reg[5], reg[4]);
-            //COMP cmp2 NOP (but we need vH fresh for next iter)
-            reg[4] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO)];      // vH = hPong[j]
-
-            //COMP: reg[12] = cmpgt(vF, vTemp)
-            reg[12] = gssw4_cmpgt_epu8(reg[5], reg[9]);
-            //NOP
-
-            gr.st(13, gssw4_movemask_epi8(reg[11]) | gssw4_movemask_epi8(reg[12]));
+            //COMP: cmp = any_cmpgt(vF, vH) | any_cmpgt(vF, pvF[0])
+            {
+                //NOP
+                gr.st(13, gssw4_cmpgt_any_epu8(reg[5], reg[4]) | gssw4_cmpgt_any_epu8(reg[5], reg[9]));
+            }
+            //setPC
             goto m_101_lazyf;
 
         m_101_lazyf_done:
-
-            // === F. Horizontal max reduce + best update ===
-            //COMP
-            gr.st(11, gssw4_maxReduce(reg[7]));                 // colMax = maxReduce(vMaxColumn)
+            //set PC
             //NOP
 
+            // === F. Horizontal max reduce + best update ===
+            // NOP
+            // NOP
+            {
+                //COMP
+                gr.st(11, gssw4_maxReduce(reg[7]));                 // colMax = maxReduce(vMaxColumn)
+            }
+
+            {
+                //HALT
+            }
             if (gr.at(11) <= gr.at(14, CTRL_GR_LO)) goto m_101_skip_best;
 
             // colMax > overallMax: update overallMax and best[0..seg-1]
             gr.st(14, gr.at(11), CTRL_GR_LO);                   // overallMax = colMax
             gr.st(3, 0, CTRL_GR_LO);                            // j = 0
         m_101_best_copy:
+
             if (gr.at(3, CTRL_GR_LO) >= GSSW_SEG_LEN) goto m_101_skip_best;
+            //zkn we can't do spm to spm. You need to load, wait a cycle for latency, then store
             spm[GSSW_BEST_WOFF + gr.at(3, CTRL_GR_LO)]
                 = spm[gr.at(6) + gr.at(3, CTRL_GR_LO)];
             gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);
@@ -2208,33 +2235,28 @@ m23_end:    ;
             // Free regs after col loop: gr[2], gr[6], gr[7], gr[8].
             // Use: gr[2]=c, gr[6]=cd_word_off, gr[7,8]=scratch.
 
-            // Recompute childIds_word_base → gr[11]
-            gr.st(11, gr.at(1, CTRL_GR_HI) << 6);
-            gr.st(13, gr.at(1, CTRL_GR_HI) << 3);
-
-            gr.st(11, gr.at(11) + gr.at(13));
-            gr.st(13, gr.at(1, CTRL_GR_HI) << 2);
-
-            gr.st(11, gr.at(11) + gr.at(13));
+            gr.st(12, spm[gr.at(4) + 1]);                        // [next_off lo | next_len hi]
+            gr.st(11, 76);
+            
+            //set PC
             //NOP
 
-            gr.st(11, gr.at(11) + GSSW_NODES_WOFF);              // childIds_word_base → gr[11]
-            //NOP
 
             // Load next_off (low 16 of nd word 1)
-            gr.st(12, spm[gr.at(4) + 1]);                        // [next_off lo | next_len hi]
+            gr.st(12, gr.at(12, CTRL_GR_LO));                       // next_off (full 32-bit usage)
+            {
+                gr.st(11, gr.at(1, CTRL_GR_HI) * gr.at(11));      // numNodes * 76 (node descriptor size)
+            }
+
             //NOP
+            {
+                gr.st(13,(gr.at(11) + GSSW_NODES_WOFF) << 2);
+            }
 
-            gr.st(12, gr.at(12) & 0xFFFF);                       // next_off (full 32-bit usage)
-            //NOP
-
-            // childIds_byte_base + next_off*2 → gr[12]
-            gr.st(13, gr.at(11) << 2);                           // childIds_byte_base
-            gr.st(12, gr.at(12) << 1);                           // next_off * 2
-
-            gr.st(12, gr.at(12) + gr.at(13));                    // start byte addr of childIds[next_off]
             gr.st(2, 0);                                          // c = 0 (full gr[2])
-
+            {
+                gr.st(12, gr.at(13) + (gr.at(12) << 1));
+            }
         m_101_push:
             if (gr.at(2) >= gr.at(3, CTRL_GR_HI)) goto m_101_push_done;
 

@@ -4406,7 +4406,12 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         }
         peHalted += num_halted;
 
-        // SPM bank arbitration with conflict detection (round-robin)
+        // SPM bank arbitration with conflict detection (round-robin).
+        // With 2-stage pipelining per bank, portIsBusy means "pipeline full".
+        // A separate bankUsedThisCycle guard enforces the one-port-per-bank
+        // per-cycle structural limit so PE-vs-PE and PE-vs-LSQ can't both
+        // hit the same bank in the same cycle.
+        bool bankUsedThisCycle[SPM_NUM_BANKS] = {};
         int start_pe = cycle % 4;
         for (int offset = 0; offset < 4; offset++) {
             int pe_idx = (start_pe + offset) % 4;
@@ -4417,38 +4422,52 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             // Check if SPM bank is available
             int bank = SPM_unit->getBank(
                 req->addr, req->peid, req->isVirtualAddr);
-            if (SPM_unit->portIsBusy(
-                    req->addr, req->peid, req->isVirtualAddr)) {
+            bool busy = bankUsedThisCycle[bank] ||
+                SPM_unit->portIsBusy(
+                    req->addr, req->peid, req->isVirtualAddr);
+            if (busy) {
                 bankConflictStalls++;
-                // Perf counter: check if conflict is same-line (forwardable)
-                OutstandingRequest* pend = SPM_unit->requests[bank];
+                // Perf counter: check if conflict is same-line (forwardable).
+                // Scan all pipeline slots for this bank.
                 int newPhys = req->isVirtualAddr
                     ? (req->peid * SPM_BANK_GROUP_SIZE + req->addr)
                     : req->addr;
-                int pendPhys = pend->isVirtualAddr
-                    ? (pend->peid * SPM_BANK_GROUP_SIZE + pend->addr)
-                    : pend->addr;
-                if (lineAddr(newPhys) == lineAddr(pendPhys))
-                    forwardableBankConflict++;
+                for (int s = 0; s < SPM_ACCESS_LATENCY; s++) {
+                    OutstandingRequest* pend =
+                        SPM_unit->requests[bank][s];
+                    if (pend == nullptr) continue;
+                    int pendPhys = pend->isVirtualAddr
+                        ? (pend->peid * SPM_BANK_GROUP_SIZE + pend->addr)
+                        : pend->addr;
+                    if (lineAddr(newPhys) == lineAddr(pendPhys)) {
+                        forwardableBankConflict++;
+                        break;
+                    }
+                }
             } else {
                 // Grant access
                 SPM_unit->access(req->addr, req->peid,
                     req->access_t, req->single_data,
                     req->data, req->isVirtualAddr);
+                bankUsedThisCycle[bank] = true;
                 delete pe_unit[pe_idx]->spmReqPort;
                 pe_unit[pe_idx]->spmReqPort = nullptr;
             }
         }
 
-        // LSQ drain
+        // LSQ drain. spmBankBusy means "can't issue to this bank": either the
+        // PE arbiter already used the port this cycle or the bank's pipeline
+        // is full.
         {
             bool spmBankBusy[SPM_NUM_BANKS] = {};
-            // Only mark banks with in-flight SPM requests. Any pending
-            // PE spmReqPort entries necessarily target banks that are
-            // already busy (otherwise they would have issued above).
-            for (int b = 0; b < SPM_NUM_BANKS; b++)
-                spmBankBusy[b] =
-                    (SPM_unit->requests[b] != nullptr);
+            for (int b = 0; b < SPM_NUM_BANKS; b++) {
+                bool full = true;
+                for (int s = 0; s < SPM_ACCESS_LATENCY; s++)
+                    if (SPM_unit->requests[b][s] == nullptr) {
+                        full = false; break;
+                    }
+                spmBankBusy[b] = bankUsedThisCycle[b] || full;
+            }
             lsq->tick(SPM_unit, s2, spmBankBusy);
         }
 

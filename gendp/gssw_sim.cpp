@@ -72,7 +72,8 @@ static inline uint64_t gssw_spm_size(
         (uint64_t)total_nexts * sizeof(int16_t);
     nexts_bytes = (nexts_bytes + 3) & ~3ULL;
     sz += nexts_bytes;
-    sz += total_seq;
+    // Sequence is packed 2-bit (16 bases per 32-bit word).
+    sz += ((uint64_t)total_seq + 15) / 16 * 4;
     return sz;
 }
 
@@ -120,8 +121,14 @@ static void gssw_spm_pack(uint8_t* SPM,
         memset((uint8_t*)childIds + nexts_bytes, 0,
                nexts_padded - nexts_bytes);
 
-    int8_t* seqDst = (int8_t*)childIds + nexts_padded;
-    memcpy(seqDst, graph->seqs, graph->total_seq);
+    // Pack sequence 2-bit (16 bases per 32-bit word, LE within word).
+    uint32_t* seqDst = (uint32_t*)((uint8_t*)childIds + nexts_padded);
+    uint32_t n_words = (graph->total_seq + 15) / 16;
+    memset(seqDst, 0, (size_t)n_words * sizeof(uint32_t));
+    for (uint32_t i = 0; i < graph->total_seq; i++) {
+        uint32_t base = (uint32_t)((uint8_t)graph->seqs[i]) & 0x3;
+        seqDst[i >> 4] |= base << ((i & 15) * 2);
+    }
 }
 
 // ---- Destroy helpers ----

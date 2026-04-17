@@ -96,6 +96,18 @@ static inline int gssw4_movemask_epi8(uint32_t v) {
          | ((v >> 28) & 0x8);
 }
 
+// Per-lane unsigned 8-bit compare-greater-than, OR-reduced to a scalar
+// 0/1. Models a proposed GenDP opcode that fuses cmpgt + any-reduce in
+// one instruction, eliminating the cmpgt-then-movemask chain.
+static inline int gssw4_cmpgt_any_epu8(uint32_t a, uint32_t b) {
+    for (int i = 0; i < 4; i++) {
+        unsigned la = (a >> (i * 8)) & 0xFFu;
+        unsigned lb = (b >> (i * 8)) & 0xFFu;
+        if (la > lb) return 1;
+    }
+    return 0;
+}
+
 // Low 16 bits (matches _mm_extract_epi16(v, 0)).
 static inline uint16_t gssw4_extract_lo16(uint32_t v) {
     return (uint16_t)v;

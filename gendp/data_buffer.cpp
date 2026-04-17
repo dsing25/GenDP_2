@@ -186,26 +186,34 @@ void addr_regfile::show_data(int addr) {
 SPM::SPM(int size, std::set<EventProducer*>* producers) : active_producers(producers) {
     buffer = (int*)malloc(size * sizeof(int));
     buffer_size = size;
-    for (int i = 0; i < SPM_NUM_BANKS; i++) {
-        requests[i] = nullptr;
-        cycles_left[i] = 0;
+    for (int b = 0; b < SPM_NUM_BANKS; b++) {
+        for (int s = 0; s < SPM_ACCESS_LATENCY; s++) {
+            requests[b][s] = nullptr;
+            cycles_left[b][s] = 0;
+        }
     }
     reset();
 }
 
 SPM::~SPM() {
     free(buffer);
-    for (int i = 0; i < SPM_NUM_BANKS; i++)
-        if (requests[i] != nullptr)
-            delete requests[i];
+    for (int b = 0; b < SPM_NUM_BANKS; b++)
+        for (int s = 0; s < SPM_ACCESS_LATENCY; s++)
+            if (requests[b][s] != nullptr)
+                delete requests[b][s];
 }
 
 void SPM::reset() {
     for (int i = 0; i < buffer_size; i++)
         buffer[i] = 0;
     for (int b = 0; b < SPM_NUM_BANKS; b++) {
-        requests[b] = nullptr;
-        cycles_left[b] = 0;
+        for (int s = 0; s < SPM_ACCESS_LATENCY; s++) {
+            if (requests[b][s] != nullptr) {
+                delete requests[b][s];
+                requests[b][s] = nullptr;
+            }
+            cycles_left[b][s] = 0;
+        }
     }
 }
 
@@ -238,10 +246,14 @@ void SPM::access(int addr, int peid, SpmAccessT access_t,
         fprintf(stderr, "PE[%d] load SPM addr %d (phys %d) error.\n", peid, addr, phys_addr);
         exit(-1);
     }
-    // Index by bank, not by peid
+    // Index by bank, not by peid. Find first free pipeline slot.
     int bank = getBank(addr, peid, isVirtualAddr);
-    if (requests[bank] != nullptr) {
-        fprintf(stderr, "PE[%d] load SPM addr %d error. Bank %d already has pending request\n",
+    int slot = -1;
+    for (int s = 0; s < SPM_ACCESS_LATENCY; s++) {
+        if (requests[bank][s] == nullptr) { slot = s; break; }
+    }
+    if (slot < 0) {
+        fprintf(stderr, "PE[%d] load SPM addr %d error. Bank %d pipeline full\n",
                 peid, addr, bank);
         exit(-1);
     }
@@ -252,8 +264,8 @@ void SPM::access(int addr, int peid, SpmAccessT access_t,
     newReq->data        = data;
     newReq->single_data = single_data;
     newReq->isVirtualAddr = isVirtualAddr;
-    requests[bank]      = newReq;
-    cycles_left[bank]   = SPM_ACCESS_LATENCY;
+    requests[bank][slot]    = newReq;
+    cycles_left[bank][slot] = SPM_ACCESS_LATENCY;
     mark_active_producer();
 }
 
@@ -272,15 +284,19 @@ int SPM::getBank(int addr, int peid, bool isVirtualAddr) {
 
 bool SPM::portIsBusy(int addr, int peid, bool isVirtualAddr) {
     int bank = getBank(addr, peid, isVirtualAddr);
-    return requests[bank] != nullptr;  // Check if bank has pending request
+    // Pipeline full iff every slot for this bank is occupied.
+    for (int s = 0; s < SPM_ACCESS_LATENCY; s++)
+        if (requests[bank][s] == nullptr) return false;
+    return true;
 }
 
 std::pair<bool, std::list<Event>*> SPM::tick(){
     std::list<Event>* events = new std::list<Event>();
     bool requestsOutstanding = false;
-    // Iterate over all 8 banks
+    // Iterate over all banks and their pipeline slots.
     for(int bank = 0; bank < SPM_NUM_BANKS; bank++){
-        OutstandingRequest* req = requests[bank];
+    for(int slot = 0; slot < SPM_ACCESS_LATENCY; slot++){
+        OutstandingRequest* req = requests[bank][slot];
         if (req == nullptr) continue;
         int phys_addr = req->isVirtualAddr
             ? (req->peid * SPM_BANK_GROUP_SIZE
@@ -299,8 +315,8 @@ std::pair<bool, std::list<Event>*> SPM::tick(){
             exit(-1);
         }
         int base = lineAddr(phys_addr);
-        cycles_left[bank]--;
-        if(cycles_left[bank] == 0){
+        cycles_left[bank][slot]--;
+        if(cycles_left[bank][slot] == 0){
             if(req->access_t == SpmAccessT::WRITE){
                 if (req->single_data) {
                     int s = lineOffset(phys_addr);
@@ -342,11 +358,12 @@ std::pair<bool, std::list<Event>*> SPM::tick(){
                 fprintf(stderr, "SPM tick error: unknown access type.\n");
                 exit(-1);
             }
-            delete requests[bank];
-            requests[bank] = nullptr;
+            delete requests[bank][slot];
+            requests[bank][slot] = nullptr;
         } else {
             requestsOutstanding = true;
         }
+    }
     }
     return std::make_pair(!requestsOutstanding, events);
 }
@@ -519,6 +536,11 @@ void CtrlLSQ::drainSpm(
         LsqEntry& entry = spmBanks[b].front();
 
         if (entry.accessType == AccessT::READ) {
+            // One controller read per bank in flight at a time:
+            // pendingCtrlReads[b] is a single slot tracker, and SPM read
+            // completions arrive in issue order but this queue can't
+            // distinguish multiple outstanding controller reads.
+            if (pendingCtrlReads[b].valid) continue;
             // Issue read to SPM
             spm->access(entry.addr, CTRL_PEID,
                 SpmAccessT::READ, false,
@@ -712,9 +734,12 @@ bool CtrlLSQ::hasPendingOps(
     if (!empty()) return true;
     for (int b = 0; b < SPM_NUM_BANKS; b++) {
         if (pendingCtrlReads[b].valid) return true;
-        if (spm->requests[b]
-            && spm->requests[b]->peid == CTRL_PEID)
-            return true;
+        // Any pipeline slot for this bank issued by the controller?
+        for (int s = 0; s < SPM_ACCESS_LATENCY; s++) {
+            if (spm->requests[b][s]
+                && spm->requests[b][s]->peid == CTRL_PEID)
+                return true;
+        }
     }
     return s2->hasPendingOps();
 }

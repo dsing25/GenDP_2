@@ -176,8 +176,12 @@ class SPM : EventProducer{
         int *buffer;
         int buffer_size;
 
-        OutstandingRequest* requests[SPM_NUM_BANKS];  // 8 banks now
-        int cycles_left[SPM_NUM_BANKS];  // Tracks latency countdown for each bank
+        // 2-stage pipeline per bank: up to SPM_ACCESS_LATENCY in-flight
+        // requests per bank, so a new request can be issued each cycle
+        // without waiting for the prior one to finish. Full-pipeline means
+        // all slots occupied.
+        OutstandingRequest* requests[SPM_NUM_BANKS][SPM_ACCESS_LATENCY];
+        int cycles_left[SPM_NUM_BANKS][SPM_ACCESS_LATENCY];
 
         PushableProducerSet active_producers;
 

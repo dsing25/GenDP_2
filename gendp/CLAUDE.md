@@ -193,24 +193,25 @@ See `docs.md` for the complete ISA manual, including:
 
 The SPM has strict access rules that must be followed:
 
-1. **2-cycle latency**: Must insert 2 no-ops between consecutive SPM accesses
-2. **No simultaneous read/write**: Each PE has 1 port (read OR write per cycle)
-3. **No pipelining**: Cannot issue new SPM request while one is in flight
+1. **2-cycle latency**: A load's data is not ready until `SPM_ACCESS_LATENCY` (=2) cycles after issue.
+2. **One port per bank per cycle**: At most one new access issued to a given bank per cycle. PE-vs-PE and PE-vs-LSQ same-bank collisions in the same cycle stall.
+3. **Pipelined**: Up to `SPM_ACCESS_LATENCY` (=2) requests per bank can be in flight concurrently. A second access may be issued to the same bank on the next cycle without waiting for the first to finish — latency is still preserved for each request individually. Pipeline-full stalls the issuer.
 4. **Destination restriction**: SPM loads can only write to `reg`, `gr`, or `out_port`
 
-Illegal pattern example:
+Same-cycle same-bank collision (still illegal):
 ```python
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))  # load
+f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))  # load slot 0
 f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 2, 0, 0, 5, 0, mv))  # ILLEGAL: same cycle store
 ```
 
-Legal pattern:
+Pipelined pattern (legal):
 ```python
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))  # load
-f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))    # nop (cycle 1)
-f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))    # nop (cycle 2)
-f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))    # data ready
+f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))  # load A
+f.write(data_movement_instruction(reg, SPM, 0, 0, 1, 0, 0, 0, 0, 2, mv))  # load B
+f.write(use_of_A_here)                                                    # A ready here (2 cycles after A)
+f.write(use_of_B_here)                                                    # B ready here (2 cycles after B)
 ```
+Using `B` one cycle early is still illegal — per-request latency is preserved.
 
 ### VLIW Concurrent Execution (CRITICAL)
 
