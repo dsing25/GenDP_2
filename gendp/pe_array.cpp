@@ -407,17 +407,19 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         gr[11] = s1c[23];                                // resume arc_ptr
     }
 
-    // Inline assignment: copy diag+arcmeta+arcs from s1c to PE's SPM
-    // Arcs use scalar copy (3-word dst stride vs 2-word src stride)
+    // Inline assignment: copy diag+arcmeta+arcs from s1c to PE's SPM.
+    // diag (2w contiguous) and arcmeta (2w contiguous) use mvdq_copy for
+    // bulk bandwidth; arcs remain scalar because the 3-word dst stride
+    // (vs 2-word src stride) prevents pure mvdq.
     #define F0B_ASSIGN(di, pe_idx) do { \
         gr[5] = s1c[8 + (pe_idx)]; \
         gr[6] = s1c[(pe_idx)]; \
         gr[7] = gr[6] + gr[6]; \
         gr[9] = (di) + (di); \
-        spm[gr[5]+FIN0_ARCMETA+gr[7]]   = s1c[ARC_META_BASE+gr[9]]; \
-        spm[gr[5]+FIN0_ARCMETA+gr[7]+1] = s1c[ARC_META_BASE+gr[9]+1]; \
-        spm[gr[5]+FIN0_DIAGS+gr[7]]   = s1c[32+gr[9]]; \
-        spm[gr[5]+FIN0_DIAGS+gr[7]+1] = s1c[32+gr[9]+1]; \
+        mvdq_copy(&spm[gr[5]+FIN0_ARCMETA+gr[7]], \
+                  &s1c[ARC_META_BASE+gr[9]], 2); \
+        mvdq_copy(&spm[gr[5]+FIN0_DIAGS+gr[7]], \
+                  &s1c[32+gr[9]], 2); \
         gr[10] = s1c[ARC_META_BASE+gr[9]+1] - s1c[ARC_META_BASE+gr[9]]; \
         gr[8] = s1c[4 + (pe_idx)]; \
         gr[1] = gr[11]; \
@@ -495,9 +497,12 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
             //NOP
             gr[8] = gr[7] + FIN0_ARCS + gr[8];          // add: arc addr
             //NOP
-            gr[9] = (unsigned)spm[gr[8]] >> 16;          // shifti_r: w
+            gr[9] = spm[gr[8]];                          // mv: SPM load
+            //NOP                                        // SPM lat 1/2
+            //NOP                                        // SPM lat 2/2
+            gr[9] = (unsigned)gr[9] >> 16;               // shifti_r: w (zero-ext)
             //NOP
-            spm[gr[8]+2] = s2->buffer[gr[14] + gr[9]];  // mv: ts_off
+            spm[gr[8]+2] = s2->buffer[gr[14] + gr[9]];  // mv: ts_off (S2)
         }
         gr[11] = gr[11] + 1;                            // addi
         goto f0b_p2;
@@ -554,8 +559,10 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
                 //NOP
                 gr[9] = gr[7] + FIN0_ARCS + gr[9];      // add: arc addr
                 //NOP
-                gr[3] = (unsigned)spm[gr[9]] >> 16;      // shifti_r: w
-                gr[4] = gr[5] + 1;                       // addi: i_val+1
+                gr[3] = spm[gr[9]];                      // mv: SPM load
+                gr[4] = gr[5] + 1;                       // addi: i_val+1 (fills gap)
+                //NOP                                    // SPM lat 2/2
+                gr[3] = (unsigned)gr[3] >> 16;           // shifti_r: w (zero-ext)
                 // non-ISA: hash multiply
                 uint32_t hk = ((uint32_t)gr[3] << 16)
                     | ((uint32_t)gr[4] & 0xFFFF);
