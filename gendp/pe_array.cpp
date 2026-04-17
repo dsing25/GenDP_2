@@ -3323,9 +3323,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     }
                     intv_n += cnt - skip;
                     // Last hi for next PE seam compare: s1c, not MM.
-                    // When cnt==skip (single-element merged away),
-                    // last_intv_hi was already updated in the merge
-                    // branch; no further update needed.
+                    // cnt==skip (single-element merged away) path:
+                    // last_intv_hi already reflects the merged tail
+                    // (possibly bumped to hi0 at the merge branch),
+                    // so no further update is needed here.
                     if (cnt > skip)
                         last_intv_hi = (uint32_t)s1c[188 + pe];
                 }
