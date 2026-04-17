@@ -311,7 +311,7 @@ void gwfa_simulation(
 
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {
         unsigned long tmp[CTRL_INSTR_BUFFER_GROUP_SIZE];
-        tmp[0] = 0x20f7800000000;
+        tmp[0] = CTRL_NOP_INSTRUCTION;
         tmp[1] = main_instruction[i];
         pa->main_instruction_buffer_write_from_ddr(i, tmp);
         for (int j = 0; j < pe_group_size; j++)
