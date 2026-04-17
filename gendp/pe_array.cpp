@@ -3149,6 +3149,18 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         } else if (magic_id == 31) {
             // Dedup writeback: DIAG_OUTx + INTV_OUTx → MM.
             // Chunk outer, PE inner: round-robin streaming.
+            // Per-PE state lives in s1c (no new C++ locals — ISA rule 3):
+            //   s1c[196+pe] = nds[pe]      per-call diag count
+            //   s1c[200+pe] = nis[pe]      per-call intv count
+            //   s1c[204+pe] = d_cur[pe]    monotonic MM diag cursor
+            //   s1c[208+pe] = i_cur[pe]    monotonic MM intv cursor
+            // Seam metadata for magic 32 merge lives in s1c[176..191]:
+            //   s1c[176+pe] first-intv lo, s1c[180+pe] first-intv hi
+            //   s1c[184+pe] last-intv  lo, s1c[188+pe] last-intv  hi
+            // First-write is gated by s1c[28+pe] == 0 (pre-increment
+            // cumulative intv cursor) so the "first nonzero tile per
+            // PE" case fires exactly once across repeated magic-31
+            // calls. Last is updated on every nonzero tile.
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
@@ -3157,46 +3169,67 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     ? DEDUP_DIAG_OUT1 : DEDUP_DIAG_OUT0;
                 int i_off = (magic_mask & 1)
                     ? DEDUP_INTV_OUT1 : DEDUP_INTV_OUT0;
-                // Pre-compute per-PE diag and intv output info
-                int nds[4], nis[4], d_dsts[4], i_dsts[4];
-                int d_srcs[4], i_srcs2[4];
+                // Pre-compute per-PE counts and MM cursors into s1c.
                 int max_d = 0, max_i = 0;
                 for (int pe = 0; pe < 4; pe++) {
                     int pe_spm = pe * SPM_BANK_GROUP_SIZE;
-                    nds[pe] = spm[pe_spm + DEDUP_META + 2];
-                    nis[pe] = spm[pe_spm + DEDUP_META + 3];
-                    d_dsts[pe] = gr[4] + (s1c[16+pe]+s1c[20+pe])*2;
-                    d_srcs[pe] = pe_spm + d_off;
-                    i_dsts[pe] = gr[7] + (s1c[24+pe]+s1c[28+pe])*2;
-                    i_srcs2[pe] = pe_spm + i_off;
-                    if (nds[pe]*2 > max_d) max_d = nds[pe]*2;
-                    if (nis[pe]*2 > max_i) max_i = nis[pe]*2;
+                    s1c[196+pe] = spm[pe_spm + DEDUP_META + 2]; // nds
+                    s1c[200+pe] = spm[pe_spm + DEDUP_META + 3]; // nis
+                    s1c[204+pe] = gr[4] + (s1c[16+pe]+s1c[20+pe])*2;
+                    s1c[208+pe] = gr[7] + (s1c[24+pe]+s1c[28+pe])*2;
+                    if (s1c[196+pe]*2 > max_d) max_d = s1c[196+pe]*2;
+                    if (s1c[200+pe]*2 > max_i) max_i = s1c[200+pe]*2;
                 }
-                // Diag writeback: chunk outer, PE inner
+                // Seam metadata: first-write-once, last-update-each.
+                // s1c[28+pe] is the pre-increment cumulative intv
+                // cursor; == 0 iff magic 31 has never produced intv
+                // output for this PE, so this is the first nonzero
+                // tile for that PE.
+                for (int pe = 0; pe < 4; pe++) {
+                    if (s1c[200+pe] == 0) continue;
+                    int pe_spm = pe * SPM_BANK_GROUP_SIZE;
+                    int first_src = pe_spm + i_off;
+                    int last_src  = pe_spm + i_off
+                        + (s1c[200+pe] - 1) * 2;
+                    if (s1c[28+pe] == 0) {
+                        s1c[176+pe] = spm[first_src];
+                        s1c[180+pe] = spm[first_src + 1];
+                    }
+                    s1c[184+pe] = spm[last_src];
+                    s1c[188+pe] = spm[last_src + 1];
+                }
+                // Diag writeback: chunk outer, PE inner, monotonic
+                // per-PE MM cursor advances after each mvdq_copy.
                 for (int j = 0; j < max_d; j += 8) {
                     for (int pe = 0; pe < 4; pe++) {
-                        int w = nds[pe] * 2;
+                        int w = s1c[196+pe] * 2;
                         if (j >= w) continue;
                         int cnt = w - j;
                         if (cnt > 8) cnt = 8;
-                        mvdq_copy(&mm[d_dsts[pe]+j],
-                                  &spm[d_srcs[pe]+j], cnt);
+                        int pe_spm = pe * SPM_BANK_GROUP_SIZE;
+                        mvdq_copy(&mm[s1c[204+pe]],
+                                  &spm[pe_spm + d_off + j], cnt);
+                        s1c[204+pe] += cnt;
                     }
                 }
-                // Intv writeback: chunk outer, PE inner
+                // Intv writeback: same pattern, monotonic cursor.
                 for (int j = 0; j < max_i; j += 8) {
                     for (int pe = 0; pe < 4; pe++) {
-                        int w = nis[pe] * 2;
+                        int w = s1c[200+pe] * 2;
                         if (j >= w) continue;
                         int cnt = w - j;
                         if (cnt > 8) cnt = 8;
-                        mvdq_copy(&mm[i_dsts[pe]+j],
-                                  &spm[i_srcs2[pe]+j], cnt);
+                        int pe_spm = pe * SPM_BANK_GROUP_SIZE;
+                        mvdq_copy(&mm[s1c[208+pe]],
+                                  &spm[pe_spm + i_off + j], cnt);
+                        s1c[208+pe] += cnt;
                     }
                 }
+                // Advance persistent per-PE cumulative counts AFTER
+                // the seam-write gate has sampled s1c[28+pe].
                 for (int pe = 0; pe < 4; pe++) {
-                    s1c[20+pe] += nds[pe];
-                    s1c[28+pe] += nis[pe];
+                    s1c[20+pe] += s1c[196+pe];
+                    s1c[28+pe] += s1c[200+pe];
                 }
                 gr[2] += DEDUP_TILE;
             }
