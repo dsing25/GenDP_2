@@ -3321,6 +3321,41 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     int cnt  = s1c[28 + pe];
                     if (cnt <= 0) continue;
                     int skip = 0;
+#ifdef PLAN2A_SEAM_ASSERT
+                    // AC-9 evidence hook: confirm the s1c first/last
+                    // seam values written by magic 31 match the
+                    // first/last intv observed in MM for this PE's
+                    // cumulative output region. Enable with
+                    // `-DPLAN2A_SEAM_ASSERT` and re-run mode 1.
+                    {
+                        int mm_first_lo = mm[mm_intv_out + base*2];
+                        int mm_first_hi = mm[mm_intv_out + base*2 + 1];
+                        int mm_last_lo  = mm[mm_intv_out
+                            + (base + cnt - 1) * 2];
+                        int mm_last_hi  = mm[mm_intv_out
+                            + (base + cnt - 1) * 2 + 1];
+                        assert(s1c[176+pe] == mm_first_lo
+                               && "AC-9 first-lo mismatch");
+                        assert(s1c[180+pe] == mm_first_hi
+                               && "AC-9 first-hi mismatch");
+                        assert(s1c[184+pe] == mm_last_lo
+                               && "AC-9 last-lo mismatch");
+                        assert(s1c[188+pe] == mm_last_hi
+                               && "AC-9 last-hi mismatch");
+                        fprintf(stderr,
+                            "[SEAM pe=%d] s1c_first=0x%x/0x%x "
+                            "mm_first=0x%x/0x%x s1c_last=0x%x/0x%x "
+                            "mm_last=0x%x/0x%x cnt=%d base=%d\n",
+                            pe, (unsigned)s1c[176+pe],
+                            (unsigned)s1c[180+pe],
+                            (unsigned)mm_first_lo,
+                            (unsigned)mm_first_hi,
+                            (unsigned)s1c[184+pe],
+                            (unsigned)s1c[188+pe],
+                            (unsigned)mm_last_lo,
+                            (unsigned)mm_last_hi, cnt, base);
+                    }
+#endif
                     // Boundary merge: use s1c first intv of this PE
                     if (intv_n > 0) {
                         uint32_t lo0 = (uint32_t)s1c[176 + pe];
