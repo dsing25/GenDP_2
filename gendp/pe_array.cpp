@@ -3284,9 +3284,14 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             + (base + cnt - 1) * 2];
                 }
                 // Gather intv from MM_DEDUP_INTV_OUT → MM_INTV
-                // Gather intv: bulk mvdq per PE interior, scalar seam
-                // merge at PE boundaries only. PE 23 already merges
-                // adjacent intvs within each PE's output.
+                // Gather intv: bulk mvdq per PE interior, s1c-based
+                // seam merge at PE boundaries only. PE 23 already
+                // merges adjacent intvs within each PE's output.
+                // Boundary compare uses s1c[176..191] (written by
+                // magic 31 during writeback): first intv lo/hi at
+                // s1c[176+pe]/s1c[180+pe], last intv lo/hi at
+                // s1c[184+pe]/s1c[188+pe]. S1c rule-8 latency is
+                // 1 cycle, vs MM waitLSQ; no MM reads in merge.
                 int intv_n = 0;
                 uint32_t last_intv_hi = 0;
                 for (int pe = 0; pe < 4; pe++) {
@@ -3294,14 +3299,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     int cnt  = s1c[28 + pe];
                     if (cnt <= 0) continue;
                     int skip = 0;
-                    // Boundary merge: check first intv vs last output
+                    // Boundary merge: use s1c first intv of this PE
                     if (intv_n > 0) {
-                        uint32_t lo0 = (uint32_t)mm[
-                            mm_intv_out + base*2];
-                        uint32_t hi0 = (uint32_t)mm[
-                            mm_intv_out + base*2 + 1];
+                        uint32_t lo0 = (uint32_t)s1c[176 + pe];
+                        uint32_t hi0 = (uint32_t)s1c[180 + pe];
                         if (lo0 <= last_intv_hi) {
-                            // Merge into last output
+                            // Merge into last output's hi
                             if (hi0 > last_intv_hi) {
                                 last_intv_hi = hi0;
                                 mm[MM_INTV2+(intv_n-1)*2+1]
@@ -3310,7 +3313,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             skip = 1;
                         }
                     }
-                    // Bulk mvdq copy PE interior
+                    // Bulk mvdq copy PE interior (skip first if merged)
                     int src = mm_intv_out + (base + skip) * 2;
                     int dst = MM_INTV2 + intv_n * 2;
                     int words = (cnt - skip) * 2;
@@ -3319,9 +3322,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         mvdq_copy(&mm[dst + j], &mm[src + j], c);
                     }
                     intv_n += cnt - skip;
+                    // Last hi for next PE seam compare: s1c, not MM.
+                    // When cnt==skip (single-element merged away),
+                    // last_intv_hi was already updated in the merge
+                    // branch; no further update needed.
                     if (cnt > skip)
-                        last_intv_hi = (uint32_t)mm[mm_intv_out
-                            + (base + cnt - 1) * 2 + 1];
+                        last_intv_hi = (uint32_t)s1c[188 + pe];
                 }
 
                 // Clear sort/dedup SPM region per PE
@@ -3332,6 +3338,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         (GWFA_Q_START / 4) * sizeof(int));
                 }
                 memset(s1c, 0, 144 * sizeof(int));
+                // Clear seam metadata band (plan 2a AC-8)
+                memset(&s1c[176], 0, 16 * sizeof(int));
                 // Reset active bases after dedup gather
                 s1c[152] = MM_INTV2;    // intv gathered to MM_INTV
                 s1c[153] = diag_base;   // diags gathered to diag_base
