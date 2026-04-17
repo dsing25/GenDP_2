@@ -201,9 +201,12 @@ SPM::~SPM() {
 }
 
 void SPM::reset() {
-    int i;
-    for (i = 0; i < buffer_size; i++)
+    for (int i = 0; i < buffer_size; i++)
         buffer[i] = 0;
+    for (int b = 0; b < SPM_NUM_BANKS; b++) {
+        requests[b] = nullptr;
+        cycles_left[b] = 0;
+    }
 }
 
 void SPM::show_data(int addr) {
@@ -412,6 +415,17 @@ void comp_instr_buffer::show_data(int addr) {
 CtrlLSQ::CtrlLSQ() {
     for (int b = 0; b < SPM_NUM_BANKS; b++)
         pendingCtrlReads[b].valid = false;
+}
+
+void CtrlLSQ::reset() {
+    for (int b = 0; b < SPM_NUM_BANKS; b++) {
+        spmBanks[b].clear();
+        pendingCtrlReads[b].valid = false;
+    }
+    for (int b = 0; b < S2_NUM_BANKS; b++)
+        s2Banks[b].clear();
+    drainPrioritySpm = 0;
+    drainPriorityS2 = 0;
 }
 
 // S2->SPM: read S2, write SPM (paired)

@@ -235,6 +235,7 @@ struct LsqEntry {
 class CtrlLSQ {
 public:
     CtrlLSQ();
+    void reset();
 
     // Enqueue paired transfers (S2 read + SPM write,
     // or SPM read + S2 write)

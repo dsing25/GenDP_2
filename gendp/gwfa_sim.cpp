@@ -25,15 +25,14 @@ static FILE *openDumpFile(
 
 static bool readLine(FILE *fp, std::string &out)
 {
-    char buf[1 << 20];
-    if (!fgets(buf, sizeof(buf), fp))
-        return false;
-    size_t len = strlen(buf);
-    while (len > 0 &&
-           (buf[len-1] == '\n' ||
-            buf[len-1] == '\r'))
-        --len;
-    out.assign(buf, len);
+    char *line = nullptr;
+    size_t cap = 0;
+    ssize_t n = getline(&line, &cap, fp);
+    if (n < 0) { free(line); return false; }
+    while (n > 0 && (line[n-1] == '\n' || line[n-1] == '\r'))
+        --n;
+    out.assign(line, (size_t)n);
+    free(line);
     return true;
 }
 
@@ -144,6 +143,16 @@ static subgfa_subgraph_t *buildSubgraph(
     assert(sub->arc_off[n_vtx] == (uint32_t)n_arc);
 
     return sub;
+}
+
+static void freeSubgraph(subgfa_subgraph_t *sub) {
+    if (!sub) return;
+    free(sub->graphSeq);
+    free(sub->seq_off);
+    free(sub->seq_len);
+    free(sub->arc);
+    free(sub->arc_off);
+    free(sub);
 }
 
 static std::vector<GwfaIterInput>
@@ -336,6 +345,8 @@ void gwfa_simulation(
                     "for SPM (q=%d gs=%d words), "
                     "skipping\n", i, q_words, gs_words);
                 printf("qqq -1 qqq\n");
+                free(inp.q_enc); inp.q_enc = NULL;
+                freeSubgraph(inp.sub); inp.sub = NULL;
                 continue;
             }
         }
@@ -345,8 +356,12 @@ void gwfa_simulation(
             pa->main_addressing_register,
             MAIN_ADDR_REGISTER_NUM);
         pa->main_PC = 0;
-        memset(pa->va_regfile, 0,
-            sizeof(pa->va_regfile));
+        memset(pa->va_regfile, 0, sizeof(pa->va_regfile));
+        memset(pa->s1c, 0, sizeof(pa->s1c));
+
+        // Reset shared SPM, S2, LSQ, event producers
+        pa->reset_shared_spm();
+        pa->reset_controller_state();
 
         // Reset PE state (SPM, registers, PCs)
         for (int pe = 0; pe < 4; pe++)
@@ -385,8 +400,8 @@ void gwfa_simulation(
 
         // Max cycles: scale with edit distance × tiles per step
         int max_cycles =
-            inp.s_term * 10000 + 10000;
-        if (max_cycles < 100000) max_cycles = 100000;
+            inp.s_term * 500000 + 500000;
+        if (max_cycles < 2000000) max_cycles = 2000000;
         pa->run(max_cycles, 0, PE_4_SETTING,
             MAIN_INSTRUCTION_1);
 

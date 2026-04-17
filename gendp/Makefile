@@ -8,7 +8,7 @@ AR      = @echo generating static library $@ && ar rc
 
 #BASE CXXFLAGS
 #CXXFLAGS   = -g -Wall -Wno-format -Wno-unused-variable -Wno-unused-but-set-parameter -Wno-unused-result -fPIC -std=c++11 -O0 -g3 -fno-inline -fno-omit-frame-pointer -fno-lto -fvar-tracking -fvar-tracking-assignments -lpthread 
-CXXFLAGS   = -g -g3 -ggdb -O0 -std=c++11 -msse4.1 -DGWFA_DBG_DEFAULT=1
+CXXFLAGS   = -g -g3 -ggdb -O0 -std=c++11 -msse4.1
 #CXXFLAGS   += -Wall -Wextra -Wpedantic
 HEADER  = 
 LIBS    = libsimulator.a 
@@ -20,7 +20,6 @@ ifeq ($(ADDRESS_SANITIZER),1)
     CXXFLAGS += -fsanitize=address -fno-omit-frame-pointer -static-libasan
     LINKFLAGS += -fsanitize=address
 endif
-
 
 OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o gwfa_sim.o gssw_sim.o simulator.o
 

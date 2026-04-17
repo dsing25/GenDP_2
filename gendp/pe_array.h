@@ -49,6 +49,8 @@ class pe_array {
         void pe_comp_instruction_buffer_write_from_ddr(int addr, unsigned long data[], int id);
 
         void buffer_reset(int* buffer, int num);
+        void reset_shared_spm();
+        void reset_controller_state();
         void write_spm_magic(int addr, int value);
 
         void write_s2(int addr, int value);

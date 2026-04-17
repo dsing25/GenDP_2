@@ -167,6 +167,7 @@ def run_sim_debug(s_term_dbg=5):
     ]
     env = os.environ.copy()
     env['GWFA_S_TERM_DBG'] = str(s_term_dbg)
+    env['GWFA_DBG'] = '1'
     print(f"Running: {' '.join(cmd)}")
     print(f"  GWFA_S_TERM_DBG={s_term_dbg}")
     result = subprocess.run(

@@ -54,6 +54,9 @@ void pe::reset() {
     PC[0] = 0;
     PC[1] = 0;
     ras = 0;
+    outstanding_req.clear();
+    spmReqPort = nullptr;
+    halted = false;
 }
 
 void pe::recieve_spm_data(int data[LINE_SIZE]){
@@ -263,20 +266,6 @@ void pe::run(int simd) {
     };
     bool cf0 = is_ctrl_flow(ctrl_op[0]), cf1 = is_ctrl_flow(ctrl_op[1]);
 
-    // Halt must be paired in both slots
-    if ((ctrl_op[0] == CTRL_HALT) != (ctrl_op[1] == CTRL_HALT)) {
-        fprintf(stderr,
-            "PE[%d] PC=%d halt must be paired (op0=%d op1=%d)\n",
-            id, old_PC, ctrl_op[0], ctrl_op[1]);
-        exit(-1);
-    }
-    // Both control flow: must target same PC
-    if (cf0 && cf1 && PC[0] != PC[1]) {
-        fprintf(stderr,
-            "PE[%d] PC=%d diverging branches: slot0->%d slot1->%d\n",
-            id, old_PC, PC[0], PC[1]);
-        exit(-1);
-    }
     // One control flow taken: sync other slot
     bool took0 = (PC[0] != old_PC + 1);
     bool took1 = (PC[1] != old_PC + 1);
@@ -1113,39 +1102,67 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         m8_done: ;
 #endif // reference vs PE implementation
         } else if (magic_id == 11) {
-            // Boundary sort: compare-and-swap last B of this PE with first B of next PE
-            // Ping-pong: mask bit 0 selects buffer half
+            // Boundary sort: 3-step compare-and-swap to fix up to 2
+            // entries of disorder at each PE boundary. Runs in parallel
+            // on PEs 0-2 (each fixes its own right boundary with the
+            // next PE's left boundary). PE3 pushes last B to FIFO.
             int buf_base = (magic_mask & 1)
                 ? GWFA_BUF1_BASE : GWFA_BUF0_BASE;
             int *spm = &SPM_unit->buffer[
                 id * SPM_BANK_GROUP_SIZE + buf_base];
             int tb_n = spm[1152]; // META_OFF
+            int tmp_vd, tmp_k;    // swap registers
             if (id < 3) {
                 int *next = &SPM_unit->buffer[
-                    (id + 1) * SPM_BANK_GROUP_SIZE
-                    + buf_base];
+                    (id + 1) * SPM_BANK_GROUP_SIZE + buf_base];
                 int next_tb_n = next[1152];
                 if (tb_n > 0 && next_tb_n > 0) {
-                    int my_off = 256 + 2 * (tb_n - 1);
-                    int nx_off = 256;
-                    if ((uint32_t)spm[my_off]
-                        > (uint32_t)next[nx_off]) {
-                        int tmp_vd = spm[my_off];
-                        int tmp_k = spm[my_off + 1];
-                        spm[my_off] = next[nx_off];
-                        spm[my_off + 1] =
-                            next[nx_off + 1];
-                        next[nx_off] = tmp_vd;
-                        next[nx_off + 1] = tmp_k;
+                    int last  = 256 + 2 * (tb_n - 1);
+                    int first = 256;
+                    // Step 1: compare-and-swap my last ↔ next's first
+                    if ((uint32_t)spm[last] > (uint32_t)next[first]) {
+                        tmp_vd = spm[last]; tmp_k = spm[last + 1];
+                        spm[last] = next[first];
+                        spm[last + 1] = next[first + 1];
+                        next[first] = tmp_vd;
+                        next[first + 1] = tmp_k;
+                    }
+                    // Step 2: fix my tail (second-to-last vs last)
+                    if (tb_n >= 2) {
+                        int prev = 256 + 2 * (tb_n - 2);
+                        if ((uint32_t)spm[prev] > (uint32_t)spm[last]) {
+                            tmp_vd = spm[prev]; tmp_k = spm[prev + 1];
+                            spm[prev] = spm[last];
+                            spm[prev + 1] = spm[last + 1];
+                            spm[last] = tmp_vd;
+                            spm[last + 1] = tmp_k;
+                        }
+                    }
+                    // Step 3: fix next PE's head (first vs second)
+                    if (next_tb_n >= 2) {
+                        int second = 256 + 2;
+                        if ((uint32_t)next[first] > (uint32_t)next[second]) {
+                            tmp_vd = next[first]; tmp_k = next[first + 1];
+                            next[first] = next[second];
+                            next[first + 1] = next[second + 1];
+                            next[second] = tmp_vd;
+                            next[second + 1] = tmp_k;
+                        }
                     }
                 }
             } else {
-                // PE 3: push last B to FIFO, decrement count
-                if (tb_n > 0) {
-                    int off = 256 + 2 * (tb_n - 1);
-                    fifo_out[0]->push(spm[off]);
-                    fifo_out[1]->push(spm[off + 1]);
-                    spm[1152] = tb_n - 1;
+                // PE 3: fix tail only (FIFO push moved to magic 9
+                // so it's consumed by the NEXT tile group's writeback)
+                if (tb_n >= 2) {
+                    int last = 256 + 2 * (tb_n - 1);
+                    int prev = 256 + 2 * (tb_n - 2);
+                    if ((uint32_t)spm[prev] > (uint32_t)spm[last]) {
+                        tmp_vd = spm[prev]; tmp_k = spm[prev + 1];
+                        spm[prev] = spm[last];
+                        spm[prev + 1] = spm[last + 1];
+                        spm[last] = tmp_vd;
+                        spm[last + 1] = tmp_k;
+                    }
                 }
             }
         } else if (magic_id == 13) {
@@ -1377,6 +1394,341 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             spm[P2_META_OFF + P2_M_FIN1] = gr.at(6, CTRL_GR_HI);
             //NOP
         m13_done: ;
+        } else if (magic_id == 20) {
+            // Sort bin count: accumulate bin_counts[16] in META across tiles.
+            // mask bit 0 = which TILE_BUF (0=TILE_BUF0, 1=TILE_BUF1)
+            int tile_buf_off = (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
+            int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+            int tile_n = spm[SORT_META + 32];
+            int shift  = spm[SORT_META + 33];
+            int *tile   = &spm[tile_buf_off];
+            int *counts = &spm[SORT_META];          // bin_counts[0..15]
+            for (int i = 0; i < tile_n; i++) {
+                int bin = ((uint32_t)tile[i * 2] >> shift) & 0xF;
+                counts[bin]++;
+            }
+        } else if (magic_id == 21) {
+            // Sort scatter: scatter tile elements into BIN_REGIONS; write tile_bin_counts.
+            // mask bit 0 = which TILE_BUF / BIN_REG (0=ping, 1=pong)
+            int tile_buf_off = (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
+            int bin_reg_off  = (magic_mask & 1) ? SORT_BIN_REG1  : SORT_BIN_REG0;
+            int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+            int tile_n = spm[SORT_META + 32];
+            int shift  = spm[SORT_META + 33];
+            int *tile            = &spm[tile_buf_off];
+            int *tile_bin_counts = &spm[SORT_META + 16];   // [16..31]
+            int bin_cursors[SORT_RADIX_BINS] = {};
+            for (int b = 0; b < SORT_RADIX_BINS; b++) tile_bin_counts[b] = 0;
+            for (int i = 0; i < tile_n; i++) {
+                int vd  = tile[i * 2];
+                int k   = tile[i * 2 + 1];
+                int bin = ((uint32_t)vd >> shift) & 0xF;
+                int off = bin * SORT_BIN_REGION_SIZE * 2 + bin_cursors[bin] * 2;
+                spm[bin_reg_off + off]     = vd;
+                spm[bin_reg_off + off + 1] = k;
+                bin_cursors[bin]++;
+                tile_bin_counts[bin]++;
+            }
+        } else if (magic_id == 22) {
+            // Merge: input-capped two-pointer merge with ping-pong tiles.
+            // PE consumes up to MERGE_STEP inputs per call. Exits when budget
+            // reached or both streams have no available data (need reload).
+            // META: [0]=ai, [1]=bi, [4]=out_n,
+            //   [5]=a_done, [6]=b_done, [7]=a_which, [8]=b_which,
+            //   [9]=a_tile_n_buf0, [10]=a_tile_n_buf1,
+            //   [11]=b_tile_n_buf0, [12]=b_tile_n_buf1
+            int out_off = (magic_mask & 1) ? MERGE_OUT1 : MERGE_OUT0;
+            int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+            int ai  = spm[MERGE_META + 0];
+            int bi  = spm[MERGE_META + 1];
+            int aw  = spm[MERGE_META + 7];
+            int bw  = spm[MERGE_META + 8];
+            int a_n = spm[MERGE_META + 9 + aw];
+            int b_n = spm[MERGE_META + 11 + bw];
+            int ab  = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
+            int bb  = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
+            int ad  = spm[MERGE_META + 5];
+            int bd  = spm[MERGE_META + 6];
+            int *out = &spm[out_off];
+            int oi = 0;
+            int ai0 = ai, bi0 = bi; // initial cursors for input budget
+            // Boundary vd values for intv tracking (AC-7)
+            // Loaded by controller into MERGE_META[13-15]
+            uint32_t bvd[3] = {(uint32_t)spm[MERGE_META+13],
+                               (uint32_t)spm[MERGE_META+14],
+                               (uint32_t)spm[MERGE_META+15]};
+            // Boundary positions stored at SPM[976..981], initialized to -1
+            // [976..978] = hi_pos[0..2]: first output where hi > bvd
+            // [979..981] = lo_pos[0..2]: first output where lo >= bvd
+            // [982] = cumulative output count across calls
+            int cum_oi = spm[982];
+            int pe_global_base = spm[983]; // global output base for this PE
+            while ((ai - ai0) + (bi - bi0) < MERGE_STEP) {
+                // Switch A buffer if current exhausted
+                if (ai >= a_n) {
+                    int o = aw ^ 1;
+                    int on = spm[MERGE_META + 9 + o];
+                    if (on > 0) {
+                        spm[MERGE_META + 9 + aw] = 0;
+                        aw = o;
+                        ab = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
+                        ai = 0; ai0 -= a_n; a_n = on;
+                    }
+                }
+                if (bi >= b_n) {
+                    int o = bw ^ 1;
+                    int on = spm[MERGE_META + 11 + o];
+                    if (on > 0) {
+                        spm[MERGE_META + 11 + bw] = 0;
+                        bw = o;
+                        bb = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
+                        bi = 0; bi0 -= b_n; b_n = on;
+                    }
+                }
+                bool aa = (ai < a_n), ba = (bi < b_n);
+                if (!aa && !ba) {
+                    // Force budget satisfied to exit loop cleanly
+                    ai0 = ai - MERGE_STEP; bi0 = bi;
+                    continue;
+                }
+                // Pick next element: drain single stream or merge two
+                if (!aa || (ba && (uint32_t)spm[bb+bi*2]
+                                < (uint32_t)spm[ab+ai*2])) {
+                    out[oi*2]=spm[bb+bi*2];
+                    out[oi*2+1]=spm[bb+bi*2+1]; bi++; oi++;
+                } else {
+                    out[oi*2]=spm[ab+ai*2];
+                    out[oi*2+1]=spm[ab+ai*2+1]; ai++; oi++;
+                }
+                // Track intv boundary crossings (AC-7)
+                int gpos = pe_global_base + cum_oi + oi - 1;
+                uint32_t out_lo = (uint32_t)out[(oi-1)*2];
+                uint32_t out_hi = (uint32_t)out[(oi-1)*2+1];
+                for (int b = 0; b < 3; b++) {
+                    if (spm[976+b] < 0 && out_hi > bvd[b])
+                        spm[976+b] = gpos; // hi_pos: first hi > bvd
+                    if (spm[979+b] < 0 && out_lo >= bvd[b])
+                        spm[979+b] = gpos; // lo_pos: first lo >= bvd
+                }
+            }
+            spm[MERGE_META+0]=ai; spm[MERGE_META+1]=bi;
+            spm[MERGE_META+4]=oi;
+            spm[MERGE_META+7]=aw; spm[MERGE_META+8]=bw;
+            spm[982] = cum_oi + oi; // update cumulative output count
+        } else if (magic_id == 23) {
+            // Tiled dedup: state machine with TILE_SIZE counter,
+            // dual input ping-pong, inline intv merge-adjacent.
+            // States: X=merge same-vd, B=advance intv, C=drain intv.
+            // mask bit 0 selects output ping (OUT0) or pong (OUT1).
+            int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
+            int do_off = (magic_mask & 1)
+                ? DEDUP_DIAG_OUT1 : DEDUP_DIAG_OUT0;
+            int io_off = (magic_mask & 1)
+                ? DEDUP_INTV_OUT1 : DEDUP_INTV_OUT0;
+            // Restore state from META
+            uint32_t pv = (uint32_t)spm[DEDUP_META + 0];
+            int pk       = spm[DEDUP_META + 1];
+            int n_do = 0, n_io = 0;
+            int dc   = spm[DEDUP_META + 4];
+            int ic   = spm[DEDUP_META + 5];
+            int dw   = spm[DEDUP_META + 6];
+            int iw   = spm[DEDUP_META + 7];
+            int de = 0, ie = 0;
+            int dtn  = spm[DEDUP_META + 10 + dw];
+            int don_ = spm[DEDUP_META + 10 + (dw^1)];
+            int itn  = spm[DEDUP_META + 12 + iw];
+            int ion  = spm[DEDUP_META + 12 + (iw^1)];
+            uint32_t clo = (uint32_t)spm[DEDUP_META + 14];
+            uint32_t chi = (uint32_t)spm[DEDUP_META + 15];
+            int state    = spm[DEDUP_META + 16];
+            int pdone    = spm[DEDUP_META + 17];
+            uint32_t nv  = (uint32_t)spm[DEDUP_META + 18];
+            int nk       = spm[DEDUP_META + 19];
+            int db = dw ? DEDUP_DIAG_BUF1 : DEDUP_DIAG_BUF0;
+            int ib = iw ? DEDUP_INTV_BUF1  : DEDUP_INTV_BUF0;
+            int p = 0;  // processed counter
+            bool ad = false, ai = false;  // all_diag/intv done
+
+            // --- Helpers ---
+            // Read next diag; returns false if all consumed
+            auto rd = [&](uint32_t &vd, int &k) -> bool {
+                if (dc >= dtn) {
+                    spm[DEDUP_META + 10 + dw] = 0; // zero in SPM
+                    dw ^= 1;
+                    db = dw ? DEDUP_DIAG_BUF1 : DEDUP_DIAG_BUF0;
+                    de = 1; dtn = don_; don_ = 0; dc = 0;
+                    if (dtn == 0) { ad = true; return false; }
+                }
+                vd = (uint32_t)spm[db+dc*2];
+                k  = spm[db+dc*2+1];
+                dc++; p++;
+                return true;
+            };
+            // Read next intv; returns false if all consumed
+            auto ri = [&](uint32_t &lo, uint32_t &hi) -> bool {
+                if (ic >= itn) {
+                    spm[DEDUP_META + 12 + iw] = 0;
+                    iw ^= 1;
+                    ib = iw ? DEDUP_INTV_BUF1 : DEDUP_INTV_BUF0;
+                    ie = 1; itn = ion; ion = 0; ic = 0;
+                    if (itn == 0) { ai = true; return false; }
+                }
+                lo = (uint32_t)spm[ib+ic*2];
+                hi = (uint32_t)spm[ib+ic*2+1];
+                ic++; p++;
+                return true;
+            };
+            // Peek next intv without consuming
+            auto pi = [&](uint32_t &lo, uint32_t &hi) -> bool {
+                int tc=ic, tw=iw, tt=itn, tb=ib;
+                if (tc >= tt) {
+                    tw ^= 1;
+                    tb = tw ? DEDUP_INTV_BUF1 : DEDUP_INTV_BUF0;
+                    tt = ion; tc = 0;
+                    if (tt == 0) return false;
+                }
+                lo = (uint32_t)spm[tb+tc*2];
+                hi = (uint32_t)spm[tb+tc*2+1];
+                return true;
+            };
+            // Save all PE-owned META fields and exit
+            #define M23_SAVE do { \
+                spm[DEDUP_META+0]=(int)pv; spm[DEDUP_META+1]=pk; \
+                spm[DEDUP_META+2]=n_do; spm[DEDUP_META+3]=n_io; \
+                spm[DEDUP_META+4]=dc; spm[DEDUP_META+5]=ic; \
+                spm[DEDUP_META+6]=dw; spm[DEDUP_META+7]=iw; \
+                spm[DEDUP_META+8]=de; spm[DEDUP_META+9]=ie; \
+                spm[DEDUP_META+14]=(int)clo; \
+                spm[DEDUP_META+15]=(int)chi; \
+                spm[DEDUP_META+16]=state; \
+                spm[DEDUP_META+17]=pdone; \
+                spm[DEDUP_META+18]=(int)nv; \
+                spm[DEDUP_META+19]=nk; \
+            } while(0)
+
+            if (pdone) { M23_SAVE; goto m23_end; }
+            // Jump to saved state
+            if (state == 1) goto m23_B;
+            if (state == 2) goto m23_C;
+
+            // --- State X: merge same-vd diags ---
+m23_X:      while (p < DEDUP_TILE) {
+                uint32_t vd; int k;
+                if (!rd(vd, k)) {
+                    // All diags consumed
+                    if (pv != 0xFFFFFFFFU) {
+                        nv = 0xFFFFFFFFU; // flag: diags done
+                        goto m23_B;
+                    }
+                    goto m23_C;
+                }
+                if (pv == 0xFFFFFFFFU) {
+                    pv = vd; pk = k; continue;
+                }
+                if (vd == pv) {
+                    if (k > pk) pk = k; continue;
+                }
+                // New vd group → process completed (pv,pk)
+                nv = vd; nk = k;
+m23_B:          // Advance intv past pv (State B)
+                state = 1;
+                for (;;) {
+                    // Read first intv if no cur_intv
+                    if (clo == 0xFFFFFFFFU) {
+                        if (ai) break;
+                        uint32_t lo, hi;
+                        if (!ri(lo, hi)) break;
+                        if (p >= DEDUP_TILE) {
+                            clo = lo; chi = hi;
+                            M23_SAVE; goto m23_end;
+                        }
+                        clo = lo; chi = hi;
+                    }
+                    // Always merge overlapping via peek
+                    for (;;) {
+                        uint32_t l2, h2;
+                        if (!pi(l2, h2)) break;
+                        if (l2 <= chi) {
+                            uint32_t d1, d2; ri(d1, d2);
+                            if (h2 > chi) chi = h2;
+                            if (p >= DEDUP_TILE) {
+                                M23_SAVE; goto m23_end;
+                            }
+                        } else break;
+                    }
+                    if (chi > pv) break; // cur_intv passes pv
+                    // Flush cur_intv (behind pv)
+                    spm[io_off + n_io*2] = (int)clo;
+                    spm[io_off + n_io*2+1] = (int)chi;
+                    n_io++;
+                    clo = 0xFFFFFFFFU;
+                }
+                // Forbidden check
+                { bool forb = (clo != 0xFFFFFFFFU
+                    && clo <= pv && pv < chi);
+                  if (!forb) {
+                      spm[do_off + n_do*2] = (int)pv;
+                      spm[do_off + n_do*2+1] = pk;
+                      n_do++;
+                  }
+                }
+                // Transition
+                if (nv == 0xFFFFFFFFU) {
+                    pv = 0xFFFFFFFFU; goto m23_C;
+                }
+                pv = nv; pk = nk;
+            }
+            state = 0; M23_SAVE; goto m23_end;
+
+            // --- State C: drain remaining intervals ---
+m23_C:      state = 2;
+            while (p < DEDUP_TILE) {
+                if (clo == 0xFFFFFFFFU) {
+                    uint32_t lo, hi;
+                    if (!ri(lo, hi)) {
+                        pdone = 1; M23_SAVE; goto m23_end;
+                    }
+                    if (p >= DEDUP_TILE) {
+                        clo = lo; chi = hi;
+                        M23_SAVE; goto m23_end;
+                    }
+                    clo = lo; chi = hi;
+                }
+                // Merge overlapping via peek
+                for (;;) {
+                    uint32_t lo, hi;
+                    if (!pi(lo, hi)) goto m23_drain_done;
+                    if (lo <= chi) {
+                        uint32_t d1, d2; ri(d1, d2);
+                        if (hi > chi) chi = hi;
+                        if (p >= DEDUP_TILE) {
+                            M23_SAVE; goto m23_end;
+                        }
+                    } else {
+                        // Disjoint: flush cur_intv, start new
+                        spm[io_off + n_io*2] = (int)clo;
+                        spm[io_off + n_io*2+1] = (int)chi;
+                        n_io++;
+                        uint32_t d1, d2; ri(d1, d2);
+                        clo = d1; chi = d2;
+                        if (p >= DEDUP_TILE) {
+                            M23_SAVE; goto m23_end;
+                        }
+                    }
+                }
+m23_drain_done:
+                // All intv consumed — flush last cur_intv
+                if (clo != 0xFFFFFFFFU) {
+                    spm[io_off + n_io*2] = (int)clo;
+                    spm[io_off + n_io*2+1] = (int)chi;
+                    n_io++; clo = 0xFFFFFFFFU;
+                }
+                pdone = 1; M23_SAVE; goto m23_end;
+            }
+            M23_SAVE;
+m23_end:    ;
+            ;
+            #undef M23_SAVE
         } else if (magic_id == 19) {
             // PE FIN0: hash check + character match on FIN_0_TILE.
             // Reads: diags, arc_meta, arcs, HA buckets from FIN0 region.
