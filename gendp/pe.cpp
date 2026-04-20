@@ -1900,14 +1900,22 @@ m23_end:    ;
             fspm[FIN0_META + 3] = n_B;
             fspm[FIN0_META + 4] = n_HA;
         m19_done: ;
-        } else if (magic_id == 101 || magic_id == 103 || magic_id == 104) {
+        } else if (magic_id == 101 || magic_id == 103
+                || magic_id == 104 || magic_id == 106) {
             // GSSW kernel — register-mapped ISA-like form.
             // Staged-lowering variants:
             //   magic 101 = full kernel (sections A..I)
             //   magic 103 = skip section A (prologue done in ISA)
-            //   magic 104 = skip section A AND section I
-            //               (prologue + final reduce done in ISA;
-            //                 magic runs only B..H and returns).
+            //   magic 104 = skip sections A and I (sections B..H only)
+            //   magic 106 = skip A, B (outer-loop wiring), H, I.
+            //               Runs sections C..G for ONE node given the
+            //               metadata pre-loaded by the ISA outer loop.
+            //               Caller must set gr[1].hi (numNodes),
+            //               gr[2].hi (seq_len), gr[3].hi (next_len),
+            //               gr[4] (nd_word_off), gr[7] (seq_base_idx),
+            //               gr[9] (graphSeq_word_base), gr[11] (=78),
+            //               gr[14].lo (overallMax), reg[0..7] (consts)
+            //               before invoking.
             // Register allocation:
             //  gr[1] lo: n           hi: numNodes
             //  gr[2] lo: col         hi: seq_len
@@ -2012,6 +2020,7 @@ m23_end:    ;
 
             // === B. OUTER NODE LOOP ===
         m_101_node:
+          if (magic_id != 106) {
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI)) goto m_101_done;
 
             // nd_word_off = NODES_WOFF + n * 76 (uses hoisted gr[11]=76)
@@ -2034,6 +2043,7 @@ m23_end:    ;
 
             gr.st(7, gr.at(7) + gr.at(12, CTRL_GR_LO));      // + seq_off → seq_base_idx
             //NOP
+          }  // end if (magic_id != 106) — section B skipped for magic 106
 
             // === C. SEED LOAD: hPing[j] = nd.hSeed[j], pvE[j] = nd.eSeed[j] ===
             // Init hPing_base = HPING_WOFF, hPong_base = HPONG_WOFF
@@ -2458,12 +2468,15 @@ m23_end:    ;
             if (gr.at(2) < gr.at(3, CTRL_GR_HI)) goto m_101_push;
         m_101_push_done:
 
-            // n++, back to outer loop
-            gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO);
-            goto m_101_node;
+            // n++, back to outer loop.  Skipped for magic 106 which
+            // delegates the outer loop to the ISA caller.
+            if (magic_id != 106) {
+                gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO);
+                goto m_101_node;
+            }
 
         m_101_done:
-          if (magic_id != 104) {
+          if (magic_id != 104 && magic_id != 106) {
             // === I. Final reduce (paired 8-lane) ===
             // vMax pair = reg[14:15] (reusing vMaxColumn slot). Iterate
             // j (word offset, step 2) over best[] pairs, accumulate max.

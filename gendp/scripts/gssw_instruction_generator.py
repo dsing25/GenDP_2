@@ -39,7 +39,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils import InstructionWriter, write_magic, \
     data_movement_instruction, compute_instruction
 from opcodes import (gr, gr_hi, gr_lo, reg, SPM, halt, none, set_PC,
-                     bne, si, mv, mvd, addi, shifti_r, set_8, add,
+                     bne, bge, jump, si, mv, mvd, addi, shifti_l,
+                     shifti_r, set_8, add,
                      MULTIPLICATION, HALT, INVALID, COPY,
                      MAX_EPU8, MAX_REDUCE)
 
@@ -66,9 +67,11 @@ GSSW_ND_MUL_WORDS = GSSW_ND_WORDS  # 78
 
 # --- Compute trace region PCs (indexes into compute_instruction.txt) ---
 # PC 0 is the idle HALT. Other PCs are assigned at generation time.
-CPC_MUL         = 1   # gr[13] = gr[1].hi * gr[11]
-CPC_FINAL_MAX   = 3   # reg[14:15] = max_epu8_pair(reg[14:15], reg[20:21])
-CPC_FINAL_TAIL  = 5   # reg[20] = max(reg[14],reg[15]); gr[15] = max_reduce
+CPC_MUL          = 1   # gr[13] = gr[1].hi * gr[11]   (section A)
+CPC_FINAL_MAX    = 3   # reg[14:15] = max_epu8_pair(reg[14:15], reg[20:21])
+CPC_FINAL_TAIL   = 5   # reg[20] = max(reg[14],reg[15]); gr[15] = max_reduce
+CPC_MUL_N_78     = 8   # gr[4] = gr[1].lo * gr[11]    (section B)
+CPC_MUL_CHILD_78 = 10  # gr[8] = gr[7]    * gr[11]    (section H, reserved)
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +125,19 @@ def gssw_compute_instructions():
     f.write(compute_instruction(MAX_REDUCE, INVALID, COPY, 20, 0, 0, 0, 0, 0, COMP_GR + 15))
     f.write(compute_instruction(HALT, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
     # PC 7 — halt tail.
+    for ins in _chalt(): f.write(ins)
+    # PC 8 — CPC_MUL_N_78 : gr[4] = gr[1].lo * gr[11]  (section B).
+    # gr[1].lo compute address = 48 + 1 = 49, gr[11] = 32+11 = 43,
+    # output gr[4] = 32 + 4 = 36.
+    f.write(compute_instruction(MULTIPLICATION, HALT, HALT, 49, 43, 0, 0, 0, 0, COMP_GR + 4))
+    f.write(compute_instruction(HALT, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    # PC 9 — halt tail.
+    for ins in _chalt(): f.write(ins)
+    # PC 10 — CPC_MUL_CHILD_78 : gr[8] = gr[7] * gr[11]  (section H).
+    # gr[7] = 32+7 = 39, gr[11] = 43, output gr[8] = 32+8 = 40.
+    f.write(compute_instruction(MULTIPLICATION, HALT, HALT, 39, 43, 0, 0, 0, 0, COMP_GR + 8))
+    f.write(compute_instruction(HALT, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    # PC 11 — halt tail.
     for ins in _chalt(): f.write(ins)
     f.close()
 
@@ -234,14 +250,83 @@ def pe_0_instruction(f):
 
     # End of section A.
 
-    # Delegate sections B..H to magic(104); section I is lowered below.
-    # Magic 104 clobbers gr[10] (section C writes it with hSeed base),
-    # which would spuriously make the controller's gr[13] sync flag
-    # true and end the simulation before lowered section I runs. Pair
-    # the magic with si gr[10]=0 in slot 0 so the subsequent ctrl_write
-    # phase resets the sync flag back to zero at end of this cycle.
+    # === Section B (lowered): outer node loop wiring + per-node meta ===
+    # Section A has already set gr[1].lo=0 (n=0), gr[1].hi=numNodes,
+    # gr[9]=graphSeq_word_base, gr[11]=78, gr[14].lo=0.  Each iteration
+    # here runs one node of sections C..H via magic(106), then n++.
+
+    node_pc = f.pc  # label: m_101_node (top of outer loop)
+
+    # Move halves for the exit check (bge reads gr full; no subregister).
+    # Use gr[13] and gr[15] as temps. (gr[0] is the implicit 0-base for
+    # addressing-mode decodes where reg_0/reg_1=0 — never write to it.
+    # gr[13] was nN*78 from section A, section B will overwrite it via MUL.
+    # gr[15] is the final score; section I reassigns it so clobber is fine.)
+    f.write(data_movement_instruction(gr, gr_lo, 0, 0, 13, 0, 0, 0, 1, 0, mv))
+    f.write(data_movement_instruction(gr, gr_hi, 0, 0, 15, 0, 0, 0, 1, 0, mv))
+
+    # Exit check: bge gr[13] (=n), gr[15] (=numNodes), off_exit
+    # (Patched after the loop body so off_exit targets the fall-through
+    # PC just past the jump-back below.)
+    bge_exit_wi = f.write_count
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 13, 15, bge))
+    f.write(NOP)
+
+    # Compute n*78 -> gr[4]. Fire CPC_MUL_N_78.
+    # slot 0: set_PC CPC_MUL_N_78   slot 1: NOP
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MUL_N_78, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    # Wait one cycle; compute fires MUL next cycle writing gr[4].
+    f.write(NOP); f.write(NOP)
+
+    # addi gr[4] += GSSW_NODES_WOFF   (nd_word_off)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 4, 0, 0, 0, GSSW_NODES_WOFF, 4, addi))
+    f.write(NOP)
+
+    # mvd gr[12:13] = SPM[gr[4]]     (seq_off|seq_len , next_off|next_len)
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 12, 0, 0, 0, 0, 4, mvd))
+    f.write(NOP)
+    # SPM latency: 1 NOP cycle so gr[12]/gr[13] valid on the next cycle.
+    f.write(NOP); f.write(NOP)
+
+    # mv gr[2].hi = gr[12].hi   (slot 0)  |  NOP
+    # The simulator rejects two mv's sharing a non-gr/reg src position
+    # in the same cycle, so we can't pair two gr_hi reads.  Split into
+    # back-to-back cycles.
+    f.write(data_movement_instruction(gr_hi, gr_hi, 0, 0, 2, 0, 0, 0, 12, 0, mv))
+    f.write(NOP)
+    f.write(data_movement_instruction(gr_hi, gr_hi, 0, 0, 3, 0, 0, 0, 13, 0, mv))
+    f.write(NOP)
+
+    # shifti_l gr[7] = gr[9] << 4   |   mv gr[8] = gr[12].lo
+    # (seq_base_idx = graphSeq_word_base * 16 + seq_off)
+    f.write(data_movement_instruction(gr, 0, 0, 0, 7, 0, 0, 0, 4, 9, shifti_l))
+    f.write(data_movement_instruction(gr, gr_lo, 0, 0, 8, 0, 0, 0, 12, 0, mv))
+
+    # add gr[7] = gr[7] + gr[8]    |   NOP
+    f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 7, 8, add))
+    f.write(NOP)
+
+    # Run sections C..H via magic(106). Pair with si gr[10]=0 in slot 0
+    # (same reason as the stage-2 magic(104) pairing).
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))
-    f.write(write_magic(104))
+    f.write(write_magic(106))
+
+    # n++.   addi gr[1].lo += 1   |   NOP
+    f.write(data_movement_instruction(gr_lo, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))
+    f.write(NOP)
+
+    # Jump back to top of outer loop.
+    jump_back_pc = f.pc
+    f.write(data_movement_instruction(
+        0, 0, 0, 0, node_pc - jump_back_pc, 0, 0, 0, 0, 0, jump))
+    f.write(NOP)
+
+    # Loop exit lands here — patch the forward bge offset now that we
+    # know the target PC.
+    loop_exit_pc = f.pc
+    bge_exit_pc = bge_exit_wi // 2
+    f.patch_imm0(bge_exit_wi, loop_exit_pc - bge_exit_pc)
 
     # === Section I (lowered): final reduce over best[] into gr[15] ===
     # Reset vMax pair. reg[14]=0 | reg[15]=0 via paired set_8.
