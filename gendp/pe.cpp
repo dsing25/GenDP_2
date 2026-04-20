@@ -1839,6 +1839,16 @@ m23_end:    ;
             // PE FIN0: hash check + character match on FIN_0_TILE.
             // Reads: diags, arc_meta, arcs, HA buckets from FIN0 region.
             // Writes: A_list, B_list, HA_dirty_list + counts to FIN0.
+            //
+            // Plan 2b Milestone D annotations (AC-9): contiguous SPM
+            // double-word sites are tagged inline as `mvd` candidates
+            // for the real-ISA lowering. Half-register extract/pack
+            // sites are tagged `half-reg`. Non-goals (stay scalar per
+            // AC-9 scope containment): the `mvi2_ld` lambda (swizzled
+            // 2-bit sequence load) and the 4-word HA bucket probe/mix
+            // loop. The 3-word arc record (packed_vw, ow, ts_off) is
+            // NOT lowerable to a single mvd — only the first two
+            // words form a contiguous pair; `ts_off` stays scalar.
             int fin0_base = (magic_mask & 2)
                 ? GWFA_FIN0B_BASE : GWFA_FIN0_BASE;
             int *fspm = &SPM_unit->buffer[
@@ -1857,12 +1867,14 @@ m23_end:    ;
             int q_base = GWFA_Q_START * 16;
 
             for (int d = 0; d < n_diags; d++) {
+                // mvd: contiguous (vd, k) double-word load from FIN0_DIAGS
                 uint32_t vd = (uint32_t)fspm[FIN0_DIAGS + 2*d];
                 int32_t k = fspm[FIN0_DIAGS + 2*d + 1];
-                uint32_t v = vd >> 16;
-                int32_t d_val = (int32_t)(vd & 0xFFFF)
+                uint32_t v = vd >> 16;                        // half-reg hi
+                int32_t d_val = (int32_t)(vd & 0xFFFF)        // half-reg lo
                     - GWF_DIAG_SHIFT;
                 int32_t i_val = d_val + k;
+                // mvd: contiguous (lo, hi) arcmeta double-word load
                 int lo = fspm[FIN0_ARCMETA + 2*d];
                 int hi = fspm[FIN0_ARCMETA + 2*d + 1];
                 int nv = hi - lo;
@@ -1871,10 +1883,13 @@ m23_end:    ;
                 for (int a = 0; a < nv; a++) {
                     int arc_off = FIN0_ARCS
                         + FIN0_ARC_WORDS * arc_idx;
+                    // mvd: contiguous (packed_vw, ow) double-word load
+                    // from the arc record. ts_off stays scalar (not
+                    // lowerable per AC-9 — 3-word arc record).
                     int packed_vw = fspm[arc_off];
                     int ow = fspm[arc_off + 1];
                     int ts_off = fspm[arc_off + 2];
-                    uint32_t w = (uint32_t)packed_vw >> 16;
+                    uint32_t w = (uint32_t)packed_vw >> 16;   // half-reg hi
 
                     // Hash check: scan bucket for key
                     uint32_t hkey = (w << 16)
@@ -1915,8 +1930,9 @@ m23_end:    ;
                         if (absent) {
                             // Match + absent → output A
                             int32_t nd = i_val + 1 - ow;
-                            uint32_t nvd = (w << 16)
+                            uint32_t nvd = (w << 16)           // half-reg pack
                                 | ((GWF_DIAG_SHIFT + nd) & 0xFFFF);
+                            // mvd: contiguous (nvd, ow) A-queue write
                             fspm[FIN0_OUT + 2*n_A] = (int)nvd;
                             fspm[FIN0_OUT + 2*n_A + 1] = ow;
                             n_A++;
@@ -1924,16 +1940,18 @@ m23_end:    ;
                     } else if (absent) {
                         // Mismatch + absent → output B (sub + ins)
                         int32_t sd = i_val - ow;
-                        uint32_t svd = (w << 16)
+                        uint32_t svd = (w << 16)               // half-reg pack
                             | ((GWF_DIAG_SHIFT + sd) & 0xFFFF);
                         int bo = FIN0_OUT_SIZE-2-2*n_B;
+                        // mvd: contiguous (svd, ow) B-queue write (sub)
                         fspm[FIN0_OUT + bo] = (int)svd;
                         fspm[FIN0_OUT + bo + 1] = ow;
                         n_B++;
                         int32_t id2 = i_val + 1 - ow;
-                        uint32_t ivd = (w << 16)
+                        uint32_t ivd = (w << 16)               // half-reg pack
                             | ((GWF_DIAG_SHIFT + id2) & 0xFFFF);
                         bo = FIN0_OUT_SIZE-2-2*n_B;
+                        // mvd: contiguous (ivd, ow) B-queue write (ins)
                         fspm[FIN0_OUT + bo] = (int)ivd;
                         fspm[FIN0_OUT + bo + 1] = ow;
                         n_B++;
@@ -1942,9 +1960,10 @@ m23_end:    ;
                 }
                 // Deletion: if nv==0 || n_ext!=nv
                 if (nv == 0 || n_ext != nv) {
-                    uint32_t del_vd = (v << 16)
+                    uint32_t del_vd = (v << 16)                // half-reg pack
                         | ((GWF_DIAG_SHIFT + d_val + 1) & 0xFFFF);
                     int bo = FIN0_OUT_SIZE-2-2*n_B;
+                    // mvd: contiguous (del_vd, k) B-queue write (del)
                     fspm[FIN0_OUT + bo] = (int)del_vd;
                     fspm[FIN0_OUT + bo + 1] = k;
                     n_B++;
