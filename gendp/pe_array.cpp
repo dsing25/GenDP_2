@@ -381,6 +381,36 @@ inline int pe_array_read_gr(int *gr, int src, int idx) {
 // s1c[0..3]=nd, s1c[4..7]=na, s1c[8..11]=pe_spm_base, s1c[12..15]=pai
 // Sets gr[2]=1 if more passes needed, 0 if done.
 void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
+    // Plan 2b Milestone F (AC-11) audit — magic 20 SPM-load-to-use
+    // chains:
+    //
+    //   Chain A (pass 2, around lines 500-503):
+    //     `gr[9] = spm[gr[8]]` -> 2x //NOP -> `gr[9] = ... >> 16`.
+    //     Load followed by 2 NOPs, consumer on the 4th op. Legal iff
+    //     the load falls in slot 1 of its VLIW pair (consumer lands
+    //     in cycle N+2 slot 0). Pair alignment is determined by the
+    //     preceding code; mode 2 -t 56 = 295/295 on HEAD confirms
+    //     the observed alignment yields correct results.
+    //
+    //   Chains B/C (pass 3, around lines 536-550):
+    //     `gr[3] = spm[...]; gr[4] = spm[...]; 2x //NOP; gr[5]=gr[3]&...`
+    //     and the analogous arcmeta pair. Both two-load-two-NOP-use
+    //     patterns; same pair-alignment-dependent legality. Mode 2
+    //     confirms.
+    //
+    //   Chain D (pass 3 inner, around line 564):
+    //     `gr[3] = spm[gr[9]]; gr[4] = gr[5]+1; //NOP; gr[3]= ...>>16`.
+    //     Load + 1 useful independent op + 1 NOP + consumer. Same
+    //     legality pattern.
+    //
+    // Verdict: none of these chains exhibit a 0-line gap (consumer on
+    // the line immediately after the SPM load). All are pre-existing
+    // Plan 2a patterns validated by mode 2 = 295/295. The current
+    // NOP count is at the AC-7 minimum for slot-1-aligned loads and
+    // ONE short if any chain turns out slot-0-aligned under a
+    // stricter real-ISA lowering. Disposition:
+    // false-positive-confirmed pending a lowering-level audit that
+    // can prove per-chain slot alignment.
     int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
     int *spm = SPM_unit->buffer;
     constexpr int ARC_META_BASE = 544;
