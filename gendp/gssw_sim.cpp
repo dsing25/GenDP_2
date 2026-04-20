@@ -8,19 +8,22 @@
 #include <sstream>
 #include <cstdint>
 
-// ---- 4-wide SIMD: each "vector" is 4 packed uint8 in a uint32 ----
+// ---- 8-wide SIMD (paired 4-lane): each logical "vector" is 8 packed
+//      uint8s stored as a pair of adjacent uint32 SPM words. ----
 
 #define GSSW_READ_LEN  148
-#define GSSW_SEG_LEN   37                           // ceil(148 / 4)
+#define GSSW_SEG_LEN   19                           // ceil(148 / 8)
+#define GSSW_VEC_WORDS 2                            // 2 SPM words per pair
 
-// SPM fixed-region offsets (bytes). Must match pe.cpp exactly.
+// SPM fixed-region offsets (bytes). Each array holds SEG_LEN pair slots,
+// each 8 bytes. Must match pe.cpp exactly.
 #define GSSW_PROF_OFF   0
-#define GSSW_HPING_OFF  (4 * GSSW_SEG_LEN * 4)       // 4 nt × segLen × 4B
-#define GSSW_HPONG_OFF  (GSSW_HPING_OFF + GSSW_SEG_LEN * 4)
-#define GSSW_E_OFF      (GSSW_HPONG_OFF + GSSW_SEG_LEN * 4)
-#define GSSW_F_OFF      (GSSW_E_OFF     + GSSW_SEG_LEN * 4)
-#define GSSW_BEST_OFF   (GSSW_F_OFF     + GSSW_SEG_LEN * 4)
-#define GSSW_GRAPH_OFF  (GSSW_BEST_OFF  + GSSW_SEG_LEN * 4)
+#define GSSW_HPING_OFF  (4 * GSSW_SEG_LEN * 8)       // 4 nt × segLen pairs × 8B
+#define GSSW_HPONG_OFF  (GSSW_HPING_OFF + GSSW_SEG_LEN * 8)
+#define GSSW_E_OFF      (GSSW_HPONG_OFF + GSSW_SEG_LEN * 8)
+#define GSSW_F_OFF      (GSSW_E_OFF     + GSSW_SEG_LEN * 8)
+#define GSSW_BEST_OFF   (GSSW_F_OFF     + GSSW_SEG_LEN * 8)
+#define GSSW_GRAPH_OFF  (GSSW_BEST_OFF  + GSSW_SEG_LEN * 8)
 
 struct gssw_profile {
     uint32_t* profile_byte;   // 4 nt × segLen uint32s (4 lanes each)
@@ -57,8 +60,9 @@ struct gssw_spm_node_desc {
     int16_t seq_len;
     int16_t next_off;
     int16_t next_len;
-    uint32_t hSeed[GSSW_SEG_LEN];
-    uint32_t eSeed[GSSW_SEG_LEN];
+    // Pair slots: 2 uint32 words per logical 8-lane vector.
+    uint32_t hSeed[GSSW_SEG_LEN * GSSW_VEC_WORDS];
+    uint32_t eSeed[GSSW_SEG_LEN * GSSW_VEC_WORDS];
 };
 
 static inline uint64_t gssw_spm_size(
@@ -84,8 +88,9 @@ static void gssw_spm_pack(uint8_t* SPM,
     const gssw_profile* prof)
 {
     const int32_t segLen = GSSW_SEG_LEN;
+    // Profile is 4 nucleotides × segLen pair-slots × 2 words each.
     memcpy(SPM + GSSW_PROF_OFF, prof->profile_byte,
-           4 * segLen * sizeof(uint32_t));
+           4 * segLen * GSSW_VEC_WORDS * sizeof(uint32_t));
     memset(SPM + GSSW_HPING_OFF, 0,
            (GSSW_GRAPH_OFF - GSSW_HPING_OFF));
 
@@ -105,8 +110,10 @@ static void gssw_spm_pack(uint8_t* SPM,
         dst->seq_len  = src->seq_len;
         dst->next_off = src->next_off;
         dst->next_len = src->next_len;
-        memset(dst->hSeed, 0, segLen * sizeof(uint32_t));
-        memset(dst->eSeed, 0, segLen * sizeof(uint32_t));
+        memset(dst->hSeed, 0,
+            segLen * GSSW_VEC_WORDS * sizeof(uint32_t));
+        memset(dst->eSeed, 0,
+            segLen * GSSW_VEC_WORDS * sizeof(uint32_t));
     }
 
     int16_t* childIds = (int16_t*)(
@@ -243,9 +250,9 @@ static bool parseGraphSoA(FILE *fp,
 // On-disk matchProfiles.txt is in 16-wide striped format:
 //   bytes[nt][seg16*16 + lane16] holds the score for read position
 //   (lane16 * 10 + seg16) vs reference nucleotide nt, where segLen16=10.
-// We re-stripe to 4-wide:
-//   profile_uint[nt][seg4]'s byte lane4 holds the score for read pos
-//   (lane4 * 37 + seg4), where segLen4=37.
+// We re-stripe to 8-wide paired:
+//   profile_uint[nt][seg8*2 + half]'s byte lane4 holds the score for read
+//   pos (lane8 * 19 + seg8), where segLen8=19, lane8 = half*4 + lane4.
 static bool parseProfile(FILE *fp, gssw_profile **out)
 {
     std::string line;
@@ -258,7 +265,7 @@ static bool parseProfile(FILE *fp, gssw_profile **out)
     }
 
     const int32_t segLen16 = (readLen + 15) / 16;  // 10
-    const int32_t segLen4  = (readLen + 3)  / 4;   // 37
+    const int32_t segLen8  = (readLen + 7)  / 8;   // 19
     const int32_t n = 4;                            // nucleotides
 
     gssw_profile* p = (gssw_profile*)
@@ -266,25 +273,30 @@ static bool parseProfile(FILE *fp, gssw_profile **out)
     p->readLen = readLen;
     p->bias = 4;
     p->read = NULL;
+    // Profile size: 4 nt × segLen8 pair-slots × 2 words per pair.
     p->profile_byte = (uint32_t*)
-        calloc(n * segLen4, sizeof(uint32_t));
+        calloc(n * segLen8 * 2, sizeof(uint32_t));
 
     uint8_t* prof_bytes = (uint8_t*)p->profile_byte;
     for (int32_t base = 0; base < n; base++) {
         readLine(fp, line);
         std::istringstream ss(line);
         // Read all 16-wide bytes (segLen16 * 16 = 160 per row).
-        // Un-stripe to linear, then re-stripe to 4-wide.
+        // Un-stripe to linear, then re-stripe to 8-wide paired.
         for (int32_t j = 0; j < segLen16 * 16; j++) {
             int v; ss >> v;
             int32_t seg16  = j / 16;
             int32_t lane16 = j % 16;
             int32_t rp = lane16 * segLen16 + seg16;
             if (rp >= readLen) continue; // padding
-            int32_t lane4 = rp / segLen4;
-            int32_t seg4  = rp % segLen4;
+            int32_t lane8 = rp / segLen8;
+            int32_t seg8  = rp % segLen8;
+            int32_t half  = lane8 >> 2;        // 0 = lo word, 1 = hi word
+            int32_t lane4 = lane8 & 3;         // within-word lane
+            // Layout per nucleotide: pair slots sequentially,
+            //   slot s occupies words [s*2, s*2+1].
             // byte layout within uint32: lane l is bits [l*8, l*8+7]
-            prof_bytes[(base * segLen4 + seg4) * 4 + lane4]
+            prof_bytes[(base * segLen8 * 2 + seg8 * 2 + half) * 4 + lane4]
                 = (uint8_t)v;
         }
     }

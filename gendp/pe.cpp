@@ -538,18 +538,19 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
     }
 }
 
-// ===== Inlined GSSW kernel (4-wide SIMD version) =====
-// Block-copied to avoid linking gssw.c. Uses 4-wide wrappers from
-// gssw_simd4.h to model what GenDP's SIMD ALU will execute.
+// ===== Inlined GSSW kernel (8-wide paired-4-lane SIMD version) =====
+// Block-copied to avoid linking gssw.c. Each logical 8-lane vector
+// occupies a pair of adjacent 32-bit regs / SPM words.
 
-#define GSSW_SEG_LEN   37                            // ceil(148 / 4)
+#define GSSW_SEG_LEN    19                           // ceil(148 / 8)
+#define GSSW_VEC_WORDS  2                            // 2 SPM words per pair
 #define GSSW_PROF_OFF   0
-#define GSSW_HPING_OFF  (4 * GSSW_SEG_LEN * 4)       // 4 nt × segLen vecs × 4B
-#define GSSW_HPONG_OFF  (GSSW_HPING_OFF + GSSW_SEG_LEN * 4)
-#define GSSW_E_OFF      (GSSW_HPONG_OFF + GSSW_SEG_LEN * 4)
-#define GSSW_F_OFF      (GSSW_E_OFF     + GSSW_SEG_LEN * 4)
-#define GSSW_BEST_OFF   (GSSW_F_OFF     + GSSW_SEG_LEN * 4)
-#define GSSW_GRAPH_OFF  (GSSW_BEST_OFF  + GSSW_SEG_LEN * 4)
+#define GSSW_HPING_OFF  (4 * GSSW_SEG_LEN * 8)       // 4 nt × segLen pairs × 8B
+#define GSSW_HPONG_OFF  (GSSW_HPING_OFF + GSSW_SEG_LEN * 8)
+#define GSSW_E_OFF      (GSSW_HPONG_OFF + GSSW_SEG_LEN * 8)
+#define GSSW_F_OFF      (GSSW_E_OFF     + GSSW_SEG_LEN * 8)
+#define GSSW_BEST_OFF   (GSSW_F_OFF     + GSSW_SEG_LEN * 8)
+#define GSSW_GRAPH_OFF  (GSSW_BEST_OFF  + GSSW_SEG_LEN * 8)
 
 struct gssw_spm_graph_meta_t {
     uint32_t num_nodes;
@@ -563,22 +564,24 @@ struct gssw_spm_node_desc_t {
     int16_t seq_len;
     int16_t next_off;
     int16_t next_len;
-    uint32_t hSeed[GSSW_SEG_LEN];
-    uint32_t eSeed[GSSW_SEG_LEN];
+    // Pair slots: 2 uint32 words per logical 8-lane vector.
+    uint32_t hSeed[GSSW_SEG_LEN * GSSW_VEC_WORDS];
+    uint32_t eSeed[GSSW_SEG_LEN * GSSW_VEC_WORDS];
 };
 
 // Word-offset constants (byte offsets / 4) — used by magic 101.
-#define GSSW_PROF_WOFF   (GSSW_PROF_OFF  / 4)    // 0
-#define GSSW_HPING_WOFF  (GSSW_HPING_OFF / 4)    // 148
-#define GSSW_HPONG_WOFF  (GSSW_HPONG_OFF / 4)    // 185
-#define GSSW_E_WOFF      (GSSW_E_OFF     / 4)    // 222
-#define GSSW_F_WOFF      (GSSW_F_OFF     / 4)    // 259
-#define GSSW_BEST_WOFF   (GSSW_BEST_OFF  / 4)    // 296
-#define GSSW_META_WOFF   (GSSW_GRAPH_OFF / 4)    // 333 (meta starts here)
-#define GSSW_NODES_WOFF  (GSSW_META_WOFF + 4)    // 337 (after 4 meta words)
-#define GSSW_ND_WORDS    (2 + 2 * GSSW_SEG_LEN)  // 76 words per node desc
-#define GSSW_ND_HSEED_W  2                       // hSeed words offset within nd
-#define GSSW_ND_ESEED_W  (2 + GSSW_SEG_LEN)      // 39
+// Each array holds SEG_LEN pair slots = 2*SEG_LEN SPM words.
+#define GSSW_PROF_WOFF   (GSSW_PROF_OFF  / 4)         // 0
+#define GSSW_HPING_WOFF  (GSSW_HPING_OFF / 4)         // 152
+#define GSSW_HPONG_WOFF  (GSSW_HPONG_OFF / 4)         // 190
+#define GSSW_E_WOFF      (GSSW_E_OFF     / 4)         // 228
+#define GSSW_F_WOFF      (GSSW_F_OFF     / 4)         // 266
+#define GSSW_BEST_WOFF   (GSSW_BEST_OFF  / 4)         // 304
+#define GSSW_META_WOFF   (GSSW_GRAPH_OFF / 4)         // 342
+#define GSSW_NODES_WOFF  (GSSW_META_WOFF + 4)         // 346 (after 4 meta words)
+#define GSSW_ND_WORDS    (2 + 2 * GSSW_SEG_LEN * GSSW_VEC_WORDS)  // 78 words
+#define GSSW_ND_HSEED_W  2                            // hSeed words offset within nd
+#define GSSW_ND_ESEED_W  (2 + GSSW_SEG_LEN * GSSW_VEC_WORDS)      // 40
 
 // The register-mapped kernel now lives inside magic 101.
 // See magic 101 handler below.
@@ -1882,16 +1885,38 @@ m23_end:    ;
                     >> ((bp & 0xF) << 1)) & 0x3);
             };
 
-            // === A. PROLOGUE: broadcast constants ===
+            // === A. PROLOGUE: broadcast constants (8-lane paired) ===
+            // Register pair map:
+            //   reg[0:1]   = vBias  (0x04040404 in both halves)
+            //   reg[2:3]   = vGapO  (0x06060606 in both)
+            //   reg[4:5]   = vGapE  (0x01010101 in both)
+            //   reg[6:7]   = vZero  (0 in both)
+            //   reg[8:9]   = vH       (main-loop H)
+            //   reg[10:11] = vF       (main-loop F)
+            //   reg[12:13] = e        (main-loop E)
+            //   reg[14:15] = vMaxColumn / vMax (section I)
+            //   reg[16:17] = profScore (mvd-loaded from vP)
+            //   reg[18:19] = vTemp   (lazy-F scratch)
+            //   reg[20:21] = scratch (best copy, push, final)
             //COMP
             {
-                reg[0] = 0x04040404;              // vBias = bcast(4)
-                reg[1] = 0x06060606;              // vGapO = bcast(6)
+                reg[0] = 0x04040404;              // vBias lo = bcast(4)
+                reg[1] = 0x04040404;              // vBias hi
             }
             //COMP
             {
-                reg[2] = 0x01010101;              // vGapE = bcast(1)
-                reg[3] = 0;                       // vZero
+                reg[2] = 0x06060606;              // vGapO lo
+                reg[3] = 0x06060606;              // vGapO hi
+            }
+            //COMP
+            {
+                reg[4] = 0x01010101;              // vGapE lo
+                reg[5] = 0x01010101;              // vGapE hi
+            }
+            //COMP
+            {
+                reg[6] = 0;                       // vZero lo
+                reg[7] = 0;                       // vZero hi
             }
 
             // Load numNodes + total_nexts via mvd into adjacent gr[11:12]
@@ -1902,7 +1927,7 @@ m23_end:    ;
             //NOP
 
             gr.st(1, gr.at(11), CTRL_GR_HI);                 // numNodes → gr[1].HI
-            gr.st(11, 76);                                    // hoist 76 for compute multiply
+            gr.st(11, GSSW_ND_WORDS);                                    // hoist 76 for compute multiply
 
             //set PC for compute mul kernel
             //NOP
@@ -1960,25 +1985,28 @@ m23_end:    ;
             gr.st(6, GSSW_HPONG_WOFF);
 
             // Pre-compute SPM bases so body uses spm[gr+gr] (no const).
-            gr.st(10, gr.at(4) + GSSW_ND_HSEED_W);           // hSeed base
-            gr.st(8, gr.at(4) + GSSW_ND_ESEED_W);            // eSeed base
+            gr.st(10, gr.at(4) + GSSW_ND_HSEED_W);           // hSeed base (words)
+            gr.st(8, gr.at(4) + GSSW_ND_ESEED_W);            // eSeed base (words)
 
-            gr.st(3, 0, CTRL_GR_LO);                         // j = 0
+            // j counts SPM word offset within each array (step 2 = one pair).
+            gr.st(3, 0, CTRL_GR_LO);
         m_101_seed_load:
-            // Load hSeed[j]/eSeed[j] into scratch regs, then store to hPing[j]/pvE[j].
-            // Use reg[11]/reg[12] (not reg[1]/reg[2] which hold vGapO/vGapE).
-            reg[11] = spm[gr.at(10) + gr.at(3, CTRL_GR_LO)];
+            // mvd: reg[20:21] = hSeed[j:j+1]
+            reg[20] = spm[gr.at(10) + gr.at(3, CTRL_GR_LO)]; reg[21] = spm[gr.at(10) + gr.at(3, CTRL_GR_LO) + 1];
             //NOP
 
-            reg[12] = spm[gr.at(8) + gr.at(3, CTRL_GR_LO)];
+            // mvd: reg[22:23] = eSeed[j:j+1]
+            reg[22] = spm[gr.at(8) + gr.at(3, CTRL_GR_LO)]; reg[23] = spm[gr.at(8) + gr.at(3, CTRL_GR_LO) + 1];
             //NOP
 
-            spm[gr.at(5) + gr.at(3, CTRL_GR_LO)] = reg[11];
+            // mvd store: hPing[j:j+1] = reg[20:21]
+            spm[gr.at(5) + gr.at(3, CTRL_GR_LO)] = reg[20]; spm[gr.at(5) + gr.at(3, CTRL_GR_LO) + 1] = reg[21];
             //NOP
 
-            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[12]; gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);  // autoincrement j++
+            // mvd store: pvE[j:j+1] = reg[22:23]; j += 2
+            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[22]; spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[23]; gr.st(3, gr.at(3, CTRL_GR_LO) + 2, CTRL_GR_LO);
 
-            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_seed_load;
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN * GSSW_VEC_WORDS) goto m_101_seed_load;
 
             // === D. COLUMN LOOP ===
             gr.st(2, 0, CTRL_GR_LO);                         // col = 0
@@ -1987,110 +2015,139 @@ m23_end:    ;
             gr.st(13, gssw_mvi2_ld(gr.at(7) + gr.at(2, CTRL_GR_LO)));              // seq[col] → gr[13]
             if (gr.at(2, CTRL_GR_LO) >= gr.at(2, CTRL_GR_HI)) goto m_101_col_done;
 
-            // === E. COLUMN COMPUTE ===
-            // Init: vMaxColumn = 0, vH = hPing[segLen-1] << 1, vF = 0, zero pvF[]
+            // === E. COLUMN COMPUTE (8-lane paired) ===
+            // Init: vMaxColumn(14:15)=0, vH(8:9)=hPing[last]<<1,
+            //       vF(10:11)=0, profScore(16:17)=vP[0], e(12:13)=pvE[0],
+            //       zero pvF[]. All array indices are in WORDS; each pair
+            //       slot = 2 words, so last pair = (SEG_LEN-1)*2.
             //set comp PC
-            reg[4] = spm[gr.at(5) + (GSSW_SEG_LEN - 1)];     // vH = hPing[seg-1]
-            
 
-            reg[6] = spm[GSSW_E_WOFF + 0];                    // e
-            reg[5] = 0;                                  // vF = 0
+            // mvd: vH pair = hPing[(SEG_LEN-1)*2 : +1]
+            reg[8] = spm[gr.at(5) + (GSSW_SEG_LEN - 1) * GSSW_VEC_WORDS];
+            reg[9] = spm[gr.at(5) + (GSSW_SEG_LEN - 1) * GSSW_VEC_WORDS + 1];
+
+            // mvd: e pair = pvE[0:1]
+            reg[12] = spm[GSSW_E_WOFF + 0]; reg[13] = spm[GSSW_E_WOFF + 1];
+            //NOP
+
             {
-                gr.st(8, gr.at(13) * GSSW_SEG_LEN + GSSW_PROF_WOFF); //scalar operation on gr
-                gr.st(3, 0, CTRL_GR_LO);
+                reg[10] = 0;                                  // vF lo = 0
+                reg[11] = 0;                                  // vF hi = 0
+            }
+            {
+                // vP_word_base = seq[col] * (SEG_LEN * 2) + PROF_WOFF
+                gr.st(8, gr.at(13) * (GSSW_SEG_LEN * GSSW_VEC_WORDS) + GSSW_PROF_WOFF);
+                gr.st(3, 0, CTRL_GR_LO);                    // j (word index within array)
             }
 
-            // Zero pvF[0..seg-1]
-            //slli vH. Note gssw4_slli_si128 is acutally a scalar isntruction not vector. it's just left shift
-            reg[4] = reg[4] << 8;
+            // vH <<= 1 byte (paired cross-register shift via dummy helper)
             {
-                reg[7] = 0;                                  // vMaxColumn = 0
-                //halt
+                reg[9] = gssw8_slli_carry(reg[9], reg[8], 1);
+                reg[8] = gssw4_slli_si128(reg[8], 1);
+            }
+            {
+                reg[14] = 0;                                  // vMaxColumn lo = 0
+                reg[15] = 0;                                  // vMaxColumn hi = 0
             }
 
-            //zero initializer loop
-            {
-                //halt
-                //halt
-            }
         m_101_pvF_zero:
-            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[3]; gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);
-            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_pvF_zero;
+            // Zero pvF[] pair by pair (2 words per pair slot).
+            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[6]; spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[7]; gr.st(3, gr.at(3, CTRL_GR_LO) + 2, CTRL_GR_LO);
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN * GSSW_VEC_WORDS) goto m_101_pvF_zero;
 
-            // Prologue: profScore = vP[0], e = pvE[0]
-            reg[8] = spm[gr.at(8) + 0];                       // profScore
+            // Prologue: profScore pair = vP[0:1] (first pair slot of profile)
+            reg[16] = spm[gr.at(8) + 0]; reg[17] = spm[gr.at(8) + 1];
             //set comp pc
 
-            // --- Main inner segment loop ---
-            gr.st(3, 0, CTRL_GR_LO);                          // j = 0
+            // --- Main inner segment loop (paired 8-lane) ---
+            // j = word index within array; step by 2 (one pair per iter).
+            // Loop trip = SEG_LEN (19) pair slots.
+            // tmp_lo/tmp_hi used as a pair to stage vH reload at end.
+            gr.st(3, 0, CTRL_GR_LO);
             //NOP
-            {
-                //NOP
-            }
         m_101_main:
 
-            //zkn TODO Currently we are doing one step at a time, we always do just a sinlge load and only use one compute instruction. We need to improve this. Instead we will do mvd to two adjacent registers, and then we can issue two compute instructions one on each register. This will probably require some register remapping which you will need to do.
-            //1st: vH = subs(adds(vH, profScore), vBias)
+            //1st: vH = subs(adds(vH, profScore), vBias)  [paired]
             {
-                //COMP
-                reg[4] = gssw4_subs_epu8(gssw4_adds_epu8(reg[4], reg[8]), reg[0]);
+                reg[8] = gssw4_subs_epu8(gssw4_adds_epu8(reg[8], reg[16]), reg[0]);
+                reg[9] = gssw4_subs_epu8(gssw4_adds_epu8(reg[9], reg[17]), reg[1]);
             }
-            reg[8] = spm[gr.at(8) + gr.at(3, CTRL_GR_LO) + 1]; // profScore = vP[j+1]
-            //NOP
+            // Load next profScore pair (mvd)
+            reg[16] = spm[gr.at(8) + gr.at(3, CTRL_GR_LO) + 2]; reg[17] = spm[gr.at(8) + gr.at(3, CTRL_GR_LO) + 3];
 
-            //2nd: vH = max(max(vH, e), vF)
+            //2nd: vH = max(vH, e, vF)  [paired, 3-way via 4-input op_0]
             {
-                reg[4] = gssw4_max_epu8(gssw4_max_epu8(reg[4], reg[6]), reg[5]);
-            }
-            //NOP
-            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[5];  // pvF[j] = vF
-
-            spm[gr.at(6) + gr.at(3, CTRL_GR_LO)] = reg[4];    // hPong[j] = vH
-            //3rd
-            {
-                reg[7] = gssw4_max_epu8(reg[7], reg[4]);          // vMaxColumn = max(.., vH)
+                reg[8] = gssw4_max_epu8(gssw4_max_epu8(reg[8], reg[12]), reg[10]);
+                reg[9] = gssw4_max_epu8(gssw4_max_epu8(reg[9], reg[13]), reg[11]);
             }
             //NOP
 
-            //4th: e = max(subs(e, vGapE), subs(vH, vGapO))
-            {
-                reg[6] = gssw4_max_epu8(gssw4_subs_epu8(reg[6], reg[2]),
-                                    gssw4_subs_epu8(reg[4], reg[1]));
-            }
-            //zkn watch this one. We are initiating a load to reg4 in the isa, but it will not resolve until spm latency later (i.e. two clock cycles. Therefore we are safe to use reg4 old value in the next instruction. This is correct, but you'll want to check and make sure the simulator doesn't have a wierd quirk which makes this impossible.
-            tmp = spm[gr.at(5) + gr.at(3, CTRL_GR_LO)];     // vH = hPing[j]
+            // Store pvF[j] = vF (old vF before step 5 updates it), pair
+            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[10]; spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[11];
 
-            //5th: vF = max(subs(vF, vGapE), subs(vH, vGapO))
-            {
-                reg[5] = gssw4_max_epu8(gssw4_subs_epu8(reg[5], reg[2]),
-                                    gssw4_subs_epu8(reg[4], reg[1]));
-            }
-            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[6];  // pvE[j] = e
-            //set comp PC
+            // Store hPong[j] = vH, pair
+            spm[gr.at(6) + gr.at(3, CTRL_GR_LO)] = reg[8]; spm[gr.at(6) + gr.at(3, CTRL_GR_LO) + 1] = reg[9];
 
-            reg[4] = tmp; //mv resolves one cycle later
-            reg[6] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1];gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);     //mvd with j++ e = pvE[j+1]  // j++
-            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_main;
+            //3rd: vMaxColumn = max(vMaxColumn, vH)  [paired]
+            {
+                reg[14] = gssw4_max_epu8(reg[14], reg[8]);
+                reg[15] = gssw4_max_epu8(reg[15], reg[9]);
+            }
+            //NOP
+
+            //4th: e = max(subs(e, vGapE), subs(vH, vGapO))  [paired]
+            {
+                reg[12] = gssw4_max_epu8(gssw4_subs_epu8(reg[12], reg[4]), gssw4_subs_epu8(reg[8], reg[2]));
+                reg[13] = gssw4_max_epu8(gssw4_subs_epu8(reg[13], reg[5]), gssw4_subs_epu8(reg[9], reg[3]));
+            }
+            // Load vH for next iter: tmp pair = hPing[j:j+1]
+            reg[20] = spm[gr.at(5) + gr.at(3, CTRL_GR_LO)]; reg[21] = spm[gr.at(5) + gr.at(3, CTRL_GR_LO) + 1];
+
+            //5th: vF = max(subs(vF, vGapE), subs(vH, vGapO))  [paired]
+            {
+                reg[10] = gssw4_max_epu8(gssw4_subs_epu8(reg[10], reg[4]), gssw4_subs_epu8(reg[8], reg[2]));
+                reg[11] = gssw4_max_epu8(gssw4_subs_epu8(reg[11], reg[5]), gssw4_subs_epu8(reg[9], reg[3]));
+            }
+            // Store pvE[j] = new e (pair)
+            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[12]; spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[13];
+
+            // Move tmp → vH, load e pair for next iter, autoincrement j by 2
+            {
+                reg[8] = reg[20];
+                reg[9] = reg[21];
+            }
+            reg[12] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 2]; reg[13] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 3]; gr.st(3, gr.at(3, CTRL_GR_LO) + 2, CTRL_GR_LO);
+
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN * GSSW_VEC_WORDS) goto m_101_main;
             {
                 //NOP
             }
 
         m_101_main_done:
 
-            // --- Lazy-F loop setup ---
-            gr.st(3, 0, CTRL_GR_LO);                          // j = 0
-            reg[4] = spm[gr.at(6) + 0];                        // vH = hPong[0]
-            
-            reg[9] = spm[GSSW_F_WOFF + 0];                     // vTemp = pvF[0]
-            reg[5] = reg[5] << 8;
+            // --- Lazy-F loop setup (paired 8-lane) ---
+            // vH=reg[8:9], vF=reg[10:11], e=reg[12:13], vMaxColumn=reg[14:15],
+            // vTemp=reg[18:19]. j steps by 2 (one pair).
+            gr.st(3, 0, CTRL_GR_LO);
+            // mvd: vH pair = hPong[0:1]
+            reg[8] = spm[gr.at(6) + 0]; reg[9] = spm[gr.at(6) + 1];
 
-            //NOP
+            // mvd: vTemp pair = pvF[0:1]
+            reg[18] = spm[GSSW_F_WOFF + 0]; reg[19] = spm[GSSW_F_WOFF + 1];
+
+            // vF <<= 1 byte (paired cross-register shift)
+            {
+                reg[11] = gssw8_slli_carry(reg[11], reg[10], 1);
+                reg[10] = gssw4_slli_si128(reg[10], 1);
+            }
             //set pc
 
-            //gr13 should be remapped to a reg instead of gr because we're using it in simd mode
-            //COMP: cmp |= any_cmpgt(vF, pvF[0])
+            // cmp = any_cmpgt(vF, vH) | any_cmpgt(vF, vTemp)  [8-lane via OR of four 4-lane reductions]
             {
-                gr.st(13, gssw4_cmpgt_any_epu8(reg[5], reg[4]) | gssw4_cmpgt_any_epu8(reg[5], reg[9]));
+                gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[8])
+                        | gssw4_cmpgt_any_epu8(reg[11], reg[9])
+                        | gssw4_cmpgt_any_epu8(reg[10], reg[18])
+                        | gssw4_cmpgt_any_epu8(reg[11], reg[19]));
                 //NOP
             }
 
@@ -2098,75 +2155,104 @@ m23_end:    ;
                 //halt
             }
         m_101_lazyf:
-            reg[6] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)];  // e = pvE[j]
+            // mvd: e pair = pvE[j:j+1]
+            reg[12] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)]; reg[13] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1];
             if (gr.at(13) == 0) goto m_101_lazyf_done;
 
-            reg[9] = spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)];  // vTemp = pvF[j]
-            //NOP
-            //1st
-            {
-                //COMP cmp2
-                reg[7] = gssw4_max_epu8(reg[7], gssw4_max_epu8(reg[4], reg[5]));
-                //COMP cmp1
-                reg[4] = gssw4_max_epu8(reg[4], reg[5]);
-            }
-
-            {
-                //COMP cmp1: vF = subs(vF, vGapE)
-                reg[5] = gssw4_subs_epu8(reg[5], reg[2]);
-                //cmp2 nop
-            }
-            spm[gr.at(6) + gr.at(3, CTRL_GR_LO)] = reg[4]; gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);    //mv and autoincrement j++     // hPong[j] = vH
+            // mvd: vTemp pair = pvF[j:j+1]
+            reg[18] = spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)]; reg[19] = spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) + 1];
             //NOP
 
-            reg[4] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO)];      // vH = hPong[j]
+            // 1st pair of computes split across two cycles (widening consumed both slots per op):
+            // vMaxColumn = max(vMaxColumn, max(vH, vF))  [paired]
             {
-                //COMP: e = max(e, subs(vH, vGapO))
-                reg[6] = gssw4_max_epu8(reg[6], gssw4_subs_epu8(reg[4], reg[1]));
-                //COMP: vTemp = max(vTemp, vF)
-                reg[9] = gssw4_max_epu8(reg[9], reg[5]);
+                reg[14] = gssw4_max_epu8(reg[14], gssw4_max_epu8(reg[8], reg[10]));
+                reg[15] = gssw4_max_epu8(reg[15], gssw4_max_epu8(reg[9], reg[11]));
+            }
+            // vH = max(vH, vF)  [paired]
+            {
+                reg[8] = gssw4_max_epu8(reg[8], reg[10]);
+                reg[9] = gssw4_max_epu8(reg[9], reg[11]);
+            }
+
+            // vF = subs(vF, vGapE)  [paired]
+            {
+                reg[10] = gssw4_subs_epu8(reg[10], reg[4]);
+                reg[11] = gssw4_subs_epu8(reg[11], reg[5]);
+            }
+            // mvd store: hPong[j:j+1] = vH pair; j += 2
+            spm[gr.at(6) + gr.at(3, CTRL_GR_LO)] = reg[8]; spm[gr.at(6) + gr.at(3, CTRL_GR_LO) + 1] = reg[9]; gr.st(3, gr.at(3, CTRL_GR_LO) + 2, CTRL_GR_LO);
+            //NOP
+
+            // mvd: vH pair = hPong[j:j+1] (next iter's read, j is now new)
+            reg[8] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO)]; reg[9] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO) + 1];
+            // Split independent ops: e update and vTemp update in two cycles
+            // e = max(e, subs(vH_old, vGapO))  — vH_old is still in reg[8:9] before mvd lands (SPM latency)
+            // Actually we need vH for this cycle from OLD reg[8:9], but we just issued a load. Rely on 2-cycle SPM latency: reg[8:9] still holds pre-load value this cycle.
+            {
+                reg[12] = gssw4_max_epu8(reg[12], gssw4_subs_epu8(reg[8], reg[2]));
+                reg[13] = gssw4_max_epu8(reg[13], gssw4_subs_epu8(reg[9], reg[3]));
+            }
+            // vTemp = max(vTemp, vF)  [paired]
+            {
+                reg[18] = gssw4_max_epu8(reg[18], reg[10]);
+                reg[19] = gssw4_max_epu8(reg[19], reg[11]);
             }
 
             //set PC
-            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[6];   // pvE[j] = e
+            // mvd store: pvE[j-2:j-1] = e pair (j already advanced)
+            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) - 2] = reg[12]; spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) - 1] = reg[13];
             {
                 //NOP
-                //COMP: cmp |= any_cmpgt(vF, vTemp)
-                gr.st(13, gssw4_cmpgt_any_epu8(reg[5], reg[4]) | gssw4_cmpgt_any_epu8(reg[5], reg[9]));
+                // cmp = any_cmpgt(vF, vH) | any_cmpgt(vF, vTemp)  [8-lane]
+                gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[8])
+                        | gssw4_cmpgt_any_epu8(reg[11], reg[9])
+                        | gssw4_cmpgt_any_epu8(reg[10], reg[18])
+                        | gssw4_cmpgt_any_epu8(reg[11], reg[19]));
             }
-
 
             {
                 //NOP
                 //NOP
             }
 
-            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[9];   // pvF[j] = vTemp
-            //goto m_101_lazyf;
-            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_lazyf;
+            // mvd store: pvF[j-2:j-1] = vTemp pair
+            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) - 2] = reg[18]; spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) - 1] = reg[19];
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN * GSSW_VEC_WORDS) goto m_101_lazyf;
 
         m_101_lazyf_wrap:
             // --- Wraparound (rare) ---
-            reg[4] = spm[gr.at(6) + 0];                         // vH = hPong[0]
+            // mvd: vH pair = hPong[0:1]
+            reg[8] = spm[gr.at(6) + 0]; reg[9] = spm[gr.at(6) + 1];
             //NOP
 
-            reg[5] = reg[5] << 8;
-            reg[9] = spm[GSSW_F_WOFF + 0];                      // vTemp = pvF[0]
+            // vF <<= 1 byte (paired cross-register shift)
+            {
+                reg[11] = gssw8_slli_carry(reg[11], reg[10], 1);
+                reg[10] = gssw4_slli_si128(reg[10], 1);
+            }
+            // mvd: vTemp pair = pvF[0:1]
+            reg[18] = spm[GSSW_F_WOFF + 0]; reg[19] = spm[GSSW_F_WOFF + 1];
 
             //set PC
-            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[6];   // pvE[j] = e (j=segLen)
+            // mvd store: pvE[j-2:j-1] = e pair (tail)
+            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) - 2] = reg[12]; spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) - 1] = reg[13];
 
-            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[9];   // pvF[j] = vTemp
-            gr.st(3, 0, CTRL_GR_LO);                            // j = 0
+            // mvd store: pvF[j-2:j-1] = vTemp pair
+            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) - 2] = reg[18]; spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) - 1] = reg[19];
+            gr.st(3, 0, CTRL_GR_LO);
             {
                 //NOP
                 //NOP
             }
 
-            //COMP: cmp = any_cmpgt(vF, vH) | any_cmpgt(vF, pvF[0])
+            // cmp = any_cmpgt(vF, vH) | any_cmpgt(vF, vTemp)  [8-lane]
             {
                 //NOP
-                gr.st(13, gssw4_cmpgt_any_epu8(reg[5], reg[4]) | gssw4_cmpgt_any_epu8(reg[5], reg[9]));
+                gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[8])
+                        | gssw4_cmpgt_any_epu8(reg[11], reg[9])
+                        | gssw4_cmpgt_any_epu8(reg[10], reg[18])
+                        | gssw4_cmpgt_any_epu8(reg[11], reg[19]));
             }
             //setPC
             goto m_101_lazyf;
@@ -2175,12 +2261,17 @@ m23_end:    ;
             //set PC
             //NOP
 
-            // === F. Horizontal max reduce + best update ===
-            // NOP
-            // NOP
+            // === F. Horizontal max reduce + best update (paired 8-lane) ===
+            // First collapse 8 lanes → 4 lanes by max(lo, hi), then
+            // reduce 4 → scalar with the existing helper.
+            {
+                reg[20] = gssw4_max_epu8(reg[14], reg[15]);     // 8→4 lanes
+                //NOP
+            }
+
             {
                 //COMP
-                gr.st(11, gssw4_maxReduce(reg[7]));                 // colMax = maxReduce(vMaxColumn)
+                gr.st(11, gssw4_maxReduce(reg[20]));            // colMax = maxReduce(8-lane)
             }
 
             {
@@ -2190,19 +2281,19 @@ m23_end:    ;
 
             // colMax > overallMax: update overallMax and best[0..seg-1]
             gr.st(14, gr.at(11), CTRL_GR_LO);                   // overallMax = colMax
-            gr.st(3, 0, CTRL_GR_LO);                            // j = 0
+            gr.st(3, 0, CTRL_GR_LO);                            // j = 0 (word offset, step 2)
         m_101_best_copy:
-            // Load hPong[j] → reg, wait SPM latency, store to best[j]
-            reg[11] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO)];
+            // mvd load: pair = hPong[j:j+1]
+            reg[20] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO)]; reg[21] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO) + 1];
             //NOP (SPM latency)
 
             //NOP
             //NOP
 
-            spm[GSSW_BEST_WOFF + gr.at(3, CTRL_GR_LO)] = reg[11];
-            gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);
+            // mvd store: best[j:j+1] = pair; j += 2
+            spm[GSSW_BEST_WOFF + gr.at(3, CTRL_GR_LO)] = reg[20]; spm[GSSW_BEST_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[21]; gr.st(3, gr.at(3, CTRL_GR_LO) + 2, CTRL_GR_LO);
 
-            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_best_copy;
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN * GSSW_VEC_WORDS) goto m_101_best_copy;
         m_101_skip_best:
 
             // === G. Ping/pong swap ===
@@ -2221,7 +2312,7 @@ m23_end:    ;
             // Use: gr[2]=c, gr[6]=cd_word_off, gr[7,8]=scratch.
 
             gr.st(12, spm[gr.at(4) + 1]);                        // [next_off lo | next_len hi]
-            gr.st(11, 76);                                       // re-init 76 (col loop clobbered gr[11])
+            gr.st(11, GSSW_ND_WORDS);                                       // re-init 76 (col loop clobbered gr[11])
 
             //set PC for compute mul kernel
             //NOP (SPM latency for gr[12])
@@ -2270,32 +2361,41 @@ m23_end:    ;
             gr.st(6, gr.at(8) + GSSW_NODES_WOFF);                // cd_word_off → gr[6]
             //NOP
 
-            // Inner j2 loop
-            gr.st(3, 0, CTRL_GR_LO);                             // j2 = 0
+            // Inner j2 loop (paired 8-lane). j2 = word offset, step by 2.
+            gr.st(3, 0, CTRL_GR_LO);
         m_101_push_j:
-            // hSeed: cd->hSeed[j2] = max(cd->hSeed[j2], hPing[j2])
-            reg[11] = spm[gr.at(6) + GSSW_ND_HSEED_W + gr.at(3, CTRL_GR_LO)];
-            reg[12] = spm[gr.at(5) + gr.at(3, CTRL_GR_LO)];      // hPing[j2]
+            // mvd: scratch pair = cd->hSeed[j2:j2+1]
+            reg[20] = spm[gr.at(6) + GSSW_ND_HSEED_W + gr.at(3, CTRL_GR_LO)]; reg[21] = spm[gr.at(6) + GSSW_ND_HSEED_W + gr.at(3, CTRL_GR_LO) + 1];
+            // mvd: scratch_b pair = hPing[j2:j2+1]
+            reg[22] = spm[gr.at(5) + gr.at(3, CTRL_GR_LO)]; reg[23] = spm[gr.at(5) + gr.at(3, CTRL_GR_LO) + 1];
 
-            //COMP
-            reg[11] = gssw4_max_epu8(reg[11], reg[12]);
+            // max(hSeed, hPing)  [paired]
+            {
+                reg[20] = gssw4_max_epu8(reg[20], reg[22]);
+                reg[21] = gssw4_max_epu8(reg[21], reg[23]);
+            }
             //NOP
 
-            spm[gr.at(6) + GSSW_ND_HSEED_W + gr.at(3, CTRL_GR_LO)] = reg[11];
+            // mvd store: cd->hSeed[j2:j2+1] = pair
+            spm[gr.at(6) + GSSW_ND_HSEED_W + gr.at(3, CTRL_GR_LO)] = reg[20]; spm[gr.at(6) + GSSW_ND_HSEED_W + gr.at(3, CTRL_GR_LO) + 1] = reg[21];
             //NOP
 
-            // eSeed: cd->eSeed[j2] = max(cd->eSeed[j2], pvE[j2])
-            reg[11] = spm[gr.at(6) + GSSW_ND_ESEED_W + gr.at(3, CTRL_GR_LO)];
-            reg[12] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)];
+            // mvd: scratch pair = cd->eSeed[j2:j2+1]
+            reg[20] = spm[gr.at(6) + GSSW_ND_ESEED_W + gr.at(3, CTRL_GR_LO)]; reg[21] = spm[gr.at(6) + GSSW_ND_ESEED_W + gr.at(3, CTRL_GR_LO) + 1];
+            // mvd: scratch_b pair = pvE[j2:j2+1]
+            reg[22] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)]; reg[23] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1];
 
-            //COMP
-            reg[11] = gssw4_max_epu8(reg[11], reg[12]);
+            // max(eSeed, pvE)  [paired]
+            {
+                reg[20] = gssw4_max_epu8(reg[20], reg[22]);
+                reg[21] = gssw4_max_epu8(reg[21], reg[23]);
+            }
             //NOP
 
-            spm[gr.at(6) + GSSW_ND_ESEED_W + gr.at(3, CTRL_GR_LO)] = reg[11];
-            gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);      // j2++
+            // mvd store: cd->eSeed[j2:j2+1] = pair; j2 += 2
+            spm[gr.at(6) + GSSW_ND_ESEED_W + gr.at(3, CTRL_GR_LO)] = reg[20]; spm[gr.at(6) + GSSW_ND_ESEED_W + gr.at(3, CTRL_GR_LO) + 1] = reg[21]; gr.st(3, gr.at(3, CTRL_GR_LO) + 2, CTRL_GR_LO);
 
-            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_push_j;
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN * GSSW_VEC_WORDS) goto m_101_push_j;
 
             gr.st(2, gr.at(2) + 1);                              // c++
             if (gr.at(2) < gr.at(3, CTRL_GR_HI)) goto m_101_push;
@@ -2306,21 +2406,35 @@ m23_end:    ;
             goto m_101_node;
 
         m_101_done:
-            // === I. Final reduce: vMax = max over best[]; score = maxReduce(vMax) ===
-            reg[10] = reg[3];                                    // vMax = 0
-            gr.st(3, 0, CTRL_GR_LO);                             // j = 0
+            // === I. Final reduce (paired 8-lane) ===
+            // vMax pair = reg[14:15] (reusing vMaxColumn slot). Iterate
+            // j (word offset, step 2) over best[] pairs, accumulate max.
+            {
+                reg[14] = 0;        // vMax lo = 0
+                reg[15] = 0;        // vMax hi = 0
+            }
+            gr.st(3, 0, CTRL_GR_LO);
         m_101_final:
-            reg[11] = spm[GSSW_BEST_WOFF + gr.at(3, CTRL_GR_LO)];
+            // mvd: pair = best[j:j+1]
+            reg[20] = spm[GSSW_BEST_WOFF + gr.at(3, CTRL_GR_LO)]; reg[21] = spm[GSSW_BEST_WOFF + gr.at(3, CTRL_GR_LO) + 1];
             //NOP
 
-            //COMP
-            reg[10] = gssw4_max_epu8(reg[10], reg[11]);
-            gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);
+            // vMax = max(vMax, best)  [paired]
+            {
+                reg[14] = gssw4_max_epu8(reg[14], reg[20]);
+                reg[15] = gssw4_max_epu8(reg[15], reg[21]);
+            }
+            gr.st(3, gr.at(3, CTRL_GR_LO) + 2, CTRL_GR_LO);
 
-            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_final;
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN * GSSW_VEC_WORDS) goto m_101_final;
 
+            // 8-lane horizontal max: collapse pair then 4-lane reduce
+            {
+                reg[20] = gssw4_max_epu8(reg[14], reg[15]);
+                //NOP
+            }
             //COMP: maxReduce and store in gr[15] for magic 102
-            gr.st(15, gssw4_maxReduce(reg[10]));
+            gr.st(15, gssw4_maxReduce(reg[20]));
         } else if (magic_id == 102) {
             // GSSW print score from gr[15].
             printf("qqq %d qqq\n",
