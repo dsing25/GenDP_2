@@ -3225,6 +3225,27 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 // cursor; == 0 iff magic 31 has never produced intv
                 // output for this PE, so this is the first nonzero
                 // tile for that PE.
+                //
+                // Plan 2b Milestone F (AC-11) audit — magic 31 seam-
+                // metadata SPM chains (4 chains total in the loop
+                // below):
+                //
+                //   Pattern per chain: `gr[11] = spm[...]; 2 x //NOP;
+                //   s1c[X] = gr[11];`
+                //
+                // Legality: each chain's consumer is 3 ops after the
+                // load; AC-7 legal iff the load is slot-1-aligned
+                // (consumer lands in cycle N+2 slot 0). The BL-
+                // 20260417-ctrl-sync-gr serial-through-gr[11]
+                // discipline is preserved (all four loads funnel
+                // through gr[11], not a multi-gr parallel pattern).
+                //
+                // Verdict: no 0-line gap. Mode 2 -t 56 = 295/295
+                // confirms correct observable behavior. Disposition:
+                // false-positive-confirmed pending lowering-level
+                // audit. No code change applied (per t4_fix_m20
+                // rationale — speculative NOPs risk over-padding
+                // regression).
                 for (int pe = 0; pe < 4; pe++) {
                     if (s1c[200+pe] == 0) continue;
                     int pe_spm = pe * SPM_BANK_GROUP_SIZE;
