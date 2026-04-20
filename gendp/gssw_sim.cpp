@@ -397,6 +397,34 @@ void gssw_simulation(
         }
     }
 
+    // Load compute instructions (shared across PEs). Optional — if the
+    // file is missing we leave comp buffers zeroed (legacy magic-only
+    // flow). Present once the GSSW lowering starts using set_PC.
+    static unsigned long compute_instruction[COMP_INSTR_BUFFER_GROUP_NUM]
+        [COMP_INSTR_BUFFER_GROUP_SIZE];
+    for (int i = 0; i < COMP_INSTR_BUFFER_GROUP_NUM; i++) {
+        compute_instruction[i][0] = COMP_HALT_INSTRUCTION;
+        compute_instruction[i][1] = COMP_HALT_INSTRUCTION;
+    }
+    int n_comp_instructions = 0;
+    {
+        std::string compute_file =
+            "instructions/gssw/compute_instruction.txt";
+        std::fstream fp2;
+        fp2.open(compute_file, std::ios::in);
+        if (fp2.is_open()) {
+            std::string l;
+            int read_index = 0;
+            while (getline(fp2, l)) {
+                compute_instruction[read_index / 2][read_index % 2]
+                    = std::stoull(l, 0, 0);
+                read_index++;
+            }
+            fp2.close();
+            n_comp_instructions = (read_index + 1) / 2;
+        }
+    }
+
     // Write instruction buffers to pe_array
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {
         unsigned long tmp[CTRL_INSTR_BUFFER_GROUP_SIZE];
@@ -406,6 +434,14 @@ void gssw_simulation(
         for (int j = 0; j < pe_group_size; j++)
             pa->pe_instruction_buffer_write_from_ddr(
                 i, pe_instr[j][i], j);
+    }
+    // Flash compute instructions into each PE (mirrors the bsw/chain
+    // pattern).
+    if (n_comp_instructions > 0) {
+        for (int j = 0; j < pe_group_size; j++)
+            pa->pe_comp_instruction_buffer_write_from_ddr(
+                n_comp_instructions,
+                &compute_instruction[0][0], j);
     }
 
     // Main iteration loop

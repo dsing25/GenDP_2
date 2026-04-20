@@ -101,22 +101,34 @@ void pe::recieve_spm_data(int data[LINE_SIZE]){
         case CTRL_GR:
         case CTRL_GR_LO:
         case CTRL_GR_HI:
-            {
-            int val =
-                data[outstanding_req.spm_addr & 1];
-            if (outstanding_req.two_bit_extract) {
-                val = (val >> outstanding_req.bp_shift)
-                    & 0x3;
-            }
-            addr_regfile_unit->st(
-                outstanding_req.addr, val,
-                outstanding_req.dst);
-            }
+            if (outstanding_req.single_load) {
+                int val = data[outstanding_req.spm_addr & 1];
+                if (outstanding_req.two_bit_extract)
+                    val = (val >> outstanding_req.bp_shift)
+                        & 0x3;
+                addr_regfile_unit->st(
+                    outstanding_req.addr, val,
+                    outstanding_req.dst);
 #ifdef PROFILE
-            printf("gr[%d] = %d\n",
-                outstanding_req.addr,
-                data[outstanding_req.spm_addr & 1]);
+                printf("gr[%d] = %d\n",
+                    outstanding_req.addr,
+                    data[outstanding_req.spm_addr & 1]);
 #endif
+            } else {
+                // mvd to gr: deliver both words to consecutive gr
+                // indices (previously only word 0 was written, leaving
+                // the second half untouched — broke lowered GSSW).
+                for (int i = 0; i < LINE_SIZE; i++)
+                    addr_regfile_unit->st(
+                        outstanding_req.addr + i,
+                        data[i], outstanding_req.dst);
+#ifdef PROFILE
+                printf("gr[%d,%d] = [%d,%d]\n",
+                    outstanding_req.addr,
+                    outstanding_req.addr + 1,
+                    data[0], data[1]);
+#endif
+            }
             break;
         case CTRL_OUT_PORT:
             {
@@ -184,6 +196,11 @@ void pe::run(int simd) {
     regfile_unit->read(regfile_unit->read_addr, regfile_unit->read_data);
     regfile_unit->write_addr[0] = output_addr[0] < REGFILE_ADDR_NUM ? output_addr[0] : -1;
     regfile_unit->write_addr[1] = output_addr[1] < REGFILE_ADDR_NUM ? output_addr[1] : -1;
+    // Suppress regfile write when the slot is halted — a HALT op[0]
+    // shouldn't clobber reg[output_addr] with garbage. (Previously any
+    // idle HALT with output_addr=0 silently wrote 0 to reg[0].)
+    if (op[0][0] == HALT) regfile_unit->write_addr[0] = -1;
+    if (op[1][0] == HALT) regfile_unit->write_addr[1] = -1;
 
     int cu_inputs[2][6];
     for (i = 0; i < 6; i++){
@@ -255,8 +272,10 @@ void pe::run(int simd) {
     }
 
 
-    // Write compute outputs to gr if addressed (addr >= 32)
+    // Write compute outputs to gr if addressed (addr >= 32).
+    // Skip when the slot is halted to avoid spurious gr writes.
     for (int s = 0; s < 2; s++) {
+        if (op[s][0] == HALT) continue;
         int addr = output_addr[s];
         if (addr >= 64)
             addr_regfile_unit->st(addr - 64, regfile_unit->write_data[s], CTRL_GR_HI);
@@ -1881,8 +1900,12 @@ m23_end:    ;
             fspm[FIN0_META + 3] = n_B;
             fspm[FIN0_META + 4] = n_HA;
         m19_done: ;
-        } else if (magic_id == 101) {
+        } else if (magic_id == 101 || magic_id == 103) {
             // GSSW kernel — register-mapped ISA-like form.
+            // magic_id == 103 is the "section-A-skipped" variant used
+            // during the staged ISA lowering: the instruction generator
+            // emits real ISA for section A and then calls magic(103) to
+            // run sections B-I with the state already set up.
             // Register allocation:
             //  gr[1] lo: n           hi: numNodes
             //  gr[2] lo: col         hi: seq_len
@@ -1927,6 +1950,7 @@ m23_end:    ;
             //   reg[16:17] = profScore (mvd-loaded from vP)
             //   reg[18:19] = vTemp   (lazy-F scratch)
             //   reg[20:21] = scratch (best copy, push, final)
+          if (magic_id == 101) {
             //COMP
             {
                 reg[0] = 0x04040404;              // vBias lo = bcast(4)
@@ -1982,6 +2006,7 @@ m23_end:    ;
 
             gr.st(14, 0, CTRL_GR_LO);                        // overallMax = 0
             gr.st(1, 0, CTRL_GR_LO);                         // n = 0
+          }  // end if (magic_id == 101) — section A skipped when magic_id == 103
 
             // === B. OUTER NODE LOOP ===
         m_101_node:
