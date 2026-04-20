@@ -1455,8 +1455,49 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             }
         } else if (magic_id == 22) {
             // Merge: input-capped two-pointer merge with ping-pong tiles.
-            // Buffer switch is a one-time transition; merge core is tight.
-            // Unified path handles single-stream drain (BL-drain-budget).
+            //
+            // Plan 2b Milestone A restructure: buffer-exhaustion
+            // transitions are labeled (m22_switch_a, m22_switch_b)
+            // and execute only after the post-emit exhaustion check,
+            // not on every iteration as the prior draft did. Unified
+            // compare retained per BL-20260413-drain-budget (no
+            // separate drain loop).
+            //
+            // Durable invariant set (AC-4 evidence):
+            //
+            //   m22_top: entered iff
+            //     - budget: (ai - ai0) + (bi - bi0) < MERGE_STEP.
+            //     - streams: (ai < a_n) OR (bi < b_n). At least one
+            //       head is available. Both-exhausted never reaches
+            //       m22_top's compare: the switch labels route to
+            //       m22_done directly.
+            //     - aw,bw in {0,1}; ab = MERGE_A_BUFaw,
+            //       bb = MERGE_B_BUFbw; a_n = spm[MERGE_META+9+aw],
+            //       b_n = spm[MERGE_META+11+bw] (live tile counts).
+            //     - ai0, bi0 track this-invocation consumed offset:
+            //       ai0 = ai and bi0 = bi on entry; each successful
+            //       switch decreases the matching baseline by the
+            //       exhausted tile count so (ai - ai0) + (bi - bi0)
+            //       still equals items emitted THIS invocation.
+            //       Preserves the original budget formula exactly.
+            //
+            //   m22_switch_a: entered iff ai >= a_n (either just
+            //     exhausted by the last emit or pre-existing from a
+            //     prior invocation's unfinished tail). Tries a
+            //     buffer swap. If no alternate tile (on == 0), A is
+            //     globally drained and the unified compare drains
+            //     via B. bi state is arbitrary at entry.
+            //
+            //   m22_switch_b: entered iff bi >= b_n. Symmetric to
+            //     m22_switch_a. Also runs the only
+            //     both-globally-drained check on a rare path; that
+            //     transitions to m22_done.
+            //
+            //   m22_done: reached iff budget hit OR both streams
+            //     globally drained. Saves ai/bi/oi/aw/bw and cum_oi
+            //     + oi to SPM. spm[976..983] writes are bit-exact
+            //     relative to pre-Plan-2b behavior per AC-5 and
+            //     BL-20260413-pe-global-base.
             int out_off = (magic_mask & 1) ? MERGE_OUT1 : MERGE_OUT0;
             int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
             int ai  = spm[MERGE_META + 0];
@@ -1475,31 +1516,15 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                                (uint32_t)spm[MERGE_META+15]};
             int cum_oi = spm[982];
             int pe_global_base = spm[983];
-            // --- Main loop: budget-capped merge ---
+            // Entry: reconcile pre-existing exhaustion from prior
+            // invocation's tail before the first compare.
+            if (ai >= a_n) goto m22_switch_a;
+            if (bi >= b_n) goto m22_switch_b;
         m22_top:
-            if ((ai - ai0) + (bi - bi0) >= MERGE_STEP)
-                goto m22_done;
-            // Buffer transition (special case, outside merge core)
-            if (ai >= a_n) {
-                int o = aw ^ 1;
-                int on = spm[MERGE_META + 9 + o];
-                if (on > 0) {
-                    spm[MERGE_META + 9 + aw] = 0;
-                    aw = o; ab = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
-                    ai = 0; ai0 -= a_n; a_n = on;
-                }
-            }
-            if (bi >= b_n) {
-                int o = bw ^ 1;
-                int on = spm[MERGE_META + 11 + o];
-                if (on > 0) {
-                    spm[MERGE_META + 11 + bw] = 0;
-                    bw = o; bb = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
-                    bi = 0; bi0 -= b_n; b_n = on;
-                }
-            }
-            if (ai >= a_n && bi >= b_n) goto m22_done;
-            // Merge core: compare and copy one element
+            if ((ai - ai0) + (bi - bi0) >= MERGE_STEP) goto m22_done;
+            // Unified compare + emit. Per BL-20260413-drain-budget,
+            // this single predicate handles dual-stream merge and
+            // single-stream drain. No separate drain path.
             if (ai >= a_n || (bi < b_n
                     && (uint32_t)spm[bb+bi*2]
                        < (uint32_t)spm[ab+ai*2])) {
@@ -1509,7 +1534,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 out[oi*2]   = spm[ab+ai*2];
                 out[oi*2+1] = spm[ab+ai*2+1]; ai++; oi++;
             }
-            // Boundary tracking
+            // Boundary tracking — bit-exact preservation per AC-5.
             { int gpos = pe_global_base + cum_oi + oi - 1;
               uint32_t out_lo = (uint32_t)out[(oi-1)*2];
               uint32_t out_hi = (uint32_t)out[(oi-1)*2+1];
@@ -1520,6 +1545,31 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                       spm[979+b] = gpos;
               }
             }
+            // Post-emit exhaustion check (rare path).
+            if (ai >= a_n) goto m22_switch_a;
+            if (bi >= b_n) goto m22_switch_b;
+            goto m22_top;
+        m22_switch_a:
+            { int o = aw ^ 1;
+              int on = spm[MERGE_META + 9 + o];
+              if (on > 0) {
+                  spm[MERGE_META + 9 + aw] = 0;
+                  aw = o; ab = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
+                  ai = 0; ai0 -= a_n; a_n = on;
+              }
+            }
+            if (bi >= b_n) goto m22_switch_b;
+            goto m22_top;
+        m22_switch_b:
+            { int o = bw ^ 1;
+              int on = spm[MERGE_META + 11 + o];
+              if (on > 0) {
+                  spm[MERGE_META + 11 + bw] = 0;
+                  bw = o; bb = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
+                  bi = 0; bi0 -= b_n; b_n = on;
+              }
+            }
+            if (ai >= a_n && bi >= b_n) goto m22_done;
             goto m22_top;
         m22_done:
             spm[MERGE_META+0]=ai; spm[MERGE_META+1]=bi;
