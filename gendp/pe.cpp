@@ -544,12 +544,15 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
 
 #define GSSW_SEG_LEN    19                           // ceil(148 / 8)
 #define GSSW_VEC_WORDS  2                            // 2 SPM words per pair
+// 8-byte (1 pair) padding between pvE/pvF and pvF/best absorbs the
+// lazy-F last-iter overflow writes so they don't corrupt pvF[0]/best[0].
+#define GSSW_SPM_PAD    8
 #define GSSW_PROF_OFF   0
 #define GSSW_HPING_OFF  (4 * GSSW_SEG_LEN * 8)       // 4 nt × segLen pairs × 8B
 #define GSSW_HPONG_OFF  (GSSW_HPING_OFF + GSSW_SEG_LEN * 8)
 #define GSSW_E_OFF      (GSSW_HPONG_OFF + GSSW_SEG_LEN * 8)
-#define GSSW_F_OFF      (GSSW_E_OFF     + GSSW_SEG_LEN * 8)
-#define GSSW_BEST_OFF   (GSSW_F_OFF     + GSSW_SEG_LEN * 8)
+#define GSSW_F_OFF      (GSSW_E_OFF     + GSSW_SEG_LEN * 8 + GSSW_SPM_PAD)
+#define GSSW_BEST_OFF   (GSSW_F_OFF     + GSSW_SEG_LEN * 8 + GSSW_SPM_PAD)
 #define GSSW_GRAPH_OFF  (GSSW_BEST_OFF  + GSSW_SEG_LEN * 8)
 
 struct gssw_spm_graph_meta_t {
@@ -2150,105 +2153,111 @@ m23_end:    ;
                 //halt
             }
         m_101_lazyf:
-            // mvd: e pair = pvE[j:j+1]
-            reg[12] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)]; reg[13] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1];
             if (gr.at(13) == 0) goto m_101_lazyf_done;
 
-            // mvd: vTemp pair = pvF[j:j+1]
-            reg[18] = spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)]; reg[19] = spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) + 1];
-            //NOP
-
-            // 1st pair of computes split across two cycles (widening consumed both slots per op):
-            // vMaxColumn = max(vMaxColumn, max(vH, vF))  [paired]
-            {
-                reg[14] = gssw4_max_epu8(reg[14], gssw4_max_epu8(reg[8], reg[10]));
-                reg[15] = gssw4_max_epu8(reg[15], gssw4_max_epu8(reg[9], reg[11]));
-            }
-            // vH = max(vH, vF)  [paired]
+            // Load e = pvE[j:j+1]
+            // Step 2: new_vH = max(vH, vF)  [paired]
             {
                 reg[8] = gssw4_max_epu8(reg[8], reg[10]);
                 reg[9] = gssw4_max_epu8(reg[9], reg[11]);
             }
-
-            // vF = subs(vF, vGapE)  [paired]
-            {
-                reg[10] = gssw4_subs_epu8(reg[10], reg[4]);
-                reg[11] = gssw4_subs_epu8(reg[11], reg[5]);
-            }
-            // mvd store: hPong[j:j+1] = vH pair; j += 2
-            spm[gr.at(6) + gr.at(3, CTRL_GR_LO)] = reg[8]; spm[gr.at(6) + gr.at(3, CTRL_GR_LO) + 1] = reg[9]; gr.st(3, gr.at(3, CTRL_GR_LO) + 2, CTRL_GR_LO);
+            reg[12] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)]; reg[13] = spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1];
             //NOP
 
-            // mvd: vH pair = hPong[j:j+1] (next iter's read, j is now new)
-            reg[8] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO)]; reg[9] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO) + 1];
-            // Split independent ops: e update and vTemp update in two cycles
-            // e = max(e, subs(vH_old, vGapO))  — vH_old is still in reg[8:9] before mvd lands (SPM latency)
-            // Actually we need vH for this cycle from OLD reg[8:9], but we just issued a load. Rely on 2-cycle SPM latency: reg[8:9] still holds pre-load value this cycle.
+            // Load vTemp = pvF[j:j+1]
+            // Step 3: vMaxColumn = max(vMaxColumn, new_vH)  [paired]
+            {
+                reg[14] = gssw4_max_epu8(reg[14], reg[8]);
+                reg[15] = gssw4_max_epu8(reg[15], reg[9]);
+            }
+            reg[18] = spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)]; reg[19] = spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) + 1];
+            //NOP
+
+
+            // Step 4: new_e = max(e, subs(new_vH, vGapO))  [paired]
             {
                 reg[12] = gssw4_max_epu8(reg[12], gssw4_subs_epu8(reg[8], reg[2]));
                 reg[13] = gssw4_max_epu8(reg[13], gssw4_subs_epu8(reg[9], reg[3]));
             }
-            // vTemp = max(vTemp, vF)  [paired]
+            // Store hPong[j:j+1] = new_vH pair
+            spm[gr.at(6) + gr.at(3, CTRL_GR_LO)] = reg[8]; spm[gr.at(6) + gr.at(3, CTRL_GR_LO) + 1] = reg[9]; gr.st(3, gr.at(3, CTRL_GR_LO) + 2, CTRL_GR_LO); //mvd with auto-increment
+            //NOP
+
+
+            // new_vTemp = max(vTemp, vF)  [paired]
             {
                 reg[18] = gssw4_max_epu8(reg[18], reg[10]);
                 reg[19] = gssw4_max_epu8(reg[19], reg[11]);
             }
+            // Store pvE[j:j+1] = new_e
+            // Load vH = hPong[j:j+1] for next iter's compute
+            reg[8] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO)]; reg[9] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO) + 1 ];
+            gr.st(3, gr.at(3, CTRL_GR_LO) - 2, CTRL_GR_LO); // adjust j back to current pair after preloading next pair's vH. ISA supports this, but simulator may have a quirk. It might need to be first or second pair. Don't remember which
 
-            //set PC
-            // mvd store: pvE[NEW_j : NEW_j+1] = e pair (matches 4-lane's
-            // write-ahead-one pattern — next iter reads from this slot)
-            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[12]; spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[13];
+
+            // Update vF = subs(vF, vGapE)  [paired]
             {
-                // cmp = any_cmpgt(vF, vH) | any_cmpgt(vF, vTemp)  [8-lane]
-                gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[8])
-                        | gssw4_cmpgt_any_epu8(reg[11], reg[9]), CTRL_GR_LO);
-                gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[18])
-                        | gssw4_cmpgt_any_epu8(reg[11], reg[19]), CTRL_GR_HI);
+                reg[10] = gssw4_subs_epu8(reg[10], reg[4]);
+                reg[11] = gssw4_subs_epu8(reg[11], reg[5]);
             }
-
-            {
-                //NOP
-                //NOP
-            }
-
-            // mvd store: pvF[NEW_j : NEW_j+1] = vTemp pair
-            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[18]; spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[19];
-            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN * GSSW_VEC_WORDS) goto m_101_lazyf;
-
-        m_101_lazyf_wrap:
-            // --- Wraparound (rare) ---
-            // mvd: vH pair = hPong[0:1]
-            reg[8] = spm[gr.at(6) + 0]; reg[9] = spm[gr.at(6) + 1];
+            // Store pvF[j:j+1] = new_vTemp
+            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[18]; spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[19];  gr.st(3, gr.at(3, CTRL_GR_LO) + 2, CTRL_GR_LO); //mvd and autoincrement j += 2
             //NOP
 
-            // vF <<= 1 byte (paired cross-register shift)
             {
-                reg[11] = gssw8_slli_carry(reg[11], reg[10], 1);
-                reg[10] = gssw4_slli_si128(reg[10], 1);
+                //halt
             }
-            // mvd: vTemp pair = pvF[0:1]
-            reg[18] = spm[GSSW_F_WOFF + 0]; reg[19] = spm[GSSW_F_WOFF + 1];
+            // Load vTemp = pvF[j:j+1] for cmp
+            reg[18] = spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)]; reg[19] = spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) + 1];
+            // Wraparound: if j >= SEG_LEN*2, reset j and shift vF
+            if (gr.at(3, CTRL_GR_LO) >= GSSW_SEG_LEN * GSSW_VEC_WORDS) {
 
-            //set PC
-            // mvd store: pvE[segLen tail] = e pair (matches 4-lane
-            // wraparound's write at j=SEG_LEN, pre j=0 reset).
-            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[12]; spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[13];
+                spm[GSSW_E_WOFF -2+ gr.at(3, CTRL_GR_LO)] = reg[12]; spm[GSSW_E_WOFF -2+ gr.at(3, CTRL_GR_LO) + 1] = reg[13];
+                //set pc comp
 
-            // mvd store: pvF[segLen tail] = vTemp pair
-            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[18]; spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[19];
-            gr.st(3, 0, CTRL_GR_LO);
-            {
+                //NOP
+                gr.st(3, 0, CTRL_GR_LO);
+                {
+                    reg[11] = gssw8_slli_carry(reg[11], reg[10], 1);
+                    reg[10] = gssw4_slli_si128(reg[10], 1);
+                }
+
+                // Store pvE[j:j+1] = new_e
+                // Load vH = hPong[j:j+1] for next iter's compute
+                reg[8] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO)]; reg[9] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO) + 1]; //fix speculative load
+                //NOP
+                {
+                    //halt
+                }
+
+                // Load vTemp = pvF[j:j+1] for cmp
+                reg[18] = spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)]; reg[19] = spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) + 1]; //fix speculative load
+
+                //set PC
+                //NOP
+
                 //NOP
                 //NOP
+                // cmp = cmpgt_any(vF, vH) | cmpgt_any(vF, vTemp)  [8-lane]
+                {
+                    gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[8])
+                            | gssw4_cmpgt_any_epu8(reg[11], reg[9]), CTRL_GR_LO);
+                    gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[18])
+                            | gssw4_cmpgt_any_epu8(reg[11], reg[19]), CTRL_GR_HI);
+                }
+            } else
+            {
+                spm[GSSW_E_WOFF -2+ gr.at(3, CTRL_GR_LO)] = reg[12]; spm[GSSW_E_WOFF -2+ gr.at(3, CTRL_GR_LO) + 1] = reg[13];
+                //NOP
+                // cmp = cmpgt_any(vF, vH) | cmpgt_any(vF, vTemp)  [8-lane]
+                {
+                    gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[8])
+                            | gssw4_cmpgt_any_epu8(reg[11], reg[9]), CTRL_GR_LO);
+                    gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[18])
+                            | gssw4_cmpgt_any_epu8(reg[11], reg[19]), CTRL_GR_HI);
+                }
             }
 
-            // cmp = any_cmpgt(vF, vH) | any_cmpgt(vF, vTemp)  [8-lane]
-            {
-                gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[8])
-                        | gssw4_cmpgt_any_epu8(reg[11], reg[9]), CTRL_GR_LO);
-                gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[18])
-                        | gssw4_cmpgt_any_epu8(reg[11], reg[19]), CTRL_GR_HI);
-            }
             //setPC
             goto m_101_lazyf;
 

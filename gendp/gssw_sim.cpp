@@ -16,13 +16,17 @@
 #define GSSW_VEC_WORDS 2                            // 2 SPM words per pair
 
 // SPM fixed-region offsets (bytes). Each array holds SEG_LEN pair slots,
-// each 8 bytes. Must match pe.cpp exactly.
+// each 8 bytes. 8-byte (1 pair) padding between pvE/pvF and pvF/best
+// absorbs the lazy-F last-iter overflow writes at spm[pvE+SEG_LEN*2]
+// and spm[pvF+SEG_LEN*2] so they don't corrupt pvF[0]/best[0].
+// Must match pe.cpp exactly.
+#define GSSW_SPM_PAD    8                            // 1 pair = 2 words
 #define GSSW_PROF_OFF   0
 #define GSSW_HPING_OFF  (4 * GSSW_SEG_LEN * 8)       // 4 nt × segLen pairs × 8B
 #define GSSW_HPONG_OFF  (GSSW_HPING_OFF + GSSW_SEG_LEN * 8)
 #define GSSW_E_OFF      (GSSW_HPONG_OFF + GSSW_SEG_LEN * 8)
-#define GSSW_F_OFF      (GSSW_E_OFF     + GSSW_SEG_LEN * 8)
-#define GSSW_BEST_OFF   (GSSW_F_OFF     + GSSW_SEG_LEN * 8)
+#define GSSW_F_OFF      (GSSW_E_OFF     + GSSW_SEG_LEN * 8 + GSSW_SPM_PAD)
+#define GSSW_BEST_OFF   (GSSW_F_OFF     + GSSW_SEG_LEN * 8 + GSSW_SPM_PAD)
 #define GSSW_GRAPH_OFF  (GSSW_BEST_OFF  + GSSW_SEG_LEN * 8)
 
 struct gssw_profile {
