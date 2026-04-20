@@ -105,9 +105,17 @@
 #define COPY_I 24 // Dummy TODO implement
 #define POPCOUNT 25 // partial dummy TODO
 #define CMP_2INP 26 // dummy TODO
+// GSSW-lowering additions. CARRY (slot 3) was unused by any generator and is
+// reclaimed for SLLI_64 to stay within the 5-bit COMP_OPCODE_WIDTH budget.
+#define SLLI_64    3    // paired 64-bit unsigned left shift (reg[r:r+1])
+#define ADDS_EPU8  27   // saturating unsigned 8-bit add (simd only)
+#define SUBS_EPU8  28   // saturating unsigned 8-bit sub (simd only)
+#define MAX_EPU8   29   // unsigned 8-bit max (simd only)
+#define MAX_REDUCE 30   // horizontal max of 4 lanes -> scalar byte (simd only)
+#define COMP_GT    31   // scalar gt / simd any-lane gt; writes 0/1 scalar
 
 inline bool is_immediate_opcode(int opcode) {
-    return (opcode == ADD_I || opcode == COPY_I);
+    return (opcode == ADD_I || opcode == COPY_I || opcode == SLLI_64);
 }
 
 inline int get_base_opcode(int opcode) {

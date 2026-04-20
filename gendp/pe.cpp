@@ -220,12 +220,38 @@ void pe::run(int simd) {
         op[1][1] = get_base_opcode(op[1][1]);
     }
 
-    if (simd) {
-        regfile_unit->write_data[0] = cu_32.execute_8bit(op[0], cu_inputs[0]);
-        regfile_unit->write_data[1] = cu_32.execute_8bit(op[1], cu_inputs[1]);        
-    } else {
-        regfile_unit->write_data[0] = cu_32.execute(op[0], cu_inputs[0]);
-        regfile_unit->write_data[1] = cu_32.execute(op[1], cu_inputs[1]);   
+    // Per-slot dispatch: SIMD + gr source -> scalar ALU (GSSW lowering).
+    // If any compute input references a gr (input_addr >= 32) while simd
+    // mode is active, the lane-packing treatment would corrupt 32-bit gr
+    // values — fall back to the scalar ALU for that slot. COMP_GT is the
+    // documented exception: it legitimately reads simd reg lanes and writes
+    // a scalar 0/1 into gr, so keep it on the simd path regardless.
+    auto slot_has_gr_src = [&](int s) {
+        for (int j = 0; j < 6; j++) if (input_addr[s][j] >= 32) return true;
+        return false;
+    };
+    for (int s = 0; s < 2; s++) {
+        // SLLI_64: paired 64-bit left shift. Both slots see the same opcode;
+        // cu_inputs[s][1]=reg[srcReg], cu_inputs[s][2]=reg[srcReg+1]; the
+        // shift amount arrives via the immediate path in cu_inputs[s][0].
+        // Slot 0 emits the new low word, slot 1 emits the new high word.
+        if (op[s][0] == SLLI_64) {
+            unsigned shift_imm = (unsigned)cu_inputs[s][0] & 0x3F;  // 0..63
+            uint32_t lo = (uint32_t)cu_inputs[s][1];
+            uint32_t hi = (uint32_t)cu_inputs[s][2];
+            uint64_t pair = ((uint64_t)hi << 32) | lo;
+            uint64_t shifted = (shift_imm >= 64) ? 0ULL : (pair << shift_imm);
+            regfile_unit->write_data[s] = (s == 0)
+                ? (int)(uint32_t)shifted
+                : (int)(uint32_t)(shifted >> 32);
+            continue;
+        }
+        bool use_simd = simd
+            && !(slot_has_gr_src(s) && op[s][0] != COMP_GT);
+        if (use_simd)
+            regfile_unit->write_data[s] = cu_32.execute_8bit(op[s], cu_inputs[s]);
+        else
+            regfile_unit->write_data[s] = cu_32.execute(op[s], cu_inputs[s]);
     }
 
 
@@ -2481,19 +2507,32 @@ m23_end:    ;
         printf("addi gr[%d] %d gr[%d] (%d %d %d)\t", rd, imm, rs2, sum, add_a, add_b);
 #endif
         (*PC)++;
-//     } else if (opcode == 3) {       // set_8 rd rs2
-//         rd = reg_imm_0;
-//         rs2 = reg_1;
-//         memcpy(rs, &main_addressing_register[rs2], 4*sizeof(int8_t));
-
-//         for (i = 0; i < 4; i++) {
-//             rs[i] = main_addressing_register[rs2] & 0xFF;
-//         }
-//         memcpy(&main_addressing_register[rd], rs, 4*sizeof(int8_t));
-// #ifdef PROFILE
-//         printf("set_8 gr[%d] gr[%d] (%d %lx)\n", rd, rs2, main_addressing_register[rs2], main_addressing_register[rd]);
-// #endif
-//         (*PC)++;
+    } else if (opcode == CTRL_SET_8) {   // set_8 reg[rd]/gr[rd] = imm8 broadcast
+        // Writes (imm8 & 0xFF) * 0x01010101 into the destination so one op
+        // materializes a 4-lane byte constant for the SIMD compute path
+        // (e.g. vBias=0x04040404 in magic 101's GSSW kernel).
+        rd = reg_imm_0;
+        int imm8 = sext_imm_1 & 0xFF;
+        int broadcast = (int)((uint32_t)imm8 * 0x01010101u);
+        if (dest == CTRL_REG) {
+            if (rd < 0 || rd >= REGFILE_ADDR_NUM) {
+                fprintf(stderr, "PE[%d] set_8 reg[%d] out of range\n", id, rd);
+                exit(-1);
+            }
+            regfile_unit->register_file[rd] = broadcast;
+        } else if (dest == CTRL_GR
+                || dest == CTRL_GR_LO
+                || dest == CTRL_GR_HI) {
+            set_output_dest(dest, rd, broadcast);
+        } else {
+            fprintf(stderr, "PE[%d] set_8 to dest %d not supported\n",
+                id, dest);
+            exit(-1);
+        }
+#ifdef PROFILE
+        printf("set_8 dest=%d [%d] = 0x%08x\t", dest, rd, broadcast);
+#endif
+        (*PC)++;
     } else if (opcode == 4) {       // li dest imm/reg(reg(++))
 #ifdef PROFILE
     if (simd)
