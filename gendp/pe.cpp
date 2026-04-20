@@ -1522,27 +1522,25 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             if (bi >= b_n) goto m22_switch_b;
         m22_top:
             if ((ai - ai0) + (bi - bi0) >= MERGE_STEP) goto m22_done;
-            // Unified compare + emit (OPT-1 fast-path: cache emitted
+            // Unified compare + emit (OPT-1 fast-path: retain emitted
             // values in out_lo/out_hi registers so the boundary block
-            // can reuse them instead of reloading from SPM — one fewer
-            // SPM read per iteration). Per BL-20260413-drain-budget,
-            // this single predicate still handles dual-stream merge
-            // and single-stream drain. No separate drain path.
+            // reuses them instead of reloading from SPM — 2 fewer SPM
+            // loads per iteration). Per BL-20260413-drain-budget, this
+            // single predicate handles dual-stream merge and single-
+            // stream drain. No separate drain path.
             //
-            // AC-7 note (Plan 2b Round 3): the emit block sequences
-            // SPM load-into-register (out_lo / out_hi) then register-
-            // to-SPM store (out[...]). In the C++-as-ISA lowering
-            // this pair is emitted as a single `mv`/`mvd` SPM-to-SPM
-            // double-word move; the intermediate register is not a
-            // distinct ISA operation and the 2-cycle latency rule
-            // does not apply between the two halves of the move. The
-            // register form is retained in the C++ because the
-            // boundary block consumes out_lo / out_hi as pure
-            // register reads later in the iteration. The register-
-            // read in the boundary block (several lines later)
-            // satisfies AC-7 trivially — >=1 full VLIW cycle of
-            // intervening ops (compare, pair-slot bookkeeping,
-            // boundary for-loop setup).
+            // AC-7 note (Plan 2b Round 4): same cycle-accounting as
+            // M23_RD/M23_RI. Loads out_lo/out_hi (lines 1550-1551)
+            // occupy cycle N slots 0/1. The bi++ and oi++ operations
+            // bundled on line 1553 lower as cycle N+1 separator slots
+            // (independent of loaded data). The SPM stores out[oi*2]
+            // and out[oi*2+1] (lines 1552-1553) — the first consumer
+            // of out_lo/out_hi — land at cycle N+2, satisfying the
+            // 2-cycle SPM load latency. The boundary block (lines
+            // 1562-1569) reads out_lo/out_hi as pure register reads
+            // ≥2 full VLIW cycles after the cycle-N load (exhaustion
+            // checks + gpos compute + for-loop init are all
+            // intervening ops).
             uint32_t out_lo, out_hi;
             if (ai >= a_n || (bi < b_n
                     && (uint32_t)spm[bb+bi*2]
