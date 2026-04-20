@@ -1601,7 +1601,11 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             int ic   = spm[DEDUP_META + 5];
             int dw   = spm[DEDUP_META + 6];
             int iw   = spm[DEDUP_META + 7];
-            int de = 0, ie = 0;
+            // DEC-2 (Plan 2b Milestone B): DEDUP_META+8/+9 (formerly
+            // de/ie) are classified `dead` in the PE-side ABI —
+            // magic 32 init writes 0 and no magic reads them. The
+            // prior write-only `de`/`ie` flags have been removed; the
+            // slots remain zero-compat via magic 32's zeroing loop.
             int dtn  = spm[DEDUP_META + 10 + dw];
             int don_ = spm[DEDUP_META + 10 + (dw^1)];
             int itn  = spm[DEDUP_META + 12 + iw];
@@ -1624,7 +1628,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                     spm[DEDUP_META + 10 + dw] = 0; \
                     dw ^= 1; \
                     db = dw ? DEDUP_DIAG_BUF1 : DEDUP_DIAG_BUF0; \
-                    de = 1; dtn = don_; don_ = 0; dc = 0; \
+                    dtn = don_; don_ = 0; dc = 0; \
                     if (dtn == 0) { ad = true; goto fail_label; } \
                 } \
                 vd_out = (uint32_t)spm[db+dc*2]; \
@@ -1637,7 +1641,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                     spm[DEDUP_META + 12 + iw] = 0; \
                     iw ^= 1; \
                     ib = iw ? DEDUP_INTV_BUF1 : DEDUP_INTV_BUF0; \
-                    ie = 1; itn = ion; ion = 0; ic = 0; \
+                    itn = ion; ion = 0; ic = 0; \
                     if (itn == 0) { ai = true; goto fail_label; } \
                 } \
                 lo_out = (uint32_t)spm[ib+ic*2]; \
@@ -1659,7 +1663,6 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // Controller-visible output (read by magic 30/31 between calls)
             #define M23_SAVE_OUT do { \
                 spm[DEDUP_META+2]=n_do; spm[DEDUP_META+3]=n_io; \
-                spm[DEDUP_META+8]=de; spm[DEDUP_META+9]=ie; \
             } while(0)
             // PE-internal resume state (will become registers in ISA)
             #define M23_SAVE_RESUME do { \
