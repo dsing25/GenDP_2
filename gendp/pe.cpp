@@ -1677,8 +1677,18 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 spm[DEDUP_META+19]=nk; \
             } while(0)
             #define M23_SAVE do { M23_SAVE_OUT; M23_SAVE_RESUME; } while(0)
+            // M23_SAVE_LIGHT (Plan 2b Milestone C1, p2b): omit the
+            // M23_SAVE_RESUME writes at yield points where pv/pk/clo/
+            // chi/state/pdone/nv/nk are provably unchanged since
+            // entry. Saves 12 SPM stores per light yield. Used at
+            // the `pdone`-skip yield (entry-time pass-through when
+            // dedup already completed in a prior invocation) where
+            // no state was modified this invocation. The resume
+            // slots hold the prior invocation's save bytes, which
+            // are the correct values for the next entry.
+            #define M23_SAVE_LIGHT do { M23_SAVE_OUT; } while(0)
 
-            if (pdone) { M23_SAVE; goto m23_end; }
+            if (pdone) { M23_SAVE_LIGHT; goto m23_end; }
             if (state == 1) goto m23_B;
             if (state == 2) goto m23_C;
 
@@ -1787,6 +1797,7 @@ m23_C_done_all:
             M23_SAVE;
 m23_end:    ;
             #undef M23_SAVE
+            #undef M23_SAVE_LIGHT
             #undef M23_SAVE_OUT
             #undef M23_SAVE_RESUME
             #undef M23_RD
