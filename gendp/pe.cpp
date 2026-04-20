@@ -2195,8 +2195,9 @@ m23_end:    ;
             }
 
             //set PC
-            // mvd store: pvE[j-2:j-1] = e pair (j already advanced)
-            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) - 2] = reg[12]; spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) - 1] = reg[13];
+            // mvd store: pvE[NEW_j : NEW_j+1] = e pair (matches 4-lane's
+            // write-ahead-one pattern — next iter reads from this slot)
+            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[12]; spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[13];
             {
                 // cmp = any_cmpgt(vF, vH) | any_cmpgt(vF, vTemp)  [8-lane]
                 gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[8])
@@ -2210,8 +2211,8 @@ m23_end:    ;
                 //NOP
             }
 
-            // mvd store: pvF[j-2:j-1] = vTemp pair
-            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) - 2] = reg[18]; spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) - 1] = reg[19];
+            // mvd store: pvF[NEW_j : NEW_j+1] = vTemp pair
+            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[18]; spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[19];
             if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN * GSSW_VEC_WORDS) goto m_101_lazyf;
 
         m_101_lazyf_wrap:
@@ -2229,11 +2230,12 @@ m23_end:    ;
             reg[18] = spm[GSSW_F_WOFF + 0]; reg[19] = spm[GSSW_F_WOFF + 1];
 
             //set PC
-            // mvd store: pvE[j-2:j-1] = e pair (tail)
-            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) - 2] = reg[12]; spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) - 1] = reg[13];
+            // mvd store: pvE[segLen tail] = e pair (matches 4-lane
+            // wraparound's write at j=SEG_LEN, pre j=0 reset).
+            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[12]; spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[13];
 
-            // mvd store: pvF[j-2:j-1] = vTemp pair
-            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) - 2] = reg[18]; spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) - 1] = reg[19];
+            // mvd store: pvF[segLen tail] = vTemp pair
+            spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[18]; spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[19];
             gr.st(3, 0, CTRL_GR_LO);
             {
                 //NOP
