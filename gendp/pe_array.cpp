@@ -3312,6 +3312,14 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // gr[4]=MM_SORT_BUF, gr[7]=MM_DEDUP_INTV_OUT.
             // s1c: [16..19]=diag_out_base, [20..23]=diag_out_cursor,
             //   [24..27]=intv_out_base, [28..31]=intv_out_cursor.
+            //
+            // Plan 2b Milestone F (AC-11) audit — magic 32 SPM
+            // chains: NONE. Magic 32 reads only MM (waitLSQ-
+            // disciplined) and s1c (1-cycle rule-8 latency); no SPM
+            // loads occur in this magic's body. Per the AC-11
+            // audit table, magic 32 has zero SPM-load-to-use chains
+            // and is AC-7-compliant by construction. No code change
+            // required.
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
