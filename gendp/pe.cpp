@@ -1894,35 +1894,37 @@ m23_end:    ;
                 reg[3] = 0;                       // vZero
             }
 
-            //zkn rname registers so you cand do mvd here
-            // Load numNodes and total_nexts from meta
-            gr.st(1, spm[GSSW_META_WOFF + 0], CTRL_GR_HI);   // numNodes
-            gr.st(12, spm[GSSW_META_WOFF + 1]);              // total_nexts (scratch)
+            // Load numNodes + total_nexts via mvd into adjacent gr[11:12]
+            gr.st(11, spm[GSSW_META_WOFF]); gr.st(12, spm[GSSW_META_WOFF + 1]);  // mvd
+            //NOP
+
+            //NOP (SPM latency)
+            //NOP
+
+            gr.st(1, gr.at(11), CTRL_GR_HI);                 // numNodes → gr[1].HI
+            gr.st(11, 76);                                    // hoist 76 for compute multiply
+
+            //set PC for compute mul kernel
+            //NOP
 
             // Compute graphSeq_word_base = NODES_WOFF + numNodes*76 + (total_nexts+1)/2
-            // 76 = 64 + 8 + 4
-            gr.st(11, gr.at(1, CTRL_GR_HI) << 6);            // n<<6
-            gr.st(13, gr.at(1, CTRL_GR_HI) << 3);            // n<<3
+            { gr.st(13, gr.at(1, CTRL_GR_HI) * gr.at(11)); } // numNodes * 76 → gr[13]
+            gr.st(12, gr.at(12) + 1);                        // total_nexts+1
 
-            gr.st(11, gr.at(11) + gr.at(13));                // n*72 so far
-            gr.st(13, gr.at(1, CTRL_GR_HI) << 2);            // n<<2
+            gr.st(12, gr.at(12) >> 1);                       // (total_nexts+1)/2
+            //NOP
 
-            gr.st(11, gr.at(11) + gr.at(13));                // n*76
-            gr.st(13, gr.at(12) + 1);                        // total_nexts+1
+            gr.st(13, gr.at(13) + GSSW_NODES_WOFF);          // childIds_word_base → gr[13]
+            //NOP
 
-            gr.st(11, gr.at(11) + GSSW_NODES_WOFF);          // childIds_word_base
-            gr.st(13, gr.at(13) >> 1);                       // (total_nexts+1)/2
-
-            gr.st(9, gr.at(11) + gr.at(13));                 // graphSeq_word_base → gr[9]
+            gr.st(9, gr.at(13) + gr.at(12));                 // graphSeq_word_base → gr[9]
 
             // Zero best[0..segLen-1]
             gr.st(3, 0, CTRL_GR_LO);                         // j = 0
         m_101_best_zero:
-            if (gr.at(3, CTRL_GR_LO) >= GSSW_SEG_LEN) goto m_101_best_zero_done;
             spm[GSSW_BEST_WOFF + gr.at(3, CTRL_GR_LO)] = reg[3];
             gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);
-            goto m_101_best_zero;
-        m_101_best_zero_done:
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_best_zero;
 
             gr.st(14, 0, CTRL_GR_LO);                        // overallMax = 0
             gr.st(1, 0, CTRL_GR_LO);                         // n = 0
@@ -1931,17 +1933,11 @@ m23_end:    ;
         m_101_node:
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI)) goto m_101_done;
 
-            // nd_word_off = NODES_WOFF + n * 76
-            gr.st(11, gr.at(1, CTRL_GR_LO) << 6);            // n<<6
-            gr.st(13, gr.at(1, CTRL_GR_LO) << 3);            // n<<3
-
-            gr.st(11, gr.at(11) + gr.at(13));                // n*72
-            gr.st(13, gr.at(1, CTRL_GR_LO) << 2);            // n<<2
-
-            gr.st(11, gr.at(11) + gr.at(13));                // n*76
+            // nd_word_off = NODES_WOFF + n * 76 (uses hoisted gr[11]=76)
+            { gr.st(4, gr.at(1, CTRL_GR_LO) * gr.at(11)); }  // n * 76 → gr[4]
             //NOP
 
-            gr.st(4, gr.at(11) + GSSW_NODES_WOFF);           // nd_word_off → gr[4]
+            gr.st(4, gr.at(4) + GSSW_NODES_WOFF);            // nd_word_off → gr[4]
             //NOP
 
             // Load nd words 0 and 1 for seq/next metadata
@@ -1963,41 +1959,26 @@ m23_end:    ;
             gr.st(5, GSSW_HPING_WOFF);
             gr.st(6, GSSW_HPONG_WOFF);
 
+            // Pre-compute SPM bases so body uses spm[gr+gr] (no const).
+            gr.st(10, gr.at(4) + GSSW_ND_HSEED_W);           // hSeed base
+            gr.st(8, gr.at(4) + GSSW_ND_ESEED_W);            // eSeed base
+
             gr.st(3, 0, CTRL_GR_LO);                         // j = 0
         m_101_seed_load:
-            if (gr.at(3, CTRL_GR_LO) >= GSSW_SEG_LEN) goto m_101_seed_load_done;
+            // Load hSeed[j]/eSeed[j] into scratch regs, then store to hPing[j]/pvE[j].
+            // Use reg[11]/reg[12] (not reg[1]/reg[2] which hold vGapO/vGapE).
+            reg[11] = spm[gr.at(10) + gr.at(3, CTRL_GR_LO)];
+            //NOP
 
-            //zkn you can't do spm->spm in one instruction. Need to load to registers first. Use mvd 
-            //as well, so this will look like:
-            /*
-             * reg[1,2] = nd.hSeed[j:j+1] //mvd
-             * NOP
-             *
-             * reg[3,4] = nd.eSeed[j:j+1] //mvd
-             * NOP
-             *
-             * hping[j:j+1] = reg[1,2] //mvd
-             * NOP
-             * 
-             * pvE[j:j+1] = reg[3,4] //mvd
-             * NOP
-             */
-            //you also can do spm[const+reg] or spm[reg+reg]. You cannot do spm[reg+reg+const].
-            //I recommend before you enter this loop you set gr4 = gr4+GSSW_ND_ESEED_W and another 
-            //gr for GSSW_ND_HSEED_W. Then inside the loop you can do spm[gr4+gr3] to get eSeed and 
-            //spm[gr5+gr3] to get hSeed.
-            //You can also use auto increment on gr3 so that you don't need a seperate instruction 
-            //for j++
+            reg[12] = spm[gr.at(8) + gr.at(3, CTRL_GR_LO)];
+            //NOP
 
-            // hPing[j] = nd.hSeed[j]
-            spm[gr.at(5) + gr.at(3, CTRL_GR_LO)]
-                = spm[gr.at(4) + GSSW_ND_HSEED_W + gr.at(3, CTRL_GR_LO)];
-            // pvE[j] = nd.eSeed[j]
-            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)]
-                = spm[gr.at(4) + GSSW_ND_ESEED_W + gr.at(3, CTRL_GR_LO)];
-            gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);
-            goto m_101_seed_load;
-        m_101_seed_load_done:
+            spm[gr.at(5) + gr.at(3, CTRL_GR_LO)] = reg[11];
+            //NOP
+
+            spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[12]; gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);  // autoincrement j++
+
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_seed_load;
 
             // === D. COLUMN LOOP ===
             gr.st(2, 0, CTRL_GR_LO);                         // col = 0
@@ -2211,13 +2192,17 @@ m23_end:    ;
             gr.st(14, gr.at(11), CTRL_GR_LO);                   // overallMax = colMax
             gr.st(3, 0, CTRL_GR_LO);                            // j = 0
         m_101_best_copy:
+            // Load hPong[j] → reg, wait SPM latency, store to best[j]
+            reg[11] = spm[gr.at(6) + gr.at(3, CTRL_GR_LO)];
+            //NOP (SPM latency)
 
-            if (gr.at(3, CTRL_GR_LO) >= GSSW_SEG_LEN) goto m_101_skip_best;
-            //zkn we can't do spm to spm. You need to load, wait a cycle for latency, then store
-            spm[GSSW_BEST_WOFF + gr.at(3, CTRL_GR_LO)]
-                = spm[gr.at(6) + gr.at(3, CTRL_GR_LO)];
+            //NOP
+            //NOP
+
+            spm[GSSW_BEST_WOFF + gr.at(3, CTRL_GR_LO)] = reg[11];
             gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);
-            goto m_101_best_copy;
+
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_best_copy;
         m_101_skip_best:
 
             // === G. Ping/pong swap ===
@@ -2236,30 +2221,23 @@ m23_end:    ;
             // Use: gr[2]=c, gr[6]=cd_word_off, gr[7,8]=scratch.
 
             gr.st(12, spm[gr.at(4) + 1]);                        // [next_off lo | next_len hi]
-            gr.st(11, 76);
-            
-            //set PC
+            gr.st(11, 76);                                       // re-init 76 (col loop clobbered gr[11])
+
+            //set PC for compute mul kernel
+            //NOP (SPM latency for gr[12])
+
+            { gr.st(13, gr.at(1, CTRL_GR_HI) * gr.at(11)); }     // numNodes * 76 → gr[13]
             //NOP
 
+            gr.st(12, gr.at(12, CTRL_GR_LO));                    // next_off (full 32-bit usage)
+            { gr.st(13, (gr.at(13) + GSSW_NODES_WOFF) << 2); }   // childIds_byte_base
 
-            // Load next_off (low 16 of nd word 1)
-            gr.st(12, gr.at(12, CTRL_GR_LO));                       // next_off (full 32-bit usage)
-            {
-                gr.st(11, gr.at(1, CTRL_GR_HI) * gr.at(11));      // numNodes * 76 (node descriptor size)
-            }
+            gr.st(2, 0);                                         // c = 0 (full gr[2])
+            { gr.st(12, gr.at(13) + (gr.at(12) << 1)); }         // byte addr childIds[next_off]
 
-            //NOP
-            {
-                gr.st(13,(gr.at(11) + GSSW_NODES_WOFF) << 2);
-            }
-
-            gr.st(2, 0);                                          // c = 0 (full gr[2])
-            {
-                gr.st(12, gr.at(13) + (gr.at(12) << 1));
-            }
+            // Entry guard: skip loop if next_len == 0
+            if (gr.at(3, CTRL_GR_HI) == 0) goto m_101_push_done;
         m_101_push:
-            if (gr.at(2) >= gr.at(3, CTRL_GR_HI)) goto m_101_push_done;
-
             // byte addr of childIds[next_off + c] = gr[12] + c*2
             gr.st(13, gr.at(2) << 1);                            // c*2
             //NOP
@@ -2276,6 +2254,8 @@ m23_end:    ;
 
             if (gr.at(8) == 0) goto m_101_child_b0;
             // else byte offset 2: child = (word >> 16) & 0xFFFF
+            // (gr.at(7, CTRL_GR_HI) sign-extends, breaking child IDs with
+            // bit 15 set — keep the explicit mask.)
             gr.st(7, (gr.at(7) >> 16) & 0xFFFF);
             goto m_101_child_done;
         m_101_child_b0:
@@ -2283,14 +2263,8 @@ m23_end:    ;
         m_101_child_done:
             // gr[7] = child
 
-            // cd_word_off = NODES_WOFF + child * 76
-            gr.st(8, gr.at(7) << 6);                             // c<<6
-            gr.st(13, gr.at(7) << 3);                            // c<<3
-
-            gr.st(8, gr.at(8) + gr.at(13));                      // 72c
-            gr.st(13, gr.at(7) << 2);                            // c<<2
-
-            gr.st(8, gr.at(8) + gr.at(13));                      // 76c
+            // cd_word_off = NODES_WOFF + child * 76 (uses hoisted gr[11]=76)
+            { gr.st(8, gr.at(7) * gr.at(11)); }                  // child * 76 → gr[8]
             //NOP
 
             gr.st(6, gr.at(8) + GSSW_NODES_WOFF);                // cd_word_off → gr[6]
@@ -2299,8 +2273,6 @@ m23_end:    ;
             // Inner j2 loop
             gr.st(3, 0, CTRL_GR_LO);                             // j2 = 0
         m_101_push_j:
-            if (gr.at(3, CTRL_GR_LO) >= GSSW_SEG_LEN) goto m_101_push_j_done;
-
             // hSeed: cd->hSeed[j2] = max(cd->hSeed[j2], hPing[j2])
             reg[11] = spm[gr.at(6) + GSSW_ND_HSEED_W + gr.at(3, CTRL_GR_LO)];
             reg[12] = spm[gr.at(5) + gr.at(3, CTRL_GR_LO)];      // hPing[j2]
@@ -2323,11 +2295,10 @@ m23_end:    ;
             spm[gr.at(6) + GSSW_ND_ESEED_W + gr.at(3, CTRL_GR_LO)] = reg[11];
             gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);      // j2++
 
-            goto m_101_push_j;
-        m_101_push_j_done:
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_push_j;
 
             gr.st(2, gr.at(2) + 1);                              // c++
-            goto m_101_push;
+            if (gr.at(2) < gr.at(3, CTRL_GR_HI)) goto m_101_push;
         m_101_push_done:
 
             // n++, back to outer loop
@@ -2339,16 +2310,14 @@ m23_end:    ;
             reg[10] = reg[3];                                    // vMax = 0
             gr.st(3, 0, CTRL_GR_LO);                             // j = 0
         m_101_final:
-            if (gr.at(3, CTRL_GR_LO) >= GSSW_SEG_LEN) goto m_101_final_done;
-
             reg[11] = spm[GSSW_BEST_WOFF + gr.at(3, CTRL_GR_LO)];
             //NOP
 
             //COMP
             reg[10] = gssw4_max_epu8(reg[10], reg[11]);
             gr.st(3, gr.at(3, CTRL_GR_LO) + 1, CTRL_GR_LO);
-            goto m_101_final;
-        m_101_final_done:
+
+            if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN) goto m_101_final;
 
             //COMP: maxReduce and store in gr[15] for magic 102
             gr.st(15, gssw4_maxReduce(reg[10]));

@@ -76,6 +76,19 @@ static inline uint32_t gssw4_srli_si128(uint32_t v, int n) {
     return v >> (n * 8);
 }
 
+// Paired-register left-byte-shift carry. Returns the new HIGH word of a
+// (lo:hi) 8-lane pair after shifting left by n bytes; the low word is
+// computed separately via gssw4_slli_si128(lo_in, n). Together they model
+// a proposed GenDP pair-shift opcode (not yet in the ISA) that would
+// write both halves in one instruction.
+static inline uint32_t gssw8_slli_carry(uint32_t hi, uint32_t lo, int n) {
+    if (n <= 0) return hi;
+    if (n >= 8) return 0u;
+    if (n == 4) return lo;
+    if (n >  4) return lo << ((n - 4) * 8);
+    return (hi << (n * 8)) | (lo >> ((4 - n) * 8));
+}
+
 // Unsigned 8-bit compare-greater-than: 0xFF per lane if a>b else 0.
 static inline uint32_t gssw4_cmpgt_epu8(uint32_t a, uint32_t b) {
     uint32_t r = 0;
