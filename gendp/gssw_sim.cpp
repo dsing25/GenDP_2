@@ -507,8 +507,12 @@ void gssw_simulation(
             (uint64_t)(uintptr_t)packed;
         pa->va_regfile[1] = spm_size;
 
-        // Run simulation
-        pa->run(100000, 0, PE_4_SETTING,
+        // Run simulation. simd=1 so the 8-bit SIMD compute ops
+        // (MAX_EPU8, MAX_REDUCE, ADDS_EPU8, SUBS_EPU8, COMP_GT) used
+        // by the lowered GSSW kernel dispatch on the SIMD ALU. The
+        // per-slot SIMD+gr-source fallback keeps scalar gr ops
+        // (multiplications, shifts) correct within the same mode.
+        pa->run(100000, 1, PE_4_SETTING,
                 MAIN_INSTRUCTION_1);
 
         // Cleanup

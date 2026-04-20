@@ -1900,12 +1900,14 @@ m23_end:    ;
             fspm[FIN0_META + 3] = n_B;
             fspm[FIN0_META + 4] = n_HA;
         m19_done: ;
-        } else if (magic_id == 101 || magic_id == 103) {
+        } else if (magic_id == 101 || magic_id == 103 || magic_id == 104) {
             // GSSW kernel — register-mapped ISA-like form.
-            // magic_id == 103 is the "section-A-skipped" variant used
-            // during the staged ISA lowering: the instruction generator
-            // emits real ISA for section A and then calls magic(103) to
-            // run sections B-I with the state already set up.
+            // Staged-lowering variants:
+            //   magic 101 = full kernel (sections A..I)
+            //   magic 103 = skip section A (prologue done in ISA)
+            //   magic 104 = skip section A AND section I
+            //               (prologue + final reduce done in ISA;
+            //                 magic runs only B..H and returns).
             // Register allocation:
             //  gr[1] lo: n           hi: numNodes
             //  gr[2] lo: col         hi: seq_len
@@ -2461,6 +2463,7 @@ m23_end:    ;
             goto m_101_node;
 
         m_101_done:
+          if (magic_id != 104) {
             // === I. Final reduce (paired 8-lane) ===
             // vMax pair = reg[14:15] (reusing vMaxColumn slot). Iterate
             // j (word offset, step 2) over best[] pairs, accumulate max.
@@ -2490,6 +2493,7 @@ m23_end:    ;
             }
             //COMP: maxReduce and store in gr[15] for magic 102
             gr.st(15, gssw4_maxReduce(reg[20]));
+          }  // end if (magic_id != 104) — section I skipped for magic 104
         } else if (magic_id == 102) {
             // GSSW print score from gr[15].
             printf("qqq %d qqq\n",

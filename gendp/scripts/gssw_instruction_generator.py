@@ -40,7 +40,8 @@ from utils import InstructionWriter, write_magic, \
     data_movement_instruction, compute_instruction
 from opcodes import (gr, gr_hi, gr_lo, reg, SPM, halt, none, set_PC,
                      bne, si, mv, mvd, addi, shifti_r, set_8, add,
-                     MULTIPLICATION, HALT, INVALID)
+                     MULTIPLICATION, HALT, INVALID, COPY,
+                     MAX_EPU8, MAX_REDUCE)
 
 # Pre-made NOP (two-slot-agnostic data-movement no-op).
 NOP = data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)
@@ -64,34 +65,64 @@ GSSW_ND_WORDS    = 2 + 2 * GSSW_SEG_LEN * GSSW_VEC_WORDS               # 78
 GSSW_ND_MUL_WORDS = GSSW_ND_WORDS  # 78
 
 # --- Compute trace region PCs (indexes into compute_instruction.txt) ---
-# Single region for now. PC 0 is the idle halt; PC 1 is the MUL body.
-CPC_MUL = 1
+# PC 0 is the idle HALT. Other PCs are assigned at generation time.
+CPC_MUL         = 1   # gr[13] = gr[1].hi * gr[11]
+CPC_FINAL_MAX   = 3   # reg[14:15] = max_epu8_pair(reg[14:15], reg[20:21])
+CPC_FINAL_TAIL  = 5   # reg[20] = max(reg[14],reg[15]); gr[15] = max_reduce
 
 
 # ---------------------------------------------------------------------------
 # Compute trace
 # ---------------------------------------------------------------------------
-def gssw_compute_instructions():
-    """Emit the compute-trace file (shared across PEs).
+# Compute address convention: 0-31=reg, 32-47=gr, 48-63=gr_lo, 64-79=gr_hi.
+COMP_REG = 0    # base offset for compute reg addressing
+COMP_GR  = 32   # base offset for compute gr addressing
 
-    Layout:
-      PC 0 : HALT / HALT      # default idle; comp_PC starts at an
-                              # unwritten slot (= HALT) anyway
-      PC 1 : MULTIPLICATION on slot 0; HALT on slot 1
-             inputs : in[0] = gr[1].hi (addr 65), in[1] = gr[11] (addr 43)
-             output : gr[13] (addr 45)
-      PC 2 : HALT / HALT      # return-to-idle after the MUL fires
+
+def _chalt():
+    """Emit a compute HALT pair (one idle VLIW cycle).  Uses the same
+    encoding as WFA/BSW: op[0]=HALT and op[1..2]=INVALID so the
+    simulator's idle dispatch doesn't accidentally clobber registers."""
+    return [compute_instruction(HALT, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0),
+            compute_instruction(HALT, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0)]
+
+
+def gssw_compute_instructions():
+    """Emit the shared compute-trace file.
+
+    Layout (PC ordering matches the CPC_* constants above):
+      PC 0 : idle HALT
+      PC 1 : CPC_MUL           gr[13] = gr[1].hi * gr[11]
+      PC 2 : halt tail (after MUL returns to idle)
+      PC 3 : CPC_FINAL_MAX     reg[14:15] = max_epu8_pair(reg[14:15], reg[20:21])
+      PC 4 : halt tail
+      PC 5 : CPC_FINAL_TAIL[0] reg[20] = max_epu8(reg[14], reg[15])  (8->4)
+      PC 6 : CPC_FINAL_TAIL[1] gr[15]  = max_reduce(reg[20])
+      PC 7 : halt tail
     """
     f = InstructionWriter("instructions/gssw/compute_instruction.txt")
-    # PC 0 - idle
+    # PC 0 — idle.
+    for ins in _chalt(): f.write(ins)
+    # PC 1 — CPC_MUL : gr[13] = gr[1].hi * gr[11].
+    f.write(compute_instruction(MULTIPLICATION, HALT, HALT, 65, 43, 0, 0, 0, 0, COMP_GR + 13))
     f.write(compute_instruction(HALT, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    # PC 2 — halt tail for MUL.
+    for ins in _chalt(): f.write(ins)
+    # PC 3 — CPC_FINAL_MAX : reg[14] = max(reg[14], reg[20]); reg[15] = max(reg[15], reg[21]).
+    # op_0 = MAX_EPU8 produces lane-wise max; op_2 = COPY forwards the
+    # 4-input ALU result to the output.
+    f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 14, 20, 0, 0, 0, 0, 14))
+    f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 15, 21, 0, 0, 0, 0, 15))
+    # PC 4 — halt tail for FINAL_MAX.
+    for ins in _chalt(): f.write(ins)
+    # PC 5 — CPC_FINAL_TAIL[0] : reg[20] = max_epu8(reg[14], reg[15]).
+    f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 14, 15, 0, 0, 0, 0, 20))
     f.write(compute_instruction(HALT, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    # PC 1 = CPC_MUL : gr[13] = gr[1].hi * gr[11]
-    f.write(compute_instruction(MULTIPLICATION, HALT, HALT, 65, 43, 0, 0, 0, 0, 45))
+    # PC 6 — CPC_FINAL_TAIL[1] : gr[15] = max_reduce(reg[20]).
+    f.write(compute_instruction(MAX_REDUCE, INVALID, COPY, 20, 0, 0, 0, 0, 0, COMP_GR + 15))
     f.write(compute_instruction(HALT, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    # PC 2 - idle tail
-    f.write(compute_instruction(HALT, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    f.write(compute_instruction(HALT, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    # PC 7 — halt tail.
+    for ins in _chalt(): f.write(ins)
     f.close()
 
 
@@ -203,9 +234,55 @@ def pe_0_instruction(f):
 
     # End of section A.
 
-    # Delegate sections B..I to magic(103).
+    # Delegate sections B..H to magic(104); section I is lowered below.
+    # Magic 104 clobbers gr[10] (section C writes it with hSeed base),
+    # which would spuriously make the controller's gr[13] sync flag
+    # true and end the simulation before lowered section I runs. Pair
+    # the magic with si gr[10]=0 in slot 0 so the subsequent ctrl_write
+    # phase resets the sync flag back to zero at end of this cycle.
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))
+    f.write(write_magic(104))
+
+    # === Section I (lowered): final reduce over best[] into gr[15] ===
+    # Reset vMax pair. reg[14]=0 | reg[15]=0 via paired set_8.
+    f.write(data_movement_instruction(reg, 0, 0, 0, 14, 0, 0, 0, 0, 0, set_8))
+    f.write(data_movement_instruction(reg, 0, 0, 0, 15, 0, 0, 0, 0, 0, set_8))
+    # Reset j counter. si gr[3].lo = 0 | NOP
+    f.write(data_movement_instruction(gr_lo, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))
     f.write(NOP)
-    f.write(write_magic(103))
+
+    # Loop body (3 VLIW cycles per iter). Iterates 19 times (j 0..36 step 2).
+    #   C0: mvd reg[20:21] = SPM[BEST_WOFF + gr[3]]        | NOP
+    #   C1: set_PC CPC_FINAL_MAX                           | addi gr[3].lo += 2
+    #       -> compute fires MAX_EPU8 pair on NEXT cycle using the
+    #          just-delivered reg[20:21].
+    #   C2: bne (gr[3].lo != SEG_LEN*VEC_WORDS) back to C0 | NOP
+    final_pc = f.pc
+    # C0
+    f.write(data_movement_instruction(
+        reg, SPM, 0, 0, 20, 0, 0, 0, GSSW_BEST_WOFF, 3, mvd))
+    f.write(NOP)
+    # C1
+    f.write(data_movement_instruction(
+        0, 0, 0, 0, CPC_FINAL_MAX, 0, 0, 0, 0, 0, set_PC))
+    f.write(data_movement_instruction(
+        gr_lo, gr, 0, 0, 3, 0, 0, 0, 2, 3, addi))
+    # C2
+    final_branch_pc = f.pc
+    f.write(data_movement_instruction(
+        0, 0, 0, 0, final_pc - final_branch_pc, 0, 0, 0,
+        GSSW_SEG_LEN * GSSW_VEC_WORDS, 3, bne))
+    f.write(NOP)
+
+    # Tail: 8->4 max + horizontal reduce into gr[15].
+    # Control set_PC hands off to the compute tail region; three NOP
+    # pairs give compute time to fire the two tail instructions before
+    # magic(102) below reads gr[15].
+    f.write(data_movement_instruction(
+        0, 0, 0, 0, CPC_FINAL_TAIL, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)   # compute: reg[20] = max_epu8(reg[14], reg[15])
+    f.write(NOP); f.write(NOP)   # compute: gr[15]  = max_reduce(reg[20])
 
     # Print score (unchanged).
     f.write(NOP)
