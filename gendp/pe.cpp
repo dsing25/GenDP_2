@@ -267,7 +267,34 @@ void pe::run(int simd) {
             || op == CTRL_CALL || op == CTRL_RET
             || op == CTRL_RETNE;
     };
+    // call/ret/retne must be paired across both VLIW slots — they
+    // mutate ras and both PCs in lockstep, and allowing them in only
+    // one slot lets the other slot commit side effects before the PC
+    // resync below. Mirrors the controller reject at pe_array.cpp
+    // ~4617 so the PE path fails fast on illegal traces instead of
+    // silently mis-executing.
+    auto is_call_ret = [](int op) {
+        return op == CTRL_CALL || op == CTRL_RET
+            || op == CTRL_RETNE;
+    };
+    if (is_call_ret(ctrl_op[0]) != is_call_ret(ctrl_op[1])) {
+        fprintf(stderr,
+            "PE[%d] PC=%d call/ret must be paired"
+            " (op0=%d op1=%d)\n",
+            id, old_PC, ctrl_op[0], ctrl_op[1]);
+        exit(-1);
+    }
     bool cf0 = is_ctrl_flow(ctrl_op[0]), cf1 = is_ctrl_flow(ctrl_op[1]);
+
+    // Both slots took control flow: they must agree on the target.
+    // Mirrors the controller reject at pe_array.cpp ~4623.
+    if (cf0 && cf1 && PC[0] != PC[1]) {
+        fprintf(stderr,
+            "PE[%d] PC=%d diverging branches:"
+            " slot0->%d slot1->%d\n",
+            id, old_PC, PC[0], PC[1]);
+        exit(-1);
+    }
 
     // One control flow taken: sync other slot
     bool took0 = (PC[0] != old_PC + 1);
