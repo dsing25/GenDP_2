@@ -528,8 +528,9 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
             gr[8] = gr[7] + FIN0_ARCS + gr[8];          // add: arc addr
             //NOP
             gr[9] = spm[gr[8]];                          // mv: SPM load
-            //NOP                                        // SPM lat 1/2
-            //NOP                                        // SPM lat 2/2
+            //NOP                                        // SPM lat 1/3 (AC-11 slot-safe)
+            //NOP                                        // SPM lat 2/3
+            //NOP                                        // SPM lat 3/3
             gr[9] = (unsigned)gr[9] >> 16;               // shifti_r: w (zero-ext)
             //NOP
             spm[gr[8]+2] = s2->buffer[gr[14] + gr[9]];  // mv: ts_off (S2)
@@ -565,8 +566,9 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
             // Read diag from SPM for i_val (pipelined loads, rule 6)
             gr[3] = spm[gr[7] + FIN0_DIAGS + gr[9]];     // mv: vd
             gr[4] = spm[gr[7] + FIN0_DIAGS + gr[9] + 1]; // mv: k
-            //NOP                                         // SPM lat 1/2
-            //NOP                                         // SPM lat 2/2
+            //NOP                                         // SPM lat 1/3 (AC-11 slot-safe)
+            //NOP                                         // SPM lat 2/3
+            //NOP                                         // SPM lat 3/3
             gr[5] = gr[3] & 0xFFFF;                      // andi: vd.lo
             //NOP
             gr[5] = gr[5] - GWF_DIAG_SHIFT;              // subi
@@ -575,8 +577,9 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
             // Arc count from SPM arcmeta (pipelined loads, rule 6)
             gr[8] = spm[gr[7] + FIN0_ARCMETA + gr[9]];   // mv: lo
             gr[13] = spm[gr[7] + FIN0_ARCMETA + gr[9]+1]; // mv: hi
-            //NOP                                         // SPM lat 1/2
-            //NOP                                         // SPM lat 2/2
+            //NOP                                         // SPM lat 1/3 (AC-11 slot-safe)
+            //NOP                                         // SPM lat 2/3
+            //NOP                                         // SPM lat 3/3
             gr[10] = gr[13] - gr[8];                      // sub: nv
             gr[1] = 0;                                   // si: a=0
             //NOP
@@ -592,8 +595,9 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
                 gr[9] = gr[7] + FIN0_ARCS + gr[9];      // add: arc addr
                 //NOP
                 gr[3] = spm[gr[9]];                      // mv: SPM load
-                gr[4] = gr[5] + 1;                       // addi: i_val+1 (fills gap)
-                //NOP                                    // SPM lat 2/2
+                gr[4] = gr[5] + 1;                       // addi: i_val+1 (fills gap 1/3)
+                //NOP                                    // SPM lat 2/3 (AC-11 slot-safe)
+                //NOP                                    // SPM lat 3/3
                 gr[3] = (unsigned)gr[3] >> 16;           // shifti_r: w (zero-ext)
                 // non-ISA: hash multiply
                 uint32_t hk = ((uint32_t)gr[3] << 16)
@@ -3254,21 +3258,25 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         + (s1c[200+pe] - 1) * 2;
                     if (s1c[28+pe] == 0) {
                         gr[11] = spm[first_src];            // mv: SPM->gr
-                        //NOP                                // SPM lat 1/2
-                        //NOP                                // SPM lat 2/2
+                        //NOP                                // SPM lat 1/3 (AC-11 slot-safe)
+                        //NOP                                // SPM lat 2/3
+                        //NOP                                // SPM lat 3/3
                         s1c[176+pe] = gr[11];               // mv: gr->s1c
                         gr[11] = spm[first_src + 1];        // mv: SPM->gr
-                        //NOP                                // SPM lat 1/2
-                        //NOP                                // SPM lat 2/2
+                        //NOP                                // SPM lat 1/3 (AC-11 slot-safe)
+                        //NOP                                // SPM lat 2/3
+                        //NOP                                // SPM lat 3/3
                         s1c[180+pe] = gr[11];               // mv: gr->s1c
                     }
                     gr[11] = spm[last_src];                 // mv: SPM->gr
-                    //NOP                                    // SPM lat 1/2
-                    //NOP                                    // SPM lat 2/2
+                    //NOP                                    // SPM lat 1/3 (AC-11 slot-safe)
+                    //NOP                                    // SPM lat 2/3
+                    //NOP                                    // SPM lat 3/3
                     s1c[184+pe] = gr[11];                   // mv: gr->s1c
                     gr[11] = spm[last_src + 1];             // mv: SPM->gr
-                    //NOP                                    // SPM lat 1/2
-                    //NOP                                    // SPM lat 2/2
+                    //NOP                                    // SPM lat 1/3 (AC-11 slot-safe)
+                    //NOP                                    // SPM lat 2/3
+                    //NOP                                    // SPM lat 3/3
                     s1c[188+pe] = gr[11];                   // mv: gr->s1c
                 }
                 // Diag writeback: chunk outer, PE inner, monotonic
