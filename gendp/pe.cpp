@@ -2056,7 +2056,7 @@ m23_end:    ;
             if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN * GSSW_VEC_WORDS) goto m_101_pvF_zero;
 
             // Prologue: profScore pair = vP[0:1] (first pair slot of profile)
-            reg[16] = spm[gr.at(8) + 0]; reg[17] = spm[gr.at(8) + 1];
+            reg[16] = spm[gr.at(8) + 0]; reg[17] = spm[gr.at(8) + 1]; gr.st(8, gr.at(8) + 2); //mvd with auto-increment
             //set comp pc
 
             // --- Main inner segment loop (paired 8-lane) ---
@@ -2073,27 +2073,23 @@ m23_end:    ;
                 reg[9] = gssw4_subs_epu8(gssw4_adds_epu8(reg[9], reg[17]), reg[1]);
             }
             // Load next profScore pair (mvd)
-            reg[16] = spm[gr.at(8) + gr.at(3, CTRL_GR_LO) + 2]; reg[17] = spm[gr.at(8) + gr.at(3, CTRL_GR_LO) + 3];
+            reg[16] = spm[gr.at(8) + gr.at(3, CTRL_GR_LO)]; reg[17] = spm[gr.at(8) + gr.at(3, CTRL_GR_LO) + 1];
 
             //2nd: vH = max(vH, e, vF)  [paired, 3-way via 4-input op_0]
             {
                 reg[8] = gssw4_max_epu8(gssw4_max_epu8(reg[8], reg[12]), reg[10]);
                 reg[9] = gssw4_max_epu8(gssw4_max_epu8(reg[9], reg[13]), reg[11]);
             }
-            //NOP
-
             // Store pvF[j] = vF (old vF before step 5 updates it), pair
             spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO)] = reg[10]; spm[GSSW_F_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[11];
-
-            // Store hPong[j] = vH, pair
-            spm[gr.at(6) + gr.at(3, CTRL_GR_LO)] = reg[8]; spm[gr.at(6) + gr.at(3, CTRL_GR_LO) + 1] = reg[9];
 
             //3rd: vMaxColumn = max(vMaxColumn, vH)  [paired]
             {
                 reg[14] = gssw4_max_epu8(reg[14], reg[8]);
                 reg[15] = gssw4_max_epu8(reg[15], reg[9]);
             }
-            //NOP
+            // Store hPong[j] = vH, pair
+            spm[gr.at(6) + gr.at(3, CTRL_GR_LO)] = reg[8]; spm[gr.at(6) + gr.at(3, CTRL_GR_LO) + 1] = reg[9];
 
             //4th: e = max(subs(e, vGapE), subs(vH, vGapO))  [paired]
             {
@@ -2145,10 +2141,9 @@ m23_end:    ;
             // cmp = any_cmpgt(vF, vH) | any_cmpgt(vF, vTemp)  [8-lane via OR of four 4-lane reductions]
             {
                 gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[8])
-                        | gssw4_cmpgt_any_epu8(reg[11], reg[9])
-                        | gssw4_cmpgt_any_epu8(reg[10], reg[18])
-                        | gssw4_cmpgt_any_epu8(reg[11], reg[19]));
-                //NOP
+                        | gssw4_cmpgt_any_epu8(reg[11], reg[9]), CTRL_GR_LO);
+                gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[18])
+                        | gssw4_cmpgt_any_epu8(reg[11], reg[19]), CTRL_GR_HI);
             }
 
             {
@@ -2203,12 +2198,11 @@ m23_end:    ;
             // mvd store: pvE[j-2:j-1] = e pair (j already advanced)
             spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) - 2] = reg[12]; spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) - 1] = reg[13];
             {
-                //NOP
                 // cmp = any_cmpgt(vF, vH) | any_cmpgt(vF, vTemp)  [8-lane]
                 gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[8])
-                        | gssw4_cmpgt_any_epu8(reg[11], reg[9])
-                        | gssw4_cmpgt_any_epu8(reg[10], reg[18])
-                        | gssw4_cmpgt_any_epu8(reg[11], reg[19]));
+                        | gssw4_cmpgt_any_epu8(reg[11], reg[9]), CTRL_GR_LO);
+                gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[18])
+                        | gssw4_cmpgt_any_epu8(reg[11], reg[19]), CTRL_GR_HI);
             }
 
             {
@@ -2248,11 +2242,10 @@ m23_end:    ;
 
             // cmp = any_cmpgt(vF, vH) | any_cmpgt(vF, vTemp)  [8-lane]
             {
-                //NOP
                 gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[8])
-                        | gssw4_cmpgt_any_epu8(reg[11], reg[9])
-                        | gssw4_cmpgt_any_epu8(reg[10], reg[18])
-                        | gssw4_cmpgt_any_epu8(reg[11], reg[19]));
+                        | gssw4_cmpgt_any_epu8(reg[11], reg[9]), CTRL_GR_LO);
+                gr.st(13, gssw4_cmpgt_any_epu8(reg[10], reg[18])
+                        | gssw4_cmpgt_any_epu8(reg[11], reg[19]), CTRL_GR_HI);
             }
             //setPC
             goto m_101_lazyf;
