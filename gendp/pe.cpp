@@ -1522,22 +1522,29 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             if (bi >= b_n) goto m22_switch_b;
         m22_top:
             if ((ai - ai0) + (bi - bi0) >= MERGE_STEP) goto m22_done;
-            // Unified compare + emit. Per BL-20260413-drain-budget,
-            // this single predicate handles dual-stream merge and
-            // single-stream drain. No separate drain path.
+            // Unified compare + emit (OPT-1 fast-path: cache emitted
+            // values in out_lo/out_hi registers so the boundary block
+            // can reuse them instead of reloading from SPM — one fewer
+            // SPM read per iteration). Per BL-20260413-drain-budget,
+            // this single predicate still handles dual-stream merge
+            // and single-stream drain. No separate drain path.
+            uint32_t out_lo, out_hi;
             if (ai >= a_n || (bi < b_n
                     && (uint32_t)spm[bb+bi*2]
                        < (uint32_t)spm[ab+ai*2])) {
-                out[oi*2]   = spm[bb+bi*2];
-                out[oi*2+1] = spm[bb+bi*2+1]; bi++; oi++;
+                out_lo = (uint32_t)spm[bb+bi*2];
+                out_hi = (uint32_t)spm[bb+bi*2+1];
+                out[oi*2]   = (int)out_lo;
+                out[oi*2+1] = (int)out_hi; bi++; oi++;
             } else {
-                out[oi*2]   = spm[ab+ai*2];
-                out[oi*2+1] = spm[ab+ai*2+1]; ai++; oi++;
+                out_lo = (uint32_t)spm[ab+ai*2];
+                out_hi = (uint32_t)spm[ab+ai*2+1];
+                out[oi*2]   = (int)out_lo;
+                out[oi*2+1] = (int)out_hi; ai++; oi++;
             }
             // Boundary tracking — bit-exact preservation per AC-5.
+            // Uses out_lo/out_hi from the emit instead of reloading.
             { int gpos = pe_global_base + cum_oi + oi - 1;
-              uint32_t out_lo = (uint32_t)out[(oi-1)*2];
-              uint32_t out_hi = (uint32_t)out[(oi-1)*2+1];
               for (int b = 0; b < 3; b++) {
                   if (spm[976+b] < 0 && out_hi > bvd[b])
                       spm[976+b] = gpos;
