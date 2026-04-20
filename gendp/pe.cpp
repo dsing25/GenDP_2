@@ -1622,7 +1622,20 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             bool ad = false, ai = false;  // all_diag/intv done
 
             // --- Inline helpers (no lambdas for ISA lowering) ---
-            // Read next diag: inline buffer-switch + read
+            // AC-7 cycle accounting (Plan 2b Milestone C2):
+            //   Each code line = 1 gendp ISA instruction (one slot of
+            //   a VLIW pair); each pair of consecutive lines = 1 VLIW
+            //   cycle. 2-cycle SPM latency: load in cycle N; data
+            //   arrives at end of cycle N+1; earliest legal consumer
+            //   is cycle N+2.
+            //
+            // Read next diag: inline buffer-switch + read.
+            //   SPM loads: cycle N slot 0 (vd_out) + slot 1 (k_out).
+            //   sep: cycle N+1 slot 0 (dc++) + slot 1 (p++) — both
+            //        ops are independent of the loaded data.
+            //   Caller's first use of vd_out or k_out lands at
+            //   cycle N+2 or later (all call sites confirmed —
+            //   see QA ledger Milestone C2 section).
             #define M23_RD(vd_out, k_out, fail_label) do { \
                 if (dc >= dtn) { \
                     spm[DEDUP_META + 10 + dw] = 0; \
@@ -1631,11 +1644,14 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                     dtn = don_; don_ = 0; dc = 0; \
                     if (dtn == 0) { ad = true; goto fail_label; } \
                 } \
-                vd_out = (uint32_t)spm[db+dc*2]; \
-                k_out  = spm[db+dc*2+1]; \
-                dc++; p++; \
+                vd_out = (uint32_t)spm[db+dc*2];   /* cycle N slot 0 */ \
+                k_out  = spm[db+dc*2+1];           /* cycle N slot 1 */ \
+                dc++;                              /* cycle N+1 slot 0 (sep) */ \
+                p++;                               /* cycle N+1 slot 1 (sep) */ \
             } while(0)
-            // Read next intv: inline buffer-switch + read
+            // Read next intv: same cycle-accounting contract as
+            // M23_RD. SPM loads at cycle N, independent ic++/p++
+            // separators at cycle N+1, consumer at cycle N+2+.
             #define M23_RI(lo_out, hi_out, fail_label) do { \
                 if (ic >= itn) { \
                     spm[DEDUP_META + 12 + iw] = 0; \
@@ -1644,11 +1660,18 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                     itn = ion; ion = 0; ic = 0; \
                     if (itn == 0) { ai = true; goto fail_label; } \
                 } \
-                lo_out = (uint32_t)spm[ib+ic*2]; \
-                hi_out = (uint32_t)spm[ib+ic*2+1]; \
-                ic++; p++; \
+                lo_out = (uint32_t)spm[ib+ic*2];   /* cycle N slot 0 */ \
+                hi_out = (uint32_t)spm[ib+ic*2+1]; /* cycle N slot 1 */ \
+                ic++;                              /* cycle N+1 slot 0 (sep) */ \
+                p++;                               /* cycle N+1 slot 1 (sep) */ \
             } while(0)
-            // Peek next intv without consuming
+            // Peek next intv without consuming. Unlike M23_RD / M23_RI
+            // which bundle `dc++; p++` (or `ic++; p++`) as natural
+            // separator ops, M23_PI has no state mutation and needs
+            // explicit NOP-comment separators so the real-ISA
+            // lowering inserts 2 NOPs in the cycle-N+1 slots before
+            // the consumer line. Pattern mirrors pe_array.cpp's
+            // SPM-latency `//NOP` comments.
             #define M23_PI(lo_out, hi_out, fail_label) do { \
                 int tc_=ic, tw_=iw, tt_=itn, tb_=ib; \
                 if (tc_ >= tt_) { \
@@ -1657,8 +1680,10 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                     tt_ = ion; tc_ = 0; \
                     if (tt_ == 0) goto fail_label; \
                 } \
-                lo_out = (uint32_t)spm[tb_+tc_*2]; \
-                hi_out = (uint32_t)spm[tb_+tc_*2+1]; \
+                lo_out = (uint32_t)spm[tb_+tc_*2];   /* cycle N slot 0 */ \
+                hi_out = (uint32_t)spm[tb_+tc_*2+1]; /* cycle N slot 1 */ \
+                /*NOP*/ /* cycle N+1 slot 0 (AC-7 sep; real ISA NOP) */ \
+                /*NOP*/ /* cycle N+1 slot 1 (AC-7 sep; real ISA NOP) */ \
             } while(0)
             // Controller-visible output (read by magic 30/31 between calls)
             #define M23_SAVE_OUT do { \
@@ -1732,7 +1757,9 @@ m23_B_peek:
             }
 m23_B_peek_done:
             if (chi > pv) goto m23_B_done;
-            // Flush cur_intv (behind pv)
+            // Flush cur_intv (behind pv). AC-8 mvd site: two
+            // contiguous SPM writes from paired (clo, chi) registers
+            // — lowerable to a single `mvd` double-word store.
             spm[io_off + n_io*2] = (int)clo;
             spm[io_off + n_io*2+1] = (int)chi;
             n_io++;
@@ -1774,7 +1801,10 @@ m23_C_peek:
                   if (p >= DEDUP_TILE) { M23_SAVE; goto m23_end; }
                   goto m23_C_peek;
               }
-              // Disjoint: flush cur_intv, start new
+              // Disjoint: flush cur_intv, start new. AC-8 mvd site:
+              // two contiguous SPM writes from paired (clo, chi)
+              // registers — lowerable to a single `mvd` double-word
+              // store.
               spm[io_off + n_io*2] = (int)clo;
               spm[io_off + n_io*2+1] = (int)chi;
               n_io++;
@@ -1787,6 +1817,8 @@ m23_C_peek:
             }
 m23_C_flush_last:
             if (clo != 0xFFFFFFFFU) {
+                // AC-8 mvd site: contiguous (clo, chi) double-word
+                // flush at state-C drain termination.
                 spm[io_off + n_io*2] = (int)clo;
                 spm[io_off + n_io*2+1] = (int)chi;
                 n_io++; clo = 0xFFFFFFFFU;
