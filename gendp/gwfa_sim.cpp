@@ -370,6 +370,12 @@ void gwfa_simulation(
         for (int fi = 0; fi < FIFO_GROUP_NUM; fi++)
             for (int fj = 0; fj < FIFO_GROUP_SIZE; fj++)
                 pa->fifo_unit[fi][fj].clear();
+        // Reset GWFA scratch MM + file-scope statics so case N+1 does
+        // not inherit case N's stale diagonals, intvs, or hash entries.
+        // gwfa_init (called at magic 1) only resets a subset of
+        // counters; leftover s_B_n / s_B_a / MM contents would
+        // otherwise mis-score later cases in batch mode.
+        gwfa_reset_mm();
 
         // Populate va_regfile with graph pointers
         // [0]=graphSeq [1]=seq_off [2]=seq_len
