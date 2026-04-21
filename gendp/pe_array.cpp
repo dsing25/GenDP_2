@@ -459,9 +459,11 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         gr[8] = s1c[4 + (pe_idx)]; \
         gr[1] = gr[11];                                     /* src_ptr = arc_ptr */ \
         gr[7] = gr[8] + gr[8];                              /* 2*na */ \
+        /*NOP*/                                             /* RAW barrier */ \
         gr[7] = gr[7] + gr[8];                              /* 3*na */ \
         /*NOP*/                                             /* RAW barrier */ \
         gr[7] = gr[7] + gr[5];                              /* + pe_spm */ \
+        /*NOP*/                                             /* RAW barrier */ \
         gr[7] = gr[7] + FIN0_ARCS;                          /* dst_ptr */ \
         gr[9] = 0;                                          /* arc counter */ \
     f0b_arc_loop_##SUFFIX: \
@@ -480,6 +482,7 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         s1c[4+(pe_idx)] = gr[8] + gr[10]; \
         s1c[(pe_idx)] = gr[6] + 1; \
         gr[11] = gr[11] + gr[10];                           /* += nv */ \
+        /*NOP*/                                             /* RAW barrier */ \
         gr[11] = gr[11] + gr[10];                           /* += nv (= 2*nv) */ \
     } while(0)
 
@@ -627,6 +630,7 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
                 gr[8] = s1c[12 + pe];                    // mv: pai
                 //NOP
                 gr[9] = gr[8] + gr[8];                   // add: 2*pai
+                //NOP                                    // RAW barrier
                 gr[9] = gr[9] + gr[8];                   // add: 3*pai
                 //NOP
                 gr[9] = gr[7] + FIN0_ARCS + gr[9];      // add: arc addr
@@ -643,6 +647,7 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
                 uint32_t b = (h >> 2) & 0xFFFFF;
                 // 4*pai for HA addr
                 gr[9] = gr[8] + gr[8];                   // add: 2*pai
+                //NOP                                    // RAW barrier
                 gr[9] = gr[9] + gr[9];                   // add: 4*pai
                 //NOP
                 gr[9] = gr[7] + FIN0_HA + gr[9];        // add: ha addr
