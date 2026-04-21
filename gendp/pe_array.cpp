@@ -2907,79 +2907,100 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
         } else if (magic_id == 33) {
             // Merge tile reload (overlapped with PE compute).
-            // Reloads any buffer PE zeroed during previous call.
-            // s1c lookups separated from mm[] for ISA feasibility.
-            // ISA lowering: SPM meta flags stage through gr[11] with 3
-            // //NOPs; s1c loads stage through gr[11] with 1 //NOP gap
-            // (BL-20260417-ctrl-sync-gr). R9 reload-loop PE-outer shape
-            // retained: per BL-20260416-m32-gather-dep the sequential
-            // per-PE pattern is the verified correct one; chunk-outer
-            // round-robin restructure is out-of-scope for R6/R8 fixes.
+            // Chunk-outer / PE-inner round-robin (AC-9 R9 close).
+            // 3-pass restructure: (1) determine per-(pe,buf) reload
+            // params monotonically consuming s1c rem counters through
+            // gr[11]; (2) four chunk-outer mvdq passes (A0, A1, B0,
+            // B1) round-robined across PEs; (3) update SPM meta +
+            // drain flags.
+            // BL-20260416-m32-gather-dep applies to m32 GATHER (MM->
+            // MM with cross-PE skip dependencies), NOT to m30/m33
+            // RELOAD (MM->per-PE-SPM with no cross-PE state).
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
+                int *spm = SPM_unit->buffer;
+                int a_tile[2][4] = {};
+                int a_src[2][4]  = {};
+                int b_tile[2][4] = {};
+                int b_src[2][4]  = {};
+                // Pass 1: reload-param gather through gr[11]/gr[1]
                 for (int pe = 0; pe < 4; pe++) {
-                    int *s = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
+                    int *s = &spm[pe * SPM_BANK_GROUP_SIZE];
+                    gr[11] = s1c[12+pe];                  // s1c rem_a
+                    //NOP                                  // s1c gap
+                    int rem_a = gr[11];
+                    gr[1]  = s1c[8+pe];                   // s1c src_a
+                    //NOP                                  // s1c gap
+                    int src_a = gr[1];
                     for (int buf = 0; buf < 2; buf++) {
-                        // A-buffer reload gate
-                        gr[11] = s[MERGE_META+9+buf];        // SPM flag_a
-                        //NOP                                 // SPM lat 1/3
-                        //NOP                                 // SPM lat 2/3
-                        //NOP                                 // SPM lat 3/3
-                        if (gr[11] == 0) {
-                            gr[11] = s1c[12+pe];             // s1c rem_a
-                            //NOP                             // s1c 1-cycle gap
-                            if (gr[11] > 0) {
-                                int off = buf ? MERGE_A_BUF1 : MERGE_A_BUF0;
-                                int tile = gr[11];
-                                if (tile > MERGE_TILE) tile = MERGE_TILE;
-                                gr[1] = s1c[8+pe];           // s1c src_a
-                                //NOP                         // s1c 1-cycle gap
-                                for (int j = 0; j < tile*2; j += 8) {
-                                    int cnt = tile*2 - j;
-                                    if (cnt > 8) cnt = 8;
-                                    mvdq_copy(&s[off+j], &mm[gr[1]+j], cnt);
-                                }
-                                s1c[8+pe] = gr[1] + tile*2;
-                                s1c[12+pe] -= tile;
-                                s[MERGE_META+9+buf] = tile;
-                                gr[11] = s1c[12+pe];
-                                //NOP                         // s1c gap
-                                if (gr[11] <= 0) s[MERGE_META+5] = 1;
-                            }
-                        }
-                        // B-buffer reload gate
-                        gr[11] = s[MERGE_META+11+buf];       // SPM flag_b
-                        //NOP                                 // SPM lat 1/3
-                        //NOP                                 // SPM lat 2/3
-                        //NOP                                 // SPM lat 3/3
-                        if (gr[11] == 0) {
-                            gr[11] = s1c[20+pe];             // s1c rem_b
-                            //NOP                             // s1c 1-cycle gap
-                            if (gr[11] > 0) {
-                                int off = buf ? MERGE_B_BUF1 : MERGE_B_BUF0;
-                                int tile = gr[11];
-                                if (tile > MERGE_TILE) tile = MERGE_TILE;
-                                gr[1] = s1c[16+pe];          // s1c src_b
-                                //NOP                         // s1c 1-cycle gap
-                                for (int j = 0; j < tile*2; j += 8) {
-                                    int cnt = tile*2 - j;
-                                    if (cnt > 8) cnt = 8;
-                                    mvdq_copy(&s[off+j], &mm[gr[1]+j], cnt);
-                                }
-                                s1c[16+pe] = gr[1] + tile*2;
-                                s1c[20+pe] -= tile;
-                                s[MERGE_META+11+buf] = tile;
-                                gr[11] = s1c[20+pe];
-                                //NOP                         // s1c gap
-                                if (gr[11] <= 0) s[MERGE_META+6] = 1;
-                            }
+                        gr[11] = s[MERGE_META+9+buf];     // SPM flag_a
+                        //NOP                              // SPM 1/3
+                        //NOP                              // SPM 2/3
+                        //NOP                              // SPM 3/3
+                        if (gr[11] == 0 && rem_a > 0) {
+                            int tile = rem_a;
+                            if (tile > MERGE_TILE) tile = MERGE_TILE;
+                            a_tile[buf][pe] = tile;
+                            a_src[buf][pe]  = src_a;
+                            src_a += tile * 2;
+                            rem_a -= tile;
                         }
                     }
-                    // Post-buf-loop drain flags (stylistic AC-7: reads
-                    // nested conditions; left as fix-preferred under
-                    // DEC-1 — these fire at most once per PE after
-                    // all buffers have been processed sequentially).
+                    s1c[8+pe]  = src_a;
+                    s1c[12+pe] = rem_a;
+                    gr[11] = s1c[20+pe];                  // s1c rem_b
+                    //NOP                                  // s1c gap
+                    int rem_b = gr[11];
+                    gr[1]  = s1c[16+pe];                  // s1c src_b
+                    //NOP                                  // s1c gap
+                    int src_b = gr[1];
+                    for (int buf = 0; buf < 2; buf++) {
+                        gr[11] = s[MERGE_META+11+buf];    // SPM flag_b
+                        //NOP                              // SPM 1/3
+                        //NOP                              // SPM 2/3
+                        //NOP                              // SPM 3/3
+                        if (gr[11] == 0 && rem_b > 0) {
+                            int tile = rem_b;
+                            if (tile > MERGE_TILE) tile = MERGE_TILE;
+                            b_tile[buf][pe] = tile;
+                            b_src[buf][pe]  = src_b;
+                            src_b += tile * 2;
+                            rem_b -= tile;
+                        }
+                    }
+                    s1c[16+pe] = src_b;
+                    s1c[20+pe] = rem_b;
+                }
+                // Pass 2: chunk-outer round-robin mvdq
+                #define M33_MVDQ(buf_off, tile_arr, src_arr) do { \
+                    int mw = 0; \
+                    for (int pe = 0; pe < 4; pe++) { \
+                        int w = tile_arr[pe]*2; if (w > mw) mw = w; } \
+                    for (int j = 0; j < mw; j += 8) \
+                        for (int pe = 0; pe < 4; pe++) { \
+                            int w = tile_arr[pe]*2; \
+                            if (j >= w) continue; \
+                            int cnt = w-j; if (cnt>8) cnt=8; \
+                            mvdq_copy(&spm[pe*SPM_BANK_GROUP_SIZE+buf_off+j], \
+                                      &mm[src_arr[pe]+j], cnt); \
+                        } \
+                } while(0)
+                M33_MVDQ(MERGE_A_BUF0, a_tile[0], a_src[0]);
+                M33_MVDQ(MERGE_A_BUF1, a_tile[1], a_src[1]);
+                M33_MVDQ(MERGE_B_BUF0, b_tile[0], b_src[0]);
+                M33_MVDQ(MERGE_B_BUF1, b_tile[1], b_src[1]);
+                #undef M33_MVDQ
+                // Pass 3: update SPM meta + drain flags
+                for (int pe = 0; pe < 4; pe++) {
+                    int *s = &spm[pe * SPM_BANK_GROUP_SIZE];
+                    for (int buf = 0; buf < 2; buf++) {
+                        if (a_tile[buf][pe] > 0)
+                            s[MERGE_META+9+buf] = a_tile[buf][pe];
+                        if (b_tile[buf][pe] > 0)
+                            s[MERGE_META+11+buf] = b_tile[buf][pe];
+                    }
+                    // Drain flags (post-buf-loop)
                     if (s1c[12+pe] <= 0 && s[MERGE_META+9]==0
                         && s[MERGE_META+10]==0) s[MERGE_META+5] = 1;
                     if (s1c[20+pe] <= 0 && s[MERGE_META+11]==0
