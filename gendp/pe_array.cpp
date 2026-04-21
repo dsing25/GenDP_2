@@ -2695,75 +2695,121 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     int a_sp[5], b_sp[5];
                     a_sp[0] = 0; b_sp[0] = 0;
                     a_sp[4] = n_new; b_sp[4] = intv_n;
-                    // Interleaved binary search for split points
-                    int bs_lo[3], bs_hi[3], bs_tgt[3];
+                    // AC-5/AC-9 architectural state migration (Round 12):
+                    // bs_lo → s1c[0..2], bs_hi → s1c[3..5],
+                    // bs_tgt → s1c[6..8]. Same scheme as m28.
+                    // These slots are overwritten at end of m37 by
+                    // per-PE metadata writes (s1c[pe]=pt, etc.).
                     for (int p = 0; p < 3; p++) {
-                        bs_tgt[p] = ((p+1)*nape < n_total2) ? (p+1)*nape : n_total2;
-                        bs_lo[p] = (bs_tgt[p] - intv_n > 0) ? bs_tgt[p] - intv_n : 0;
-                        bs_hi[p] = (n_new < bs_tgt[p]) ? n_new : bs_tgt[p];
+                        int tgt = ((p+1)*nape < n_total2) ? (p+1)*nape : n_total2;
+                        int lo_ = (tgt - intv_n > 0) ? tgt - intv_n : 0;
+                        int hi_ = (n_new < tgt) ? n_new : tgt;
+                        gr[4] = tgt;
+                        s1c[6 + p] = gr[4];                      // bs_tgt[p]
+                        gr[4] = lo_;
+                        s1c[0 + p] = gr[4];                      // bs_lo[p]
+                        gr[4] = hi_;
+                        s1c[3 + p] = gr[4];                      // bs_hi[p]
                     }
-                    // R4 fix: replace 'while (any) ... for p=0..2' with
-                    // label/goto outer loop + macro-unrolled per-p step
-                    // bodies. MM reads stage through gr[11] with
-                    // // waitLSQ + //NOP separation before compare (R7).
                 m37_bs_top:
-                    if (bs_lo[0] >= bs_hi[0]
-                        && bs_lo[1] >= bs_hi[1]
-                        && bs_lo[2] >= bs_hi[2]) goto m37_bs_done;
-                    // p = 0 step
-                    if (bs_lo[0] < bs_hi[0]) {
-                        int mid = (bs_lo[0] + bs_hi[0]) / 2;
-                        int bi2 = bs_tgt[0] - mid;
-                        gr[11] = (bi2 > 0) ? mm[bbase+(bi2-1)*2] : 0;
-                        // waitLSQ
-                        //NOP                                    // LSQ settle
-                        gr[3] = gr[11];                          // stash bv
-                        gr[11] = (mid < n_new) ? mm[abase+mid*2] : (int)0xFFFFFFFF;
-                        // waitLSQ
-                        //NOP                                    // LSQ settle
-                        if (bi2 > 0 && mid < n_new
-                            && (uint32_t)gr[3] > (uint32_t)gr[11])
-                            bs_lo[0] = mid+1;
-                        else bs_hi[0] = mid;
-                    }
-                    // p = 1 step
-                    if (bs_lo[1] < bs_hi[1]) {
-                        int mid = (bs_lo[1] + bs_hi[1]) / 2;
-                        int bi2 = bs_tgt[1] - mid;
-                        gr[11] = (bi2 > 0) ? mm[bbase+(bi2-1)*2] : 0;
-                        // waitLSQ
-                        //NOP                                    // LSQ settle
-                        gr[3] = gr[11];                          // stash bv
-                        gr[11] = (mid < n_new) ? mm[abase+mid*2] : (int)0xFFFFFFFF;
-                        // waitLSQ
-                        //NOP                                    // LSQ settle
-                        if (bi2 > 0 && mid < n_new
-                            && (uint32_t)gr[3] > (uint32_t)gr[11])
-                            bs_lo[1] = mid+1;
-                        else bs_hi[1] = mid;
-                    }
-                    // p = 2 step
-                    if (bs_lo[2] < bs_hi[2]) {
-                        int mid = (bs_lo[2] + bs_hi[2]) / 2;
-                        int bi2 = bs_tgt[2] - mid;
-                        gr[11] = (bi2 > 0) ? mm[bbase+(bi2-1)*2] : 0;
-                        // waitLSQ
-                        //NOP                                    // LSQ settle
-                        gr[3] = gr[11];                          // stash bv
-                        gr[11] = (mid < n_new) ? mm[abase+mid*2] : (int)0xFFFFFFFF;
-                        // waitLSQ
-                        //NOP                                    // LSQ settle
-                        if (bi2 > 0 && mid < n_new
-                            && (uint32_t)gr[3] > (uint32_t)gr[11])
-                            bs_lo[2] = mid+1;
-                        else bs_hi[2] = mid;
-                    }
+                    gr[11] = s1c[0]; //NOP
+                    gr[4]  = s1c[3]; //NOP
+                    if (gr[11] < gr[4]) goto m37_bs_step_any;
+                    gr[11] = s1c[1]; //NOP
+                    gr[4]  = s1c[4]; //NOP
+                    if (gr[11] < gr[4]) goto m37_bs_step_any;
+                    gr[11] = s1c[2]; //NOP
+                    gr[4]  = s1c[5]; //NOP
+                    if (gr[11] < gr[4]) goto m37_bs_step_any;
+                    goto m37_bs_done;
+                m37_bs_step_any:
+                    // p = 0
+                    gr[11] = s1c[0]; //NOP
+                    gr[4]  = s1c[3]; //NOP
+                    if (gr[11] >= gr[4]) goto m37_bs_step1;
+                    gr[5] = gr[11] + gr[4]; //NOP
+                    gr[5] = gr[5] / 2;
+                    gr[11] = s1c[6]; //NOP
+                    gr[4]  = gr[11] - gr[5];
+                    gr[11] = (gr[4] > 0) ? mm[bbase+(gr[4]-1)*2] : 0;
+                    // waitLSQ
+                    //NOP
+                    gr[3] = gr[11];
+                    gr[11] = (gr[5] < n_new) ? mm[abase+gr[5]*2] : (int)0xFFFFFFFF;
+                    // waitLSQ
+                    //NOP
+                    if (gr[4] <= 0) goto m37_bs_p0_hi;
+                    if (gr[5] >= n_new) goto m37_bs_p0_hi;
+                    if ((uint32_t)gr[3] <= (uint32_t)gr[11]) goto m37_bs_p0_hi;
+                    gr[4] = gr[5] + 1; //NOP
+                    s1c[0] = gr[4];
+                    goto m37_bs_step1;
+                m37_bs_p0_hi:
+                    s1c[3] = gr[5];
+                m37_bs_step1:
+                    // p = 1
+                    gr[11] = s1c[1]; //NOP
+                    gr[4]  = s1c[4]; //NOP
+                    if (gr[11] >= gr[4]) goto m37_bs_step2;
+                    gr[5] = gr[11] + gr[4]; //NOP
+                    gr[5] = gr[5] / 2;
+                    gr[11] = s1c[7]; //NOP
+                    gr[4]  = gr[11] - gr[5];
+                    gr[11] = (gr[4] > 0) ? mm[bbase+(gr[4]-1)*2] : 0;
+                    // waitLSQ
+                    //NOP
+                    gr[3] = gr[11];
+                    gr[11] = (gr[5] < n_new) ? mm[abase+gr[5]*2] : (int)0xFFFFFFFF;
+                    // waitLSQ
+                    //NOP
+                    if (gr[4] <= 0) goto m37_bs_p1_hi;
+                    if (gr[5] >= n_new) goto m37_bs_p1_hi;
+                    if ((uint32_t)gr[3] <= (uint32_t)gr[11]) goto m37_bs_p1_hi;
+                    gr[4] = gr[5] + 1; //NOP
+                    s1c[1] = gr[4];
+                    goto m37_bs_step2;
+                m37_bs_p1_hi:
+                    s1c[4] = gr[5];
+                m37_bs_step2:
+                    // p = 2
+                    gr[11] = s1c[2]; //NOP
+                    gr[4]  = s1c[5]; //NOP
+                    if (gr[11] >= gr[4]) goto m37_bs_step_end;
+                    gr[5] = gr[11] + gr[4]; //NOP
+                    gr[5] = gr[5] / 2;
+                    gr[11] = s1c[8]; //NOP
+                    gr[4]  = gr[11] - gr[5];
+                    gr[11] = (gr[4] > 0) ? mm[bbase+(gr[4]-1)*2] : 0;
+                    // waitLSQ
+                    //NOP
+                    gr[3] = gr[11];
+                    gr[11] = (gr[5] < n_new) ? mm[abase+gr[5]*2] : (int)0xFFFFFFFF;
+                    // waitLSQ
+                    //NOP
+                    if (gr[4] <= 0) goto m37_bs_p2_hi;
+                    if (gr[5] >= n_new) goto m37_bs_p2_hi;
+                    if ((uint32_t)gr[3] <= (uint32_t)gr[11]) goto m37_bs_p2_hi;
+                    gr[4] = gr[5] + 1; //NOP
+                    s1c[2] = gr[4];
+                    goto m37_bs_step_end;
+                m37_bs_p2_hi:
+                    s1c[5] = gr[5];
+                m37_bs_step_end:
                     goto m37_bs_top;
-                m37_bs_done: ;
+                m37_bs_done:
                     for (int p = 0; p < 3; p++) {
-                        a_sp[p+1] = bs_lo[p]; b_sp[p+1] = bs_tgt[p] - bs_lo[p];
-                        if (a_sp[p+1] < a_sp[p]) { a_sp[p+1] = a_sp[p]; b_sp[p+1] = bs_tgt[p] - a_sp[p+1]; }
-                        if (b_sp[p+1] < b_sp[p]) { b_sp[p+1] = b_sp[p]; a_sp[p+1] = bs_tgt[p] - b_sp[p+1]; }
+                        gr[11] = s1c[0 + p]; //NOP
+                        a_sp[p+1] = gr[11];
+                        gr[11] = s1c[6 + p]; //NOP
+                        b_sp[p+1] = gr[11] - a_sp[p+1];
+                        if (a_sp[p+1] < a_sp[p]) {
+                            a_sp[p+1] = a_sp[p];
+                            b_sp[p+1] = gr[11] - a_sp[p+1];
+                        }
+                        if (b_sp[p+1] < b_sp[p]) {
+                            b_sp[p+1] = b_sp[p];
+                            a_sp[p+1] = gr[11] - b_sp[p+1];
+                        }
                     }
                     // R9 fix: replace scalar per-PE MM->SPM tile loads
                     // with chunk-outer / PE-inner mvdq_copy (same pattern
