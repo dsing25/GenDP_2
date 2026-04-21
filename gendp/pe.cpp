@@ -1556,14 +1556,18 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             if (ai >= a_n || (bi < b_n
                     && (uint32_t)spm[bb+bi*2]
                        < (uint32_t)spm[ab+ai*2])) {
-                out_lo = (uint32_t)spm[bb+bi*2];
-                out_hi = (uint32_t)spm[bb+bi*2+1];
-                out[oi*2]   = (int)out_lo;
+                out_lo = (uint32_t)spm[bb+bi*2];       // SPM load cycle N slot 0
+                out_hi = (uint32_t)spm[bb+bi*2+1];     // SPM load cycle N slot 1
+                //NOP                                    // SPM cycle N+1 slot 0
+                //NOP                                    // SPM cycle N+1 slot 1
+                out[oi*2]   = (int)out_lo;             // cycle N+2 consumer
                 out[oi*2+1] = (int)out_hi; bi++; oi++;
             } else {
-                out_lo = (uint32_t)spm[ab+ai*2];
-                out_hi = (uint32_t)spm[ab+ai*2+1];
-                out[oi*2]   = (int)out_lo;
+                out_lo = (uint32_t)spm[ab+ai*2];       // SPM load cycle N slot 0
+                out_hi = (uint32_t)spm[ab+ai*2+1];     // SPM load cycle N slot 1
+                //NOP                                    // SPM cycle N+1 slot 0
+                //NOP                                    // SPM cycle N+1 slot 1
+                out[oi*2]   = (int)out_lo;             // cycle N+2 consumer
                 out[oi*2+1] = (int)out_hi; ai++; oi++;
             }
             // Boundary tracking — bit-exact preservation per AC-5.
