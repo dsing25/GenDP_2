@@ -2729,20 +2729,33 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // compute intv boundary positions (AC-7).
             {
                 int *mm = gwfa_get_mm();
-                bool merge_skipped = (s1c[149] < 0);
+                auto &mgr = main_addressing_register;
+                // R8: stage s1c[149] through mgr[11] with 1-NOP gap.
+                mgr[11] = s1c[149];
+                //NOP                                    // s1c 1-cycle gap
+                bool merge_skipped = (mgr[11] < 0);
                 int intv_n;
                 if (merge_skipped) {
-                    intv_n = s1c[148];
+                    mgr[11] = s1c[148];
+                    //NOP                                // s1c 1-cycle gap
+                    intv_n = mgr[11];
                 } else {
                     intv_n = 0;
-                    for (int pe = 0; pe < 4; pe++)
-                        intv_n += s1c[4 + pe];
+                    for (int pe = 0; pe < 4; pe++) {
+                        mgr[11] = s1c[4 + pe];
+                        //NOP                            // s1c 1-cycle gap
+                        intv_n += mgr[11];
+                    }
                 }
                 s1c[149] = intv_n;
-                main_addressing_register[24] = s1c[145]; // n_a
-                main_addressing_register[28] = intv_n;
+                mgr[11] = s1c[145];                     // n_a
+                //NOP                                    // s1c 1-cycle gap
+                mgr[24] = mgr[11];
+                mgr[28] = intv_n;
                 // Compute intv boundary positions (AC-7)
-                int ib = s1c[152]; // active_intv_base
+                mgr[11] = s1c[152];                     // active_intv_base
+                //NOP                                    // s1c 1-cycle gap
+                int ib = mgr[11];
                 if (!merge_skipped) {
                     // Collect per-PE absolute boundary positions via min
                     for (int b = 0; b < 3; b++) {
