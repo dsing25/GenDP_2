@@ -781,19 +781,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
     bool is_magic = (instruction & magic_mask);
     int  magic_payload = instruction & magic_payload_mask;
 
-    // See pe::decode for rationale. Top 2 bits of the 6-bit reg idx encode
-    // CTRL_GR / CTRL_GR_LO / CTRL_GR_HI when src/dest type is CTRL_GR.
-    auto resolve_gr_half = [](int& reg_idx, int type) -> int {
-        if (type != CTRL_GR) return type;
-        int high = reg_idx >> 4;
-        int resolved = type;
-        if (high == 1) resolved = CTRL_GR_LO;
-        else if (high == 2) resolved = CTRL_GR_HI;
-        reg_idx &= 0xF;
-        return resolved;
+    // See pe::decode for rationale. Top 2 bits of the 7-bit reg idx select
+    // the file: 00=gr, 01=gr_lo, 10=gr_hi, 11=CTRL_RESOLVED_REG (PE-only;
+    // controller errors out). Low 5 bits are the physical idx (0..31).
+    // Applied only when src/dest type is CTRL_GR; other types keep raw idx.
+    auto resolve_reg_field = [](int& reg_idx) -> int {
+        int high = reg_idx >> 5;
+        reg_idx &= 0x1F;
+        if (high == 0) return CTRL_GR;
+        if (high == 1) return CTRL_GR_LO;
+        if (high == 2) return CTRL_GR_HI;
+        return CTRL_RESOLVED_REG;
     };
-    src = resolve_gr_half(reg_1, src);
-    dest = resolve_gr_half(reg_0, dest);
+    int src_resolved  = resolve_reg_field(reg_1);
+    int dest_resolved = resolve_reg_field(reg_0);
+    if (src  == CTRL_GR) src  = src_resolved;
+    if (dest == CTRL_GR) dest = dest_resolved;
 
 #ifdef PROFILE
     printf("PC = %d @%d:%016lx\t", *PC, cycle, instruction);
@@ -3876,6 +3879,13 @@ void pe_array::set_output_dest(int dest, int rd, int val) {
 }
 
 int pe_array::read_gr_src(int src, int idx) {
+    if (src == CTRL_RESOLVED_REG) {
+        fprintf(stderr,
+                "pe_array::read_gr_src: controller has no compute "
+                "regfile; gr-field reg idx 96+%d PC=%d\n",
+                idx, main_PC);
+        exit(-1);
+    }
     int val = main_addressing_register[idx];
     if (src == CTRL_GR_LO) return (int)(int16_t)(val & 0xFFFF);
     if (src == CTRL_GR_HI) return (int)(int16_t)((val >> 16) & 0xFFFF);
@@ -3922,19 +3932,22 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
     int reg_1 = (instruction & reg_1_mask) >> CTRL_OPCODE_WIDTH;
     int opcode = instruction & opcode_mask;
 
-    // See pe::decode for rationale. Top 2 bits of the 6-bit reg idx encode
-    // CTRL_GR / CTRL_GR_LO / CTRL_GR_HI when src/dest type is CTRL_GR.
-    auto resolve_gr_half = [](int& reg_idx, int type) -> int {
-        if (type != CTRL_GR) return type;
-        int high = reg_idx >> 4;
-        int resolved = type;
-        if (high == 1) resolved = CTRL_GR_LO;
-        else if (high == 2) resolved = CTRL_GR_HI;
-        reg_idx &= 0xF;
-        return resolved;
+    // See pe::decode for rationale. Top 2 bits of the 7-bit reg idx select
+    // the file: 00=gr, 01=gr_lo, 10=gr_hi, 11=CTRL_RESOLVED_REG (PE-only;
+    // controller errors out). Low 5 bits are the physical idx (0..31).
+    // Applied only when src/dest type is CTRL_GR; other types keep raw idx.
+    auto resolve_reg_field = [](int& reg_idx) -> int {
+        int high = reg_idx >> 5;
+        reg_idx &= 0x1F;
+        if (high == 0) return CTRL_GR;
+        if (high == 1) return CTRL_GR_LO;
+        if (high == 2) return CTRL_GR_HI;
+        return CTRL_RESOLVED_REG;
     };
-    src = resolve_gr_half(reg_1, src);
-    dest = resolve_gr_half(reg_0, dest);
+    int src_resolved  = resolve_reg_field(reg_1);
+    int dest_resolved = resolve_reg_field(reg_0);
+    if (src  == CTRL_GR) src  = src_resolved;
+    if (dest == CTRL_GR) dest = dest_resolved;
 
 #ifdef PROFILE
     printf("PC = %d\t", *PC);

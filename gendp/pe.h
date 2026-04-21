@@ -75,6 +75,7 @@ class pe {
     private:
         //helper
         void set_output_dest(int dest, int rd, int value);
+        int read_gr_src(int src, int idx);
 
         unsigned long instruction[2];
         // ld/st control signal

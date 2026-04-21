@@ -66,8 +66,8 @@
 #define COMP_OPCODE_WIDTH 5
 #define MEMORY_COMPONENTS_ADDR_WIDTH 4
 #define IMMEDIATE_WIDTH 16
-#define GLOBAL_REGISTER_ADDR_WIDTH 6
-#define CTRL_OPCODE_WIDTH 6
+#define GLOBAL_REGISTER_ADDR_WIDTH 7
+#define CTRL_OPCODE_WIDTH 5
 #define INSTRUCTION_WIDTH ((MEMORY_COMPONENTS_ADDR_WIDTH + IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + 2) * 2 + CTRL_OPCODE_WIDTH)
 
 #define NUM_THREADS 5
@@ -174,6 +174,14 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_GR_HI 10     // upper 16-bit subregister of gr (shares code with OUT_INSTR)
 #define CTRL_S2 15
 //FIFO [11, 12, 13, 14]
+
+// Internal-only resolved pos code for "compute reg addressed via gr-field"
+// (reg idx bits [6:5]=11, i.e. wire reg_idx in [96:127] with src/dest type = CTRL_GR).
+// Never appears on the wire; produced only by the decoder's resolve_reg_field.
+// Kept distinct from CTRL_REG (=0) so arithmetic/branch sites that pass src=0
+// as a don't-care still fall through to gr reads, while an explicit gr-field
+// encoding routes to the compute regfile.
+#define CTRL_RESOLVED_REG 16
 
 // Address swizzling parameters for mvi instruction
 #define N_SWIZZLE_BITS 2

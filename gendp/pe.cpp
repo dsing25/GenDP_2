@@ -694,24 +694,30 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     bool is_magic = (instruction & magic_mask);
     int  magic_payload = instruction & magic_payload_mask;
 
-    // Resolve gr hi/lo selector encoded in the top 2 bits of the 6-bit reg idx
-    // when the corresponding src/dest type is CTRL_GR. After resolution the
-    // effective type becomes CTRL_GR_LO / CTRL_GR_HI as appropriate and the
-    // reg idx is masked to its low 4 bits (valid gr addressing-register id).
-    //   idx[0:15]  -> CTRL_GR        (full 32-bit)
-    //   idx[16:31] -> CTRL_GR_LO     (lo 16-bit half)
-    //   idx[32:47] -> CTRL_GR_HI     (hi 16-bit half)
-    auto resolve_gr_half = [](int& reg_idx, int type) -> int {
-        if (type != CTRL_GR) return type;
-        int high = reg_idx >> 4;
-        int resolved = type;
-        if (high == 1) resolved = CTRL_GR_LO;
-        else if (high == 2) resolved = CTRL_GR_HI;
-        reg_idx &= 0xF;
-        return resolved;
+    // Resolve bank selector encoded in the top 2 bits of the 7-bit reg idx.
+    // Top 2 bits pick the file; low 5 bits are the physical index (0..31).
+    //   idx[0:31]   -> CTRL_GR              (full 32-bit gr[idx])
+    //   idx[32:63]  -> CTRL_GR_LO           (gr[idx-32] lo half)
+    //   idx[64:95]  -> CTRL_GR_HI           (gr[idx-64] hi half)
+    //   idx[96:127] -> CTRL_RESOLVED_REG    (compute reg[idx-96], PE only)
+    // The resolved pos overrides src/dest ONLY when the src/dest type field
+    // is CTRL_GR; for other types (SPM, fifo, reg-legacy, etc.) the type
+    // field governs and top bits of reg_idx are ignored. Note: legacy
+    // src/dest = CTRL_REG (0) keeps its existing "compute regfile via mv/li
+    // path" meaning for load/store and its "don't-care → read gr" meaning
+    // for arithmetic/branch sites.
+    auto resolve_reg_field = [](int& reg_idx) -> int {
+        int high = reg_idx >> 5;
+        reg_idx &= 0x1F;
+        if (high == 0) return CTRL_GR;
+        if (high == 1) return CTRL_GR_LO;
+        if (high == 2) return CTRL_GR_HI;
+        return CTRL_RESOLVED_REG;
     };
-    src = resolve_gr_half(reg_1, src);
-    dest = resolve_gr_half(reg_0, dest);
+    int src_resolved  = resolve_reg_field(reg_1);
+    int dest_resolved = resolve_reg_field(reg_0);
+    if (src  == CTRL_GR) src  = src_resolved;
+    if (dest == CTRL_GR) dest = dest_resolved;
 
     src_dest[0] = src;
     src_dest[1] = dest;
@@ -2536,8 +2542,8 @@ m23_end:    ;
         rd = reg_imm_0;
         rs1 = reg_imm_1;
         rs2 = reg_1;
-        add_a = addr_regfile_unit->at(rs1);
-        add_b = addr_regfile_unit->at(rs2);
+        add_a = read_gr_src(src, rs1);
+        add_b = read_gr_src(src, rs2);
         sum = add_a + add_b;
         set_output_dest(dest, rd, sum);
 #ifdef PROFILE
@@ -2548,8 +2554,8 @@ m23_end:    ;
         rd = reg_imm_0;
         rs1 = reg_imm_1;
         rs2 = reg_1;
-        add_a = addr_regfile_unit->at(rs1);
-        add_b = addr_regfile_unit->at(rs2);
+        add_a = read_gr_src(src, rs1);
+        add_b = read_gr_src(src, rs2);
         sum = add_a - add_b;
         set_output_dest(dest, rd, sum);
 #ifdef PROFILE
@@ -2561,7 +2567,7 @@ m23_end:    ;
         imm = sext_imm_1;
         rs2 = reg_1;
         add_a = imm;
-        add_b = addr_regfile_unit->at(rs2);
+        add_b = read_gr_src(src, rs2);
         sum = add_a + add_b;
         set_output_dest(dest, rd, sum);
 #ifdef PROFILE
@@ -2631,9 +2637,9 @@ m23_end:    ;
 #ifdef PROFILE
         printf("bne %d %d %d", rs1, rs2, sext_imm_0);
 #endif
-        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->at(rs1);
+        if (reg_immBar_flag_1) comp_0 = read_gr_src(src, rs1);
         else comp_0 = sext_imm_1;
-        comp_1 = addr_regfile_unit->at(rs2);
+        comp_1 = read_gr_src(src, rs2);
 #ifdef PROFILE
         printf(" (%d %d)", comp_0, comp_1);
 #endif
@@ -2654,9 +2660,9 @@ m23_end:    ;
 #ifdef PROFILE
         printf("beq %d %d %d", rs1, rs2, sext_imm_0);
 #endif
-        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->at(rs1);
+        if (reg_immBar_flag_1) comp_0 = read_gr_src(src, rs1);
         else comp_0 = sext_imm_1;
-        comp_1 = addr_regfile_unit->at(rs2);
+        comp_1 = read_gr_src(src, rs2);
 #ifdef PROFILE
         printf(" (%d %d)", comp_0, comp_1);
 #endif
@@ -2677,9 +2683,9 @@ m23_end:    ;
 #ifdef PROFILE
         printf("bge %d %d %d", rs1, rs2, sext_imm_0);
 #endif
-        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->at(rs1);
+        if (reg_immBar_flag_1) comp_0 = read_gr_src(src, rs1);
         else comp_0 = sext_imm_1;
-        comp_1 = addr_regfile_unit->at(rs2);
+        comp_1 = read_gr_src(src, rs2);
 #ifdef PROFILE
         printf(" (%d %d)", comp_0, comp_1);
 #endif
@@ -2700,9 +2706,9 @@ m23_end:    ;
 #ifdef PROFILE
         printf("blt %d %d %d", rs1, rs2, sext_imm_0);
 #endif
-        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->at(rs1);
+        if (reg_immBar_flag_1) comp_0 = read_gr_src(src, rs1);
         else comp_0 = sext_imm_1;
-        comp_1 = addr_regfile_unit->at(rs2);
+        comp_1 = read_gr_src(src, rs2);
 #ifdef PROFILE
         printf(" (%d %d)", comp_0, comp_1);
 #endif
@@ -2738,10 +2744,9 @@ m23_end:    ;
         printf("wait.\t");
 #endif
     } else if (opcode == CTRL_SHIFTI_R) {      // SHIFT_R
-        assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
-        int operand1 = addr_regfile_unit->at(rs2);
+        int operand1 = read_gr_src(src, rs2);
         //we want arithmetic shift right as below, but this is compiler dependent. Not in c++ std
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
@@ -2752,10 +2757,9 @@ m23_end:    ;
         printf("rShift gr[%d] = gr[%d] >> %d (%d) \n", rd, rs2, reg_imm_1, operand1);
 #endif
     } else if (opcode == CTRL_SHIFTI_L) {      // SHIFT_L
-        assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
-        int operand1 = addr_regfile_unit->at(rs2);
+        int operand1 = read_gr_src(src, rs2);
         //we want arithmetic shift right as below, but this is compiler dependent. Not in c++ std
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
@@ -2768,7 +2772,7 @@ m23_end:    ;
     } else if (opcode == CTRL_ANDI) {      // AND
         rd = reg_imm_0;
         rs2 = reg_1;
-        int operand1 = addr_regfile_unit->at(rs2);
+        int operand1 = read_gr_src(src, rs2);
         int and_result = operand1 & reg_imm_1;
         set_output_dest(dest, rd, and_result);
         (*PC)++;
@@ -2779,7 +2783,7 @@ m23_end:    ;
         rd = reg_imm_0;
         imm = sext_imm_1;
         rs2 = reg_1;
-        add_a = addr_regfile_unit->at(rs2);
+        add_a = read_gr_src(src, rs2);
         add_b = imm;
         sum = add_a - add_b;
         set_output_dest(dest, rd, sum);
@@ -2925,6 +2929,21 @@ void pe::set_output_dest(int dest, int rd, int value) {
                 " PC=%d cycle=%d\n", dest, *PC, cycle);
         exit(-1);
     }
+}
+
+// Read an operand selected by a src pos code.
+//   CTRL_GR_LO / CTRL_GR_HI -> sign-extended half of gr[idx]
+//   CTRL_RESOLVED_REG       -> compute regfile read (only produced by the
+//                              decoder's resolve_reg_field for a gr-field
+//                              reg idx in [96:127])
+//   anything else (incl. CTRL_GR and legacy CTRL_REG=0 don't-care)
+//                           -> full-width gr[idx]
+int pe::read_gr_src(int src, int idx) {
+    if (src == CTRL_GR_LO || src == CTRL_GR_HI)
+        return addr_regfile_unit->at(idx, src);
+    if (src == CTRL_RESOLVED_REG)
+        return regfile_unit->register_file[idx];
+    return addr_regfile_unit->at(idx);
 }
 
 int pe::get_gr_10() {
