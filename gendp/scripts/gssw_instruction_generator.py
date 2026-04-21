@@ -2,10 +2,12 @@
 """
 GSSW instruction generator.
 
-Stage 1 of the magic-101 -> ISA lowering: section A (prologue/init) is
-emitted as real ISA on PE 0. The rest of the kernel (sections B..I) is
-still delegated to a C++ "mini-magic" in pe.cpp (magic_id 103) that
-assumes section A has already run.
+Magic-101 -> ISA lowering. Section A (prologue/init), section B (outer
+node loop head + per-node metadata load), and section I (final reduce)
+are emitted as real ISA on PE 0. The remaining sections (C, D, E, F, G,
+H, lazy-F) are delegated to a C++ mini-magic in pe.cpp (currently
+magic_id 106) that assumes sections A+B have already run and the ISA
+outer loop advances n between nodes.
 
 Traces produced:
   instructions/gssw/main_instruction.txt    (controller)
@@ -20,16 +22,146 @@ Controller trace:
 
 PE 0 trace (see pe_0_instruction()):
   PC 0        : halt | halt   (wait for controller)
-  PC 1..K     : lowered section A
-  PC K+1      : nop | magic(103)   - run sections B..I
-  PC K+2      : nop | magic(102)   - print score
-  PC K+3      : nop | si gr[10]=1  - signal done
-  PC K+4      : halt | halt
+  PC 1..K     : lowered sections A, B, outer-loop head + tail, I
+  PC ...      : magic(106) between section B tail and section G tail
+                (runs C..H for one node)
+  PC ...      : magic(102) - print score
+  PC ...      : si gr[10]=1 - signal done
+  PC ...      : halt | halt
 
 PE 1-3 trace (unchanged):
   PC 0: halt | halt
   PC 1: nop  | si gr[10]=1  (idle PEs signal done immediately)
   PC 2: halt | halt
+
+---------------------------------------------------------------------------
+Stage 3b.0 audit documentation (established as a reference for stages
+3b-3g that lower sections H, C, D+G, F, E, and lazy-F into ISA). No
+functional code below this comment block changes as part of 3b.0 — the
+block is purely an ABI / operand-usage / stall-rules reference.
+---------------------------------------------------------------------------
+
+Subregister-operand usage contract (AC-1).
+Every control-trace opcode in the simulator accepts `gr_lo[r]` /
+`gr_hi[r]` operands via the register-address encoding at
+`pe.cpp:709-723` (src/dest side) and — after stage 3b.0's simulator
+extension — for the SPM-offset register side of `mv`/`mvd`/`mvi`/
+`mvi2`/`si` via `pe.cpp:363-372` and `pe.cpp:470-478`. Covered classes:
+data-movement (mv/mvd/mvi/mvi2/mvdq/si/set_8), arithmetic (add/sub/
+addi/subi), shifts (shifti_l/shifti_r), logical (ANDI/ORI), branches
+(bne/beq/bge/blt), jump, set_PC. `reg_lo`/`reg_hi` are NOT supported
+anywhere. Any ISA emission whose semantics require only the low or
+high 16 bits of a packed-half home (see the packed-half table below)
+MUST read the value via `gr_lo[r]` / `gr_hi[r]` rather than as the
+full 32-bit `gr[r]`. Full-width reads of a packed-half home are
+rejected at review.
+
+Packed-half values (magic-101 ABI preserved per DEC-5).
+  gr[0]     -- RESERVED 0; never written, used as the 0-base for
+               reg_0 / reg_1 = 0 addressing.
+  gr[1].lo  -- n (outer node counter, 0..numNodes-1).
+     .hi  -- numNodes (kernel constant after section A).
+  gr[2].lo  -- col (column counter, 0..seq_len-1). Repurposed to
+               full-width `c` inside section H after `gr.st(2, 0)`.
+     .hi  -- seq_len (per-node, set by section B).
+  gr[3].lo  -- section-local j counter (seed-load, pvF-zero, main,
+               lazy-F, best-copy, push-j, final-reduce). Always
+               resets to 0 at the start of each loop.
+     .hi  -- next_len (per-node, set by section B; stays live until
+               the next section-B execution overwrites it). MUST be
+               read as `gr_hi[3]` by section H's entry guard and outer
+               push-c exit branch.
+  gr[4]     -- nd_word_off (full-width).
+  gr[5]     -- hPing_word_base (full-width; swapped with gr[6] in G).
+  gr[6]     -- hPong_word_base (full-width; swapped with gr[5] in G).
+  gr[7]     -- seq_base_idx = graphSeq*16 + seq_off (2-bit mvi2
+               index, full-width).
+  gr[8]     -- vP_word_base / scratch (full-width).
+  gr[9]     -- graphSeq_word_base (full-width; kernel constant).
+  gr[10]    -- sync flag (set by ISA stream at kernel exit).
+  gr[11]    -- 78 (hoisted multiplier; clobbered by G swap; re-hoisted
+               at section H entry).
+  gr[12]    -- scratch. When section B loads (next_off|next_len) into
+               gr[12:13] via mvd, `gr[12].lo` carries next_off and
+               `gr[12].hi` duplicates next_len until stripped.
+  gr[13]    -- scratch (MUL output, seq[col] mvi2 result, lazy-F cmp
+               flag, misc).
+  gr[14].lo -- overallMax (persists across outer loop).
+     .hi  -- scratch / unused.
+  gr[15]    -- final score (section I output).
+
+Consumer sites that MUST read a packed-half as a subregister operand
+(rather than the full 32-bit gr) once stages 3b-3g land. Branches on
+packed halves are legal either via subregister operands or via prior
+`mv gr[temp] = gr_hi[r]` into a clean full-width temp.
+  next_len (gr[3].hi) - section H (3b): entry `beq 0, gr_hi[3],
+    push_done`; outer push-c bound `gr[2] < gr_hi[3]`.
+  col (gr[2].lo) - section D (3d): `mvi2 SPM[gr[7] + gr_lo[2]]` for
+    seq[col]; loop-head `bge gr_lo[2], gr_hi[2], col_done`; G `addi
+    gr_lo[2] += 1`.
+  seq_len (gr[2].hi) - section D (3d): loop-head branch rhs.
+  next_off (gr[12].lo) - section H (3b): `mv gr[12] = gr_lo[12]` or
+    equivalent before the `gr[13]<<2 + gr[12]<<1` child-ids base math.
+  j counters (gr[3].lo) - every inner loop in sections C (3c), E (3f),
+    F (3e best-copy), H (3b push-j), lazy-F (3g), and section I
+    (already in trunk).
+
+Open deviation (ISSUE-2). Section I's final-reduce emission at
+`pe_0_instruction:347-348` currently reads `gr[3]` at full width.
+This happens to work on the 200-case regression because the last
+processed node typically has next_len == 0. Stage 3b (section H
+lowering) must switch section I's SPM-offset read to `gr_lo[3]` as
+part of the same commit to avoid surfacing the latent hazard on
+1000-case × 56-thread regression.
+
+Stall rules (AC-1, DEC-7, rederived against current trunk).
+  Cycle costs below are relative to instruction issue. Source cites
+  give the enforcement sites in the simulator for spot-checking.
+  mvd load  (PE SPM -> reg/gr/out):
+      dst visible to consumer:     +2 cycles
+      next same-PE reissue:        +2 cycles (outstanding_req depth=1)
+      source: pe.h:13-34,101-104; pe.cpp:62-151,419-495,2877-2884
+  mvd store (PE reg/gr -> SPM):
+      subsequent SPM read sees it: +2 cycles
+      next store issue:            +1 cycle (subject to bank avail.)
+      source: data_buffer.cpp:240-356
+  mv gr <-> gr:                    next-cycle dst, next-cycle reissue
+      source: pe.cpp:302-304,323,520-531
+  mv into SPM (single-word store): same as mvd store
+      source: data_buffer.cpp:240-269,285-290
+  mvi2 (PE 2-bit SPM -> gr/reg):   same as mvd load (+2 cycles)
+      source: pe.cpp:62-151,490-495
+  set_PC (PE compute dispatch):    fires next cycle
+      source: pe.cpp:180-187,2731-2736
+
+Structural hazards (AC-1).
+- PE `outstanding_req` depth = 1. Back-to-back PE-side SPM loads from
+  the same PE must be spaced by >=2 cycles. Violating this triggers
+  an assertion in the mvd handler (pe.cpp:62-151).
+- Two SPM accesses from the same PE in the same VLIW cycle are
+  unsafe: only one `spmReqPort` per PE; a later request overwrites
+  an earlier one before arbitration (pe_array.cpp:4459-4495).
+- Same-bank PE-vs-PE and PE-vs-LSQ accesses serialize via the SPM
+  arbiter (pe_array.cpp:4450-4512; sys_def.h:29 is SPM_ACCESS_LATENCY).
+- Current trunk does NOT enforce many historical bans (mvdq+mvdq,
+  mvdq+mv, slot-1 magic/branch/jump/halt/set_PC/barrier/IO si|mv);
+  pair admission only checks LSQ capacity and branch agreement
+  (pe_array.cpp:3955-3982,4360-4396). Generators remain conservative
+  anyway — keep slot-1 off those opcodes to stay portable.
+- `gr[0]` is writable (not hardwired zero); reset initializes it to 0
+  (data_buffer.h:126-146). Never emit a write to gr[0] — the zero-
+  base addressing mode depends on it.
+- Multi-`mv` src-position conflict: two `mv` ops reading from the same
+  non-`gr`/non-`reg` src position in the same VLIW cycle abort
+  (pe.cpp:329-332).
+- `set_PC` only lands on the next control cycle because the compute
+  fetch/execute happens before PE control decode (pe.cpp:180-187).
+- PE `mvd` into `gr` writes both words to consecutive gr[n], gr[n+1]
+  (pe.cpp:118-124).
+
+Controller pairing now lives in pe_array.cpp; PE local decode is
+pe.cpp::decode() (the historical `decode_ctrl`). Mentioning it for
+future audit references.
 """
 
 import os
