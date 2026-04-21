@@ -1596,6 +1596,22 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             spm[MERGE_META+4]=oi;
             spm[MERGE_META+7]=aw; spm[MERGE_META+8]=bw;
             spm[982] = cum_oi + oi;
+            {
+                const char *e = getenv("GWFA_AC5_DUMP");
+                if (e && atoi(e)) {
+                    FILE *f = fopen("ac5_dump.txt", "a");
+                    if (f) {
+                        fprintf(f, "pe=%d a1=%d b1=%d "
+                            "spm[976..981]=%d,%d,%d,%d,%d,%d "
+                            "spm[982]=%d spm[983]=%d\n",
+                            id, spm[MERGE_META+10], spm[MERGE_META+12],
+                            spm[976], spm[977], spm[978],
+                            spm[979], spm[980], spm[981],
+                            spm[982], spm[983]);
+                        fclose(f);
+                    }
+                }
+            }
         } else if (magic_id == 23) {
             // Tiled dedup: state machine with TILE_SIZE counter,
             // dual input ping-pong, inline intv merge-adjacent.
@@ -1635,20 +1651,26 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             bool ad = false, ai = false;  // all_diag/intv done
 
             // --- Inline helpers (no lambdas for ISA lowering) ---
-            // AC-7 cycle accounting (Plan 2b Milestone C2):
-            //   Each code line = 1 gendp ISA instruction (one slot of
-            //   a VLIW pair); each pair of consecutive lines = 1 VLIW
-            //   cycle. 2-cycle SPM latency: load in cycle N; data
-            //   arrives at end of cycle N+1; earliest legal consumer
-            //   is cycle N+2.
+            // Cycle-accounting convention: each code line = 1 gendp
+            // ISA instruction (one slot of a VLIW pair); each pair of
+            // consecutive lines = 1 VLIW cycle. 2-cycle SPM latency:
+            // load in cycle N; data arrives at end of cycle N+1;
+            // earliest legal consumer is cycle N+2.
             //
             // Read next diag: inline buffer-switch + read.
             //   SPM loads: cycle N slot 0 (vd_out) + slot 1 (k_out).
             //   sep: cycle N+1 slot 0 (dc++) + slot 1 (p++) — both
             //        ops are independent of the loaded data.
-            //   Caller's first use of vd_out or k_out lands at
-            //   cycle N+2 or later (all call sites confirmed —
-            //   see QA ledger Milestone C2 section).
+            //   Consumer (first use of vd_out or k_out by the caller)
+            //   lands at cycle N+2 or later. Concrete call-site
+            //   consumer cycles:
+            //     m23_X (line 1737): `if (pv == 0xFFFFFFFFU)` reads
+            //       pv at cycle N+2 slot 0; first use of vd at the
+            //       `pv = vd` assignment inside the taken branch is
+            //       cycle N+3 slot 0 (after the branch separator).
+            //     Subsequent checks `if (vd == pv)` (line 1738) and
+            //       `nv = vd` (line 1739) all land at cycle N+3 or
+            //       later — all >= N+2, so AC-7 legal.
             #define M23_RD(vd_out, k_out, fail_label) do { \
                 if (dc >= dtn) { \
                     spm[DEDUP_META + 10 + dw] = 0; \
@@ -1665,6 +1687,16 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // Read next intv: same cycle-accounting contract as
             // M23_RD. SPM loads at cycle N, independent ic++/p++
             // separators at cycle N+1, consumer at cycle N+2+.
+            // Concrete call-site consumer cycles:
+            //   m23_B_loop (line 1753): `if (p >= DEDUP_TILE)` reads
+            //     p only (not lo/hi) at cycle N+2 slot 0; first use
+            //     of lo/hi is `clo = lo; chi = hi` at cycle N+3 or
+            //     later.
+            //   m23_C_loop (line 1801): same pattern, consumer at
+            //     cycle N+3 or later.
+            //   m23_B_peek inner (line 1765): the `M23_RI(d1, d2, ...)`
+            //     drops d1/d2 (unused), so effectively no consumer —
+            //     the load serves only to advance `ic`/`p`.
             #define M23_RI(lo_out, hi_out, fail_label) do { \
                 if (ic >= itn) { \
                     spm[DEDUP_META + 12 + iw] = 0; \
@@ -1685,6 +1717,14 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // lowering inserts 2 NOPs in the cycle-N+1 slots before
             // the consumer line. Pattern mirrors pe_array.cpp's
             // SPM-latency `//NOP` comments.
+            //   SPM loads: cycle N slot 0 (lo_out) + slot 1 (hi_out).
+            //   sep: cycle N+1 slot 0 + slot 1 (real ISA NOPs).
+            //   Consumer cycles per call site:
+            //     m23_B_peek (line 1763): `if (l2 <= chi)` reads l2
+            //       at cycle N+2 slot 0 — exactly the minimum legal
+            //       slot, AC-7 legal.
+            //     m23_C_peek (line 1810): `if (lo <= chi)` reads lo
+            //       at cycle N+2 slot 0 — same.
             #define M23_PI(lo_out, hi_out, fail_label) do { \
                 int tc_=ic, tw_=iw, tt_=itn, tb_=ib; \
                 if (tc_ >= tt_) { \

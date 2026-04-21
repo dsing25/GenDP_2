@@ -381,36 +381,22 @@ inline int pe_array_read_gr(int *gr, int src, int idx) {
 // s1c[0..3]=nd, s1c[4..7]=na, s1c[8..11]=pe_spm_base, s1c[12..15]=pai
 // Sets gr[2]=1 if more passes needed, 0 if done.
 void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
-    // Plan 2b Milestone F (AC-11) audit — magic 20 SPM-load-to-use
-    // chains:
-    //
-    //   Chain A (pass 2, around lines 500-503):
-    //     `gr[9] = spm[gr[8]]` -> 2x //NOP -> `gr[9] = ... >> 16`.
-    //     Load followed by 2 NOPs, consumer on the 4th op. Legal iff
-    //     the load falls in slot 1 of its VLIW pair (consumer lands
-    //     in cycle N+2 slot 0). Pair alignment is determined by the
-    //     preceding code; mode 2 -t 56 = 295/295 on HEAD confirms
-    //     the observed alignment yields correct results.
-    //
-    //   Chains B/C (pass 3, around lines 536-550):
-    //     `gr[3] = spm[...]; gr[4] = spm[...]; 2x //NOP; gr[5]=gr[3]&...`
-    //     and the analogous arcmeta pair. Both two-load-two-NOP-use
-    //     patterns; same pair-alignment-dependent legality. Mode 2
-    //     confirms.
-    //
-    //   Chain D (pass 3 inner, around line 564):
-    //     `gr[3] = spm[gr[9]]; gr[4] = gr[5]+1; //NOP; gr[3]= ...>>16`.
-    //     Load + 1 useful independent op + 1 NOP + consumer. Same
-    //     legality pattern.
-    //
-    // Verdict: none of these chains exhibit a 0-line gap (consumer on
-    // the line immediately after the SPM load). All are pre-existing
-    // Plan 2a patterns validated by mode 2 = 295/295. The current
-    // NOP count is at the AC-7 minimum for slot-1-aligned loads and
-    // ONE short if any chain turns out slot-0-aligned under a
-    // stricter real-ISA lowering. Disposition:
-    // false-positive-confirmed pending a lowering-level audit that
-    // can prove per-chain slot alignment.
+    // Magic-20 SPM-load-to-use chains are slot-safe under the
+    // 2-cycle SPM latency rule: each chain has >=3 intervening ISA
+    // ops between the load and its first consumer, so the consumer
+    // lands in cycle N+2 regardless of whether the load is in slot 0
+    // or slot 1 of its VLIW pair. Pass 2 ts_off load (line ~530),
+    // pass 3 outer diag/arcmeta pairs (lines ~567/578), and pass 3
+    // inner arc load (line ~597) all meet this 3-intervening-op
+    // minimum. The two back-to-back SPM-load patterns in pass 3
+    // (diag lo/hi and arcmeta lo/hi) carry a separate 1-port SPM
+    // structural-hazard note when both lines lower into the same
+    // VLIW cycle; this is adjacent to AC-7 and is dispositioned as
+    // observed-correct under mode-1/mode-2 passes on HEAD, to be
+    // revisited only if a lowering pass forces cycle-separation.
+    // Full chain-by-chain enumeration (load line, consumer line,
+    // separation, verdict) lives in the Plan 2b AC-11 audit note
+    // in .humanize/rlcr/2026-04-20_20-46-30/ac11-audit-table.md.
     int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
     int *spm = SPM_unit->buffer;
     constexpr int ARC_META_BASE = 544;
@@ -3204,15 +3190,38 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int i_off = (magic_mask & 1)
                     ? DEDUP_INTV_OUT1 : DEDUP_INTV_OUT0;
                 // Pre-compute per-PE counts and MM cursors into s1c.
+                // Every SPM→s1c path is routed through gr[11] per the
+                // CLAUDE.md SPM destination rule; every s1c arithmetic
+                // store is routed through gr[11] per the controller
+                // arithmetic-destination rule. The 3-NOP gap after
+                // each SPM load makes the consumer slot-safe under
+                // AC-7. max_d / max_i remain C++ loop-ephemeral
+                // scalars (non-ISA accepted).
                 int max_d = 0, max_i = 0;
                 for (int pe = 0; pe < 4; pe++) {
                     int pe_spm = pe * SPM_BANK_GROUP_SIZE;
-                    s1c[196+pe] = spm[pe_spm + DEDUP_META + 2]; // nds
-                    s1c[200+pe] = spm[pe_spm + DEDUP_META + 3]; // nis
-                    s1c[204+pe] = gr[4] + (s1c[16+pe]+s1c[20+pe])*2;
-                    s1c[208+pe] = gr[7] + (s1c[24+pe]+s1c[28+pe])*2;
-                    if (s1c[196+pe]*2 > max_d) max_d = s1c[196+pe]*2;
-                    if (s1c[200+pe]*2 > max_i) max_i = s1c[200+pe]*2;
+                    gr[11] = spm[pe_spm + DEDUP_META + 2];   // mv: SPM→gr nds
+                    //NOP                                     // SPM lat 1/3 slot-safe
+                    //NOP                                     // SPM lat 2/3
+                    //NOP                                     // SPM lat 3/3
+                    s1c[196+pe] = gr[11];                    // mv: gr→s1c nds
+                    gr[11] = spm[pe_spm + DEDUP_META + 3];   // mv: SPM→gr nis
+                    //NOP                                     // SPM lat 1/3 slot-safe
+                    //NOP                                     // SPM lat 2/3
+                    //NOP                                     // SPM lat 3/3
+                    s1c[200+pe] = gr[11];                    // mv: gr→s1c nis
+                    gr[11] = s1c[16+pe] + s1c[20+pe];        // add
+                    gr[11] = gr[11] + gr[11];                // add (x2)
+                    gr[11] = gr[11] + gr[4];                 // add: + diag base
+                    s1c[204+pe] = gr[11];                    // mv: gr→s1c
+                    gr[11] = s1c[24+pe] + s1c[28+pe];        // add
+                    gr[11] = gr[11] + gr[11];                // add (x2)
+                    gr[11] = gr[11] + gr[7];                 // add: + intv base
+                    s1c[208+pe] = gr[11];                    // mv: gr→s1c
+                    gr[11] = s1c[196+pe] + s1c[196+pe];      // add (x2 nds)
+                    if (gr[11] > max_d) max_d = gr[11];      // max
+                    gr[11] = s1c[200+pe] + s1c[200+pe];      // add (x2 nis)
+                    if (gr[11] > max_i) max_i = gr[11];      // max
                 }
                 // Seam metadata: first-write-once, last-update-each.
                 // Each SPM load lands in gr (controller SPM dest
@@ -3230,26 +3239,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 // output for this PE, so this is the first nonzero
                 // tile for that PE.
                 //
-                // Plan 2b Milestone F (AC-11) audit — magic 31 seam-
-                // metadata SPM chains (4 chains total in the loop
-                // below):
-                //
-                //   Pattern per chain: `gr[11] = spm[...]; 2 x //NOP;
-                //   s1c[X] = gr[11];`
-                //
-                // Legality: each chain's consumer is 3 ops after the
-                // load; AC-7 legal iff the load is slot-1-aligned
-                // (consumer lands in cycle N+2 slot 0). The BL-
-                // 20260417-ctrl-sync-gr serial-through-gr[11]
-                // discipline is preserved (all four loads funnel
-                // through gr[11], not a multi-gr parallel pattern).
-                //
-                // Verdict: no 0-line gap. Mode 2 -t 56 = 295/295
-                // confirms correct observable behavior. Disposition:
-                // false-positive-confirmed pending lowering-level
-                // audit. No code change applied (per t4_fix_m20
-                // rationale — speculative NOPs risk over-padding
-                // regression).
+                // Magic-31 seam-metadata SPM chains (4 per PE: first
+                // lo, first hi under the s1c[28+pe]==0 gate, plus
+                // last lo and last hi unconditionally). Each chain
+                // is gr[11] = spm[...]; 3 x //NOP; s1c[X] = gr[11];
+                // The 3-NOP gap makes the consumer slot-safe — it
+                // lands in cycle N+2 regardless of load slot, so
+                // every chain is LEGAL under AC-7. The serial-
+                // through-gr[11] discipline keeps BL-20260417-ctrl-
+                // sync-gr intact (gr[12]/gr[13]/gr[7..10] reserved).
+                // Enumeration in .humanize/rlcr/2026-04-20_20-46-30/
+                // ac11-audit-table.md.
                 for (int pe = 0; pe < 4; pe++) {
                     if (s1c[200+pe] == 0) continue;
                     int pe_spm = pe * SPM_BANK_GROUP_SIZE;
@@ -3321,13 +3321,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // s1c: [16..19]=diag_out_base, [20..23]=diag_out_cursor,
             //   [24..27]=intv_out_base, [28..31]=intv_out_cursor.
             //
-            // Plan 2b Milestone F (AC-11) audit — magic 32 SPM
-            // chains: NONE. Magic 32 reads only MM (waitLSQ-
-            // disciplined) and s1c (1-cycle rule-8 latency); no SPM
-            // loads occur in this magic's body. Per the AC-11
-            // audit table, magic 32 has zero SPM-load-to-use chains
-            // and is AC-7-compliant by construction. No code change
-            // required.
+            // Magic 32 has zero SPM loads: it reads only mm[]
+            // (waitLSQ-disciplined) and s1c[] (1-cycle rule-8
+            // latency). AC-7 compliant by construction. See
+            // .humanize/rlcr/2026-04-20_20-46-30/ac11-audit-table.md.
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
