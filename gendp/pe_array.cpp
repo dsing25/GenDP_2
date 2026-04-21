@@ -2562,9 +2562,14 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 constexpr int MM_NEXT_INTV = MM_INTV + INTV_CAP_V * 2;
                 constexpr int MM_SWAP     = MM_NEXT_INTV + INTV_CAP_V * 2;
                 int n_new  = gr[24];
-                int intv_n = s1c[146];
+                // R8 fix: stage s1c[146], s1c[152] through gr[11] + 1-NOP.
+                gr[11] = s1c[146];
+                //NOP                                    // s1c 1-cycle gap
+                int intv_n = gr[11];
                 int n_total = n_new + intv_n;
-                int active_intv = s1c[152]; // current intv buffer base
+                gr[11] = s1c[152];
+                //NOP                                    // s1c 1-cycle gap
+                int active_intv = gr[11]; // current intv buffer base
                 if (n_new <= 0 || intv_n <= 0) {
                     // Only one source: just point active base there
                     if (n_new > 0)
@@ -2710,18 +2715,35 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     s1c[149] = 0;
                 }
                 s1c[148] = n_total;
-                // Load boundary vd values and init PE tracking (AC-7)
-                // Compute per-PE global output base from prefix sum of s1c[pe]
+                // Load boundary vd values and init PE tracking.
+                // R8 fix: pre-load boundary_vd[0..2] and per-PE pt counts
+                // into gr-staged C++ locals before the PE-unroll so the
+                // SPM stores inside the loop read from settled locals.
+                gr[11] = s1c[159];
+                //NOP                                    // s1c 1-cycle gap
+                int bvd0 = gr[11];
+                gr[11] = s1c[160];
+                //NOP                                    // s1c 1-cycle gap
+                int bvd1 = gr[11];
+                gr[11] = s1c[161];
+                //NOP                                    // s1c 1-cycle gap
+                int bvd2 = gr[11];
+                int pts[4];
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[11] = s1c[pe];
+                    //NOP                                // s1c 1-cycle gap
+                    pts[pe] = gr[11];
+                }
                 int pe_base = 0;
                 for (int pe = 0; pe < 4; pe++) {
                     int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
-                    spm[MERGE_META + 13] = s1c[159]; // boundary_vd[0]
-                    spm[MERGE_META + 14] = s1c[160]; // boundary_vd[1]
-                    spm[MERGE_META + 15] = s1c[161]; // boundary_vd[2]
+                    spm[MERGE_META + 13] = bvd0; // boundary_vd[0]
+                    spm[MERGE_META + 14] = bvd1; // boundary_vd[1]
+                    spm[MERGE_META + 15] = bvd2; // boundary_vd[2]
                     for (int i = 0; i < 6; i++) spm[976+i] = -1; // hi/lo_pos
                     spm[982] = 0; // cumulative output count
                     spm[983] = pe_base; // global output base for this PE
-                    pe_base += s1c[pe]; // prefix sum
+                    pe_base += pts[pe]; // prefix sum (pre-staged)
                 }
             }
         } else if (magic_id == 38) {
@@ -2757,14 +2779,25 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //NOP                                    // s1c 1-cycle gap
                 int ib = mgr[11];
                 if (!merge_skipped) {
-                    // Collect per-PE absolute boundary positions via min
+                    // Collect per-PE absolute boundary positions via min.
+                    // R6 fix: stage each spm[976+b] / spm[979+b] load
+                    // through mgr[11] with 3-NOP SPM settle before the
+                    // hp/lp consumer.
                     for (int b = 0; b < 3; b++) {
                         int best_hi = intv_n, best_lo = intv_n;
                         for (int pe = 0; pe < 4; pe++) {
                             int *spm = &SPM_unit->buffer[
                                 pe * SPM_BANK_GROUP_SIZE];
-                            int hp = spm[976+b];
-                            int lp = spm[979+b];
+                            mgr[11] = spm[976+b];            // SPM hp
+                            //NOP                              // SPM 1/3
+                            //NOP                              // SPM 2/3
+                            //NOP                              // SPM 3/3
+                            int hp = mgr[11];
+                            mgr[11] = spm[979+b];            // SPM lp
+                            //NOP                              // SPM 1/3
+                            //NOP                              // SPM 2/3
+                            //NOP                              // SPM 3/3
+                            int lp = mgr[11];
                             if (hp >= 0 && hp < best_hi) best_hi = hp;
                             if (lp >= 0 && lp < best_lo) best_lo = lp;
                         }
@@ -2910,10 +2943,19 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 constexpr int DIAG_CAP_V  = (16 << 20);
                 constexpr int INTV_CAP_V  = (1 << 21);
                 constexpr int MM_SORT_BUF = DIAG_CAP_V * 6 + INTV_CAP_V * 6;
-                int n_phase1  = s1c[147];
-                int n_a       = s1c[148];
-                int intv_n    = s1c[146];
-                int diag_base = s1c[153];
+                // R8 fix: stage each s1c head load through gr[11] + 1-NOP.
+                gr[11] = s1c[147];
+                //NOP                                    // s1c 1-cycle gap
+                int n_phase1 = gr[11];
+                gr[11] = s1c[148];
+                //NOP                                    // s1c 1-cycle gap
+                int n_a = gr[11];
+                gr[11] = s1c[146];
+                //NOP                                    // s1c 1-cycle gap
+                int intv_n = gr[11];
+                gr[11] = s1c[153];
+                //NOP                                    // s1c 1-cycle gap
+                int diag_base = gr[11];
                 if (n_phase1 < 0) n_phase1 = 0;
                 if (n_phase1 > n_a) n_phase1 = n_a;
                 int n_tail = n_a - n_phase1;
