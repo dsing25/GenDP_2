@@ -3327,17 +3327,46 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     //NOP                                     // SPM lat 2/3
                     //NOP                                     // SPM lat 3/3
                     s1c[200+pe] = gr[11];                    // mv: gr→s1c nis
-                    gr[11] = s1c[16+pe] + s1c[20+pe];        // add
-                    gr[11] = gr[11] + gr[11];                // add (x2)
-                    gr[11] = gr[11] + gr[4];                 // add: + diag base
+                    // ISA lowering (AC-7 R8/R2 close): split
+                    // 'gr[11] = s1c[A] + s1c[B]' into per-load
+                    // gr[11]→gr[1] stash→gr[11] form with 1-NOP
+                    // s1c gaps and //NOP barriers before each
+                    // dependent gr[11] arithmetic (prevents
+                    // paired-slot RAW). gr[1] is caller-dead on
+                    // magic-29→31 entry (m29 sets gr[4,6,7],
+                    // not gr[1]); gr[11] remains the CLAUDE-safe
+                    // SPM scratch per BL-20260417-ctrl-sync-gr.
+                    gr[11] = s1c[16+pe];                     // s1c diag_base
+                    //NOP                                     // s1c 1-cycle gap
+                    gr[1]  = gr[11];                         // stash diag_base
+                    gr[11] = s1c[20+pe];                     // s1c diag_cur
+                    //NOP                                     // s1c 1-cycle gap
+                    gr[11] = gr[11] + gr[1];                 // diag_base+cur
+                    //NOP                                     // RAW barrier
+                    gr[11] = gr[11] + gr[11];                // *2
+                    //NOP                                     // RAW barrier
+                    gr[11] = gr[11] + gr[4];                 // + diag_base MM
                     s1c[204+pe] = gr[11];                    // mv: gr→s1c
-                    gr[11] = s1c[24+pe] + s1c[28+pe];        // add
-                    gr[11] = gr[11] + gr[11];                // add (x2)
-                    gr[11] = gr[11] + gr[7];                 // add: + intv base
+                    gr[11] = s1c[24+pe];                     // s1c intv_base
+                    //NOP                                     // s1c 1-cycle gap
+                    gr[1]  = gr[11];                         // stash intv_base
+                    gr[11] = s1c[28+pe];                     // s1c intv_cur
+                    //NOP                                     // s1c 1-cycle gap
+                    gr[11] = gr[11] + gr[1];                 // intv_base+cur
+                    //NOP                                     // RAW barrier
+                    gr[11] = gr[11] + gr[11];                // *2
+                    //NOP                                     // RAW barrier
+                    gr[11] = gr[11] + gr[7];                 // + intv_base MM
                     s1c[208+pe] = gr[11];                    // mv: gr→s1c
-                    gr[11] = s1c[196+pe] + s1c[196+pe];      // add (x2 nds)
+                    gr[11] = s1c[196+pe];                    // s1c nds
+                    //NOP                                     // s1c 1-cycle gap
+                    gr[11] = gr[11] + gr[11];                // nds*2
+                    //NOP                                     // RAW barrier
                     if (gr[11] > max_d) max_d = gr[11];      // max
-                    gr[11] = s1c[200+pe] + s1c[200+pe];      // add (x2 nis)
+                    gr[11] = s1c[200+pe];                    // s1c nis
+                    //NOP                                     // s1c 1-cycle gap
+                    gr[11] = gr[11] + gr[11];                // nis*2
+                    //NOP                                     // RAW barrier
                     if (gr[11] > max_i) max_i = gr[11];      // max
                 }
                 // Seam metadata: first-write-once, last-update-each.
