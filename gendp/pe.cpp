@@ -360,14 +360,16 @@ void pe::comp_instr_load_from_ddr(int n_instr, unsigned long* data) {
 }
 
 
-LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data, bool swizzle) {
+LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data, bool swizzle, int rs2_pos) {
 
     LoadResult data{};
     data.data[0] = 0;
     int source_addr = 0;
-    
-    if (reg_immBar_flag) source_addr = addr_regfile_unit->at(rs1) + addr_regfile_unit->at(rs2);
-    else source_addr = rs1 + addr_regfile_unit->at(rs2);
+
+    // rs2_pos selects full gr / gr_lo / gr_hi for the SPM-offset register.
+    // Default CTRL_GR preserves legacy full-32-bit behavior for non-SPM paths.
+    if (reg_immBar_flag) source_addr = addr_regfile_unit->at(rs1) + addr_regfile_unit->at(rs2, rs2_pos);
+    else source_addr = rs1 + addr_regfile_unit->at(rs2, rs2_pos);
 
 #ifdef DEBUG
     printf("src: %d reg_immBar_flag: %d reg_imm_1: %d reg_1: %d src_addr: %d\n", source_pos, reg_immBar_flag, rs1, rs2, source_addr);
@@ -467,12 +469,14 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
     return data;
 }
 
-void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_data, bool swizzle) {
+void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_data, bool swizzle, int rs2_pos) {
 
     int dest_addr = 0;
 
-    if (reg_immBar_flag) dest_addr = addr_regfile_unit->at(rs1) + addr_regfile_unit->at(rs2);
-    else dest_addr = rs1 + addr_regfile_unit->at(rs2);
+    // rs2_pos selects full gr / gr_lo / gr_hi for the SPM-offset register.
+    // Default CTRL_GR preserves legacy full-32-bit behavior for non-SPM paths.
+    if (reg_immBar_flag) dest_addr = addr_regfile_unit->at(rs1) + addr_regfile_unit->at(rs2, rs2_pos);
+    else dest_addr = rs1 + addr_regfile_unit->at(rs2, rs2_pos);
 
 #ifdef DEBUG
     printf("dest: %d reg_immBar_flag: %d reg_imm_1: %d reg_1: %d src_addr: %d\n", dest_pos, reg_immBar_flag, rs1, rs2, dest_addr);
@@ -2609,7 +2613,9 @@ m23_end:    ;
 #endif
         LoadResult immediate_data{};
         immediate_data.data[0] = sext_imm_1;
-        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, immediate_data, simd, ctrl_write_addr, ctrl_write_datum);
+        // dest_resolved is the subregister selector (CTRL_GR / CTRL_GR_LO / CTRL_GR_HI)
+        // for reg_0 / SPM-offset register; enables gr_lo[r] / gr_hi[r] SPM offsets.
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, immediate_data, simd, ctrl_write_addr, ctrl_write_datum, true, false, dest_resolved);
         if (reg_auto_increasement_flag_0)
             addr_regfile_unit->st(reg_0, addr_regfile_unit->at(reg_0) + 1);
         (*PC)++;
@@ -2617,8 +2623,8 @@ m23_end:    ;
 #ifdef PROFILE
         printf("Move ");
 #endif
-        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd);
-        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum);
+        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, true, false, src_resolved);
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, true, false, dest_resolved);
 
         bool leagal_mv = check_legal_mv(src, dest);
         if (!leagal_mv) {
@@ -2797,8 +2803,8 @@ m23_end:    ;
 #endif
         assert(src == CTRL_SPM || dest == CTRL_SPM); //only support to/from spm
         bool single_data = false;
-        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, single_data);
-        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, single_data);
+        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, single_data, false, src_resolved);
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, single_data, false, dest_resolved);
 
         bool leagal_mv = check_legal_mv(src, dest);
         if (!leagal_mv) {
@@ -2823,8 +2829,8 @@ m23_end:    ;
 #endif
         // mvi requires source or destination to be SPM
         assert(src == CTRL_SPM || dest == CTRL_SPM);
-        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, true, true);
-        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, true, true);
+        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, true, true, src_resolved);
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, true, true, dest_resolved);
 
         bool legal_mv = check_legal_mv(src, dest);
         if (!legal_mv) {
