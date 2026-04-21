@@ -486,9 +486,15 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         gr[11] = gr[11] + gr[10];                           /* += nv (= 2*nv) */ \
     } while(0)
 
-    // Round-robin common-case loop: one diag per PE cycling 0,1,2,3
+    // Round-robin common-case loop: one diag per PE cycling 0,1,2,3.
+    // pe_rr held architecturally in gr[2]; derived from s1c[22] at
+    // entry via gr[4] (dead here; gr[11] holds persistent arc_ptr
+    // and must not be clobbered) and advanced in-register after
+    // each successful assign.
     {
-        int pe_rr = s1c[22] % 4;
+        gr[4] = s1c[22];
+        //NOP                                    // s1c 1-cycle gap
+        gr[2] = gr[4] & 3;                       // pe_rr = cursor & 3
     f0b_rr:
         if (s1c[22] >= s1c[20]) goto f0b_rr_done;
         gr[9] = s1c[22] + s1c[22];
@@ -499,12 +505,13 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         //NOP                                    // s1c 1-cycle gap
         gr[10] = gr[10] - gr[4];
         //NOP                                    // RAW barrier
-        if (s1c[pe_rr] >= FIN0_N_MAX_DIAGS) goto f0b_rr_break;
-        gr[7] = s1c[4 + pe_rr] + gr[10];
+        if (s1c[gr[2]] >= FIN0_N_MAX_DIAGS) goto f0b_rr_break;
+        gr[7] = s1c[4 + gr[2]] + gr[10];
         if (gr[7] > FIN0_N_MAX_ARCS) goto f0b_rr_break;
-        F0B_ASSIGN(s1c[22], pe_rr, rr);
+        F0B_ASSIGN(s1c[22], gr[2], rr);
         s1c[22] = s1c[22] + 1;
-        pe_rr = (pe_rr + 1) & 3;
+        gr[2] = gr[2] + 1;
+        gr[2] = gr[2] & 3;
         goto f0b_rr;
     f0b_rr_break:
         (void)0;
