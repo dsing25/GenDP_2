@@ -1947,6 +1947,8 @@ m23_end:    ;
                 // mvd: contiguous (vd, k) double-word load from FIN0_DIAGS
                 uint32_t vd = (uint32_t)fspm[FIN0_DIAGS + 2*d];
                 int32_t k = fspm[FIN0_DIAGS + 2*d + 1];
+                //NOP                                          // SPM 2-cycle settle
+                //NOP                                          // SPM 2-cycle settle
                 uint32_t v = vd >> 16;                        // half-reg hi
                 int32_t d_val = (int32_t)(vd & 0xFFFF)        // half-reg lo
                     - GWF_DIAG_SHIFT;
@@ -1954,6 +1956,8 @@ m23_end:    ;
                 // mvd: contiguous (lo, hi) arcmeta double-word load
                 int lo = fspm[FIN0_ARCMETA + 2*d];
                 int hi = fspm[FIN0_ARCMETA + 2*d + 1];
+                //NOP                                          // SPM 2-cycle settle
+                //NOP                                          // SPM 2-cycle settle
                 int nv = hi - lo;
                 if (nv == 0) dbg_nv_zero++;
                 int32_t n_ext = 0;
