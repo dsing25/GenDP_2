@@ -404,10 +404,12 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     constexpr int INTV_CAP_F = (1 << 21);
     constexpr int HA_CAP_F   = (4 << 20);
     constexpr int ha_off = DIAG_CAP_F * 8 + INTV_CAP_F * 6;
-    // R3/R5 fix: no 'int total_fin0' C++ local mirror. s1c[20] is the
-    // authoritative limit; compares below reference s1c[20] directly,
-    // which lowers to a gr-staged load + compare in the ISA generator.
-    int cursor = s1c[22];
+    // R3/R5 fix: no 'int total_fin0' or 'int cursor' C++ local mirrors.
+    // s1c[20] is the authoritative limit, s1c[22] the authoritative
+    // cursor. Compares and arithmetic below reference them directly;
+    // the ISA generator lowers each as a gr-staged load + compare/op.
+    // pe_rr is a pass-1-only scratch derived from s1c[22] at RR entry
+    // and advanced in-scope after each successful F0B_ASSIGN.
 
     // === Pass 1: Round-robin + fallback assignment ===
     // Common case: assign diags sequentially to PEs in round-robin.
@@ -419,7 +421,7 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         s1c[8 + pe] = pe * SPM_BANK_GROUP_SIZE + fin0_base;
     }
     // Arc data pointer: resume from saved position or compute initial
-    if (cursor == 0) {
+    if (s1c[22] == 0) {
         gr[11] = s1c[21] * 2 + ARC_META_BASE;           // arc_data_start
     } else {
         gr[11] = s1c[23];                                // resume arc_ptr
@@ -469,10 +471,10 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
 
     // Round-robin common-case loop: one diag per PE cycling 0,1,2,3
     {
-        int pe_rr = cursor % 4;
+        int pe_rr = s1c[22] % 4;
     f0b_rr:
-        if (cursor >= s1c[20]) goto f0b_rr_done;
-        gr[9] = cursor + cursor;
+        if (s1c[22] >= s1c[20]) goto f0b_rr_done;
+        gr[9] = s1c[22] + s1c[22];
         // R8: split 'gr[10] = s1c[A+1] - s1c[A]' via gr[4] stash.
         gr[4] = s1c[ARC_META_BASE + gr[9]];
         //NOP                                    // s1c 1-cycle gap
@@ -483,8 +485,8 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         if (s1c[pe_rr] >= FIN0_N_MAX_DIAGS) goto f0b_rr_break;
         gr[7] = s1c[4 + pe_rr] + gr[10];
         if (gr[7] > FIN0_N_MAX_ARCS) goto f0b_rr_break;
-        F0B_ASSIGN(cursor, pe_rr);
-        cursor++;
+        F0B_ASSIGN(s1c[22], pe_rr);
+        s1c[22] = s1c[22] + 1;
         pe_rr = (pe_rr + 1) & 3;
         goto f0b_rr;
     f0b_rr_break:
@@ -494,10 +496,10 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     }
 
     // Per-PE fallback: fill remaining PEs sequentially
-    for (int pe = 0; pe < 4 && cursor < s1c[20]; pe++) {
+    for (int pe = 0; pe < 4 && s1c[22] < s1c[20]; pe++) {
     f0b_mv:
-        if (cursor >= s1c[20]) goto f0b_mv_next;
-        gr[9] = cursor + cursor;
+        if (s1c[22] >= s1c[20]) goto f0b_mv_next;
+        gr[9] = s1c[22] + s1c[22];
         // R8: split 'gr[10] = s1c[A+1] - s1c[A]' via gr[4] stash.
         gr[4] = s1c[ARC_META_BASE + gr[9]];
         //NOP                                    // s1c 1-cycle gap
@@ -508,15 +510,15 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         if (s1c[pe] >= FIN0_N_MAX_DIAGS) goto f0b_mv_next;
         gr[7] = s1c[4 + pe] + gr[10];
         if (gr[7] > FIN0_N_MAX_ARCS) goto f0b_mv_next;
-        F0B_ASSIGN(cursor, pe);
-        cursor++;
+        F0B_ASSIGN(s1c[22], pe);
+        s1c[22] = s1c[22] + 1;
         goto f0b_mv;
     f0b_mv_next:
         (void)0;
     }
     #undef F0B_ASSIGN
 
-    s1c[22] = cursor;
+    // s1c[22] is already authoritative cursor; no write-back needed.
     s1c[23] = gr[11]; // save arc_ptr for next pass
 
     // === Pass 2: Batch S2 loads for ts_off (PE-inner) ===
