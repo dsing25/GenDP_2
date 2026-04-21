@@ -2705,10 +2705,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         int lo_ = (tgt - intv_n > 0) ? tgt - intv_n : 0;
                         int hi_ = (n_new < tgt) ? n_new : tgt;
                         gr[4] = tgt;
+                        //NOP                                     // gr[4] settle
                         s1c[6 + p] = gr[4];                      // bs_tgt[p]
                         gr[4] = lo_;
+                        //NOP                                     // gr[4] settle
                         s1c[0 + p] = gr[4];                      // bs_lo[p]
                         gr[4] = hi_;
+                        //NOP                                     // gr[4] settle
                         s1c[3 + p] = gr[4];                      // bs_hi[p]
                     }
                 m37_bs_top:
@@ -2799,9 +2802,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 m37_bs_done:
                     for (int p = 0; p < 3; p++) {
                         gr[11] = s1c[0 + p]; //NOP
-                        a_sp[p+1] = gr[11];
+                        gr[3]  = gr[11];             // stash bs_lo
                         gr[11] = s1c[6 + p]; //NOP
-                        b_sp[p+1] = gr[11] - a_sp[p+1];
+                        a_sp[p+1] = gr[3];
+                        b_sp[p+1] = gr[11] - gr[3];
                         if (a_sp[p+1] < a_sp[p]) {
                             a_sp[p+1] = a_sp[p];
                             b_sp[p+1] = gr[11] - a_sp[p+1];
@@ -3247,10 +3251,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         int hi_ = tgt;
                         if (hi_ > n_phase1) hi_ = n_phase1;
                         gr[4] = tgt;
+                        //NOP                                     // gr[4] settle
                         s1c[6 + p] = gr[4];                      // bs_target[p]
                         gr[4] = lo_;
+                        //NOP                                     // gr[4] settle
                         s1c[0 + p] = gr[4];                      // bs_lo[p]
                         gr[4] = hi_;
+                        //NOP                                     // gr[4] settle
                         s1c[3 + p] = gr[4];                      // bs_hi[p]
                     }
                 m28_bs_top:
@@ -3346,20 +3353,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     goto m28_bs_top;
                 m28_bs_done:
                     // Read bs_lo/bs_target from s1c into a_sp/b_sp locals.
-                    // Since s1c[0..8] will be overwritten later by per-PE
-                    // tile metadata, stage these reads through gr now.
+                    // Stash bs_lo into gr[3] after the first load so the
+                    // subtraction has both operands in distinct gr regs
+                    // (fixes the unstaged-C++-local clobber hazard).
                     for (int p = 0; p < 3; p++) {
                         gr[11] = s1c[0 + p]; //NOP  // bs_lo[p]
-                        a_sp[p+1] = gr[11];
+                        gr[3]  = gr[11];             // stash bs_lo
                         gr[11] = s1c[6 + p]; //NOP  // bs_target[p]
-                        b_sp[p+1] = gr[11] - a_sp[p+1];
+                        a_sp[p+1] = gr[3];
+                        b_sp[p+1] = gr[11] - gr[3];
                         if (a_sp[p+1] < a_sp[p]) {
                             a_sp[p+1] = a_sp[p];
-                            b_sp[p+1] = gr[11] - a_sp[p+1];  // tgt - lo
+                            b_sp[p+1] = gr[11] - a_sp[p+1];
                         }
                         if (b_sp[p+1] < b_sp[p]) {
                             b_sp[p+1] = b_sp[p];
-                            a_sp[p+1] = gr[11] - b_sp[p+1];  // tgt - hi
+                            a_sp[p+1] = gr[11] - b_sp[p+1];
                         }
                     }
                     // Pre-compute tile sizes for mvdq interleaved load
