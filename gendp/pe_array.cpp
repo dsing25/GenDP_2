@@ -3394,6 +3394,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[11] = gr[11] + gr[11];                // *2
                     //NOP                                     // RAW barrier
                     gr[11] = gr[11] + gr[4];                 // + diag_base MM
+                    //NOP                                     // RAW barrier
                     s1c[204+pe] = gr[11];                    // mv: gr→s1c
                     gr[11] = s1c[24+pe];                     // s1c intv_base
                     //NOP                                     // s1c 1-cycle gap
@@ -3405,6 +3406,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[11] = gr[11] + gr[11];                // *2
                     //NOP                                     // RAW barrier
                     gr[11] = gr[11] + gr[7];                 // + intv_base MM
+                    //NOP                                     // RAW barrier
                     s1c[208+pe] = gr[11];                    // mv: gr→s1c
                     gr[11] = s1c[196+pe];                    // s1c nds
                     //NOP                                     // s1c 1-cycle gap
