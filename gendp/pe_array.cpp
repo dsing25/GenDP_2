@@ -2853,27 +2853,71 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         bs_hi[p] = bs_target[p];
                         if (bs_hi[p] > n_phase1) bs_hi[p] = n_phase1;
                     }
-                    bool any_active = true;
-                    while (any_active) {
-                        any_active = false;
-                        for (int p = 0; p < 3; p++) {
-                            if (bs_lo[p] >= bs_hi[p]) continue;
-                            any_active = true;
-                            int mid = (bs_lo[p] + bs_hi[p]) / 2;
-                            int bi2 = bs_target[p] - mid;
-                            // MM lookups for this PE's search step
-                            uint32_t b_val = (bi2 > 0)
-                                ? (uint32_t)mm[bbase + (bi2-1)*2] : 0;
-                            uint32_t a_val = (mid < n_phase1)
-                                ? (uint32_t)mm[abase + mid*2]
-                                : 0xFFFFFFFF;
-                            // waitLSQ (after all PE lookups this round)
-                            if (bi2 > 0 && mid < n_phase1
-                                && b_val > a_val)
-                                bs_lo[p] = mid + 1;
-                            else bs_hi[p] = mid;
-                        }
+                    // R4 fix: replace 'while (any_active) ... for p=0..2'
+                    // with label/goto outer loop + macro-unrolled per-p
+                    // step bodies. Each step's MM reads stage through
+                    // gr[11] with '// waitLSQ' + //NOP separation
+                    // before the compare (R7).
+                m28_bs_top:
+                    if (bs_lo[0] >= bs_hi[0]
+                        && bs_lo[1] >= bs_hi[1]
+                        && bs_lo[2] >= bs_hi[2]) goto m28_bs_done;
+                    // p = 0 step (compile-time-bounded unroll)
+                    if (bs_lo[0] < bs_hi[0]) {
+                        int mid = (bs_lo[0] + bs_hi[0]) / 2;
+                        int bi2 = bs_target[0] - mid;
+                        gr[11] = (bi2 > 0)
+                            ? mm[bbase + (bi2-1)*2] : 0;
+                        // waitLSQ
+                        //NOP                                    // LSQ settle
+                        uint32_t b_val = (uint32_t)gr[11];
+                        gr[11] = (mid < n_phase1)
+                            ? mm[abase + mid*2] : (int)0xFFFFFFFF;
+                        // waitLSQ
+                        //NOP                                    // LSQ settle
+                        uint32_t a_val = (uint32_t)gr[11];
+                        if (bi2 > 0 && mid < n_phase1
+                            && b_val > a_val) bs_lo[0] = mid + 1;
+                        else bs_hi[0] = mid;
                     }
+                    // p = 1 step
+                    if (bs_lo[1] < bs_hi[1]) {
+                        int mid = (bs_lo[1] + bs_hi[1]) / 2;
+                        int bi2 = bs_target[1] - mid;
+                        gr[11] = (bi2 > 0)
+                            ? mm[bbase + (bi2-1)*2] : 0;
+                        // waitLSQ
+                        //NOP                                    // LSQ settle
+                        uint32_t b_val = (uint32_t)gr[11];
+                        gr[11] = (mid < n_phase1)
+                            ? mm[abase + mid*2] : (int)0xFFFFFFFF;
+                        // waitLSQ
+                        //NOP                                    // LSQ settle
+                        uint32_t a_val = (uint32_t)gr[11];
+                        if (bi2 > 0 && mid < n_phase1
+                            && b_val > a_val) bs_lo[1] = mid + 1;
+                        else bs_hi[1] = mid;
+                    }
+                    // p = 2 step
+                    if (bs_lo[2] < bs_hi[2]) {
+                        int mid = (bs_lo[2] + bs_hi[2]) / 2;
+                        int bi2 = bs_target[2] - mid;
+                        gr[11] = (bi2 > 0)
+                            ? mm[bbase + (bi2-1)*2] : 0;
+                        // waitLSQ
+                        //NOP                                    // LSQ settle
+                        uint32_t b_val = (uint32_t)gr[11];
+                        gr[11] = (mid < n_phase1)
+                            ? mm[abase + mid*2] : (int)0xFFFFFFFF;
+                        // waitLSQ
+                        //NOP                                    // LSQ settle
+                        uint32_t a_val = (uint32_t)gr[11];
+                        if (bi2 > 0 && mid < n_phase1
+                            && b_val > a_val) bs_lo[2] = mid + 1;
+                        else bs_hi[2] = mid;
+                    }
+                    goto m28_bs_top;
+                m28_bs_done: ;
                     for (int p = 0; p < 3; p++) {
                         a_sp[p+1] = bs_lo[p];
                         b_sp[p+1] = bs_target[p] - bs_lo[p];
