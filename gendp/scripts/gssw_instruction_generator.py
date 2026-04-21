@@ -462,9 +462,11 @@ def pe_0_instruction(f):
     # back-to-back cycles.
     f.write(data_movement_instruction(gr_hi, gr_hi, 0, 0, 2, 0, 0, 0, 12, 0, mv))
     f.write(NOP)
-    f.write(data_movement_instruction(gr_hi, gr_hi, 0, 0, 3, 0, 0, 0, 13, 0, mv))
-    f.write(NOP)
-    # DEC-5 relaxation: also capture next_len into gr[15] full-width.
+    # DEC-5 relaxation (round 6-7): route next_len via gr[15] full-width.
+    # The older `mv gr_hi[3] = gr_hi[13]` is dropped because (a) section H
+    # ISA reads gr[15], not gr[3].hi, and (b) keeping gr[3].hi = 0 lets
+    # section C's full-gr `bne gr[3] != 38` fall through correctly without
+    # a subregister encoding on the bne rs2.
     f.write(data_movement_instruction(gr, gr_hi, 0, 0, 15, 0, 0, 0, 13, 0, mv))
     f.write(NOP)
 
@@ -477,9 +479,56 @@ def pe_0_instruction(f):
     f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 7, 8, add))
     f.write(NOP)
 
-    # Run sections C..G via magic(107). Section H lowered in ISA below.
+    # === Section C (lowered): seed load =====================================
+    # Copy the current node's hSeed → hPing and eSeed → pvE (19 paired
+    # 8-lane words). Inputs: gr[4] = nd_word_off. Outputs consumed by D..G:
+    # gr[5] = HPING_WOFF, gr[6] = HPONG_WOFF. Scratch: gr[13] = hSeed_base,
+    # gr[8] = eSeed_base. CRITICAL: do NOT write gr[10] (sync flag).
+
+    f.write(data_movement_instruction(gr, 0, 0, 0, 5, 0, 0, 0, GSSW_HPING_WOFF, 0, si))
+    f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, GSSW_HPONG_WOFF, 0, si))
+
+    f.write(data_movement_instruction(gr, gr, 0, 0, 13, 0, 0, 0, GSSW_ND_HSEED_W, 4, addi))
+    f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, GSSW_ND_ESEED_W, 4, addi))
+
+    f.write(data_movement_instruction(gr_lo, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))
+    f.write(NOP)
+
+    # Inner seed-load loop: 19 iters (j = 0..36 step 2).
+    seed_load_pc = f.pc
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 20, 0, 1, 0, 13, spm_lo(3), mvd))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 22, 0, 1, 0, 8, spm_lo(3), mvd))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(data_movement_instruction(SPM, reg, 1, 0, 5, spm_lo(3), 0, 0, 20, 0, mvd))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(data_movement_instruction(SPM, reg, 0, 0, GSSW_E_WOFF, spm_lo(3), 0, 0, 22, 0, mvd))
+    f.write(NOP)
+    # Split addi from final store (same RAW fix as stage 3b).
+    f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 3, 0, 0, 0, 2, 3, addi))
+    f.write(NOP)
+    seed_load_back_pc = f.pc
+    f.write(data_movement_instruction(
+        0, 0, 0, 0, seed_load_pc - seed_load_back_pc, 0, 0, 0,
+        GSSW_SEG_LEN * GSSW_VEC_WORDS, 3, bne))
+    f.write(NOP)
+
+    # Drain pipelines before the magic call (SPM writes have 2-cycle commit;
+    # magic-108's C++ body reads SPM buffer directly).
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+
+    # Run sections D..G via magic(108). Section H lowered in ISA below.
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))
-    f.write(write_magic(107))
+    f.write(write_magic(108))
 
     # === Section H (lowered): seed push to children =========================
     # Per-node post-column-loop step. gr[15] = next_len (DEC-5 relaxed).
@@ -634,6 +683,17 @@ def pe_0_instruction(f):
     f.patch_imm0(bge_exit_wi, loop_exit_pc - bge_exit_pc)
 
     # === Section I (lowered): final reduce over best[] into gr[15] ===
+    # Compute barrier: park compute at PC 0 (idle HALT) so any in-flight
+    # writes from section H's CPC_PUSH_MAX (or earlier regions) drain
+    # before set_8 resets reg[14:15]. Without this, stage 3c's longer
+    # pre-section-I ISA prologue shifts the cycle parity enough that
+    # a late CPC_PUSH_MAX writeback can clobber reg[14:15]'s LSB after
+    # set_8, producing over-scores in multi-node cases (ISSUE-5).
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+
     # Reset vMax pair. reg[14]=0 | reg[15]=0 via paired set_8.
     f.write(data_movement_instruction(reg, 0, 0, 0, 14, 0, 0, 0, 0, 0, set_8))
     f.write(data_movement_instruction(reg, 0, 0, 0, 15, 0, 0, 0, 0, 0, set_8))
