@@ -2941,7 +2941,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[3] = main_gr[11];                // pivot
                         s1c[163] = 0;                            // l_lo_b0 = 0
                         s1c[166] = 0;                            // h_lo_b0 = 0
-                        main_gr[4] = intv_n;
+                        main_gr[4] = s1c[149];                   // re-read intv_n
+                        //NOP                                     // s1c 1-cycle gap
                         s1c[169] = main_gr[4];                   // l_hi_b0 = intv_n
                         s1c[172] = main_gr[4];                   // h_hi_b0 = intv_n
                     m38_b0_top:
@@ -3008,7 +3009,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[3] = main_gr[11];                // pivot
                         s1c[164] = 0;
                         s1c[167] = 0;
-                        main_gr[4] = intv_n;
+                        main_gr[4] = s1c[149];                   // re-read intv_n
+                        //NOP                                     // s1c 1-cycle gap
                         s1c[170] = main_gr[4];
                         s1c[173] = main_gr[4];
                     m38_b1_top:
@@ -3071,7 +3073,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[3] = main_gr[11];                // pivot
                         s1c[165] = 0;
                         s1c[168] = 0;
-                        main_gr[4] = intv_n;
+                        main_gr[4] = s1c[149];                   // re-read intv_n
+                        //NOP                                     // s1c 1-cycle gap
                         s1c[171] = main_gr[4];
                         s1c[174] = main_gr[4];
                     m38_b2_top:
