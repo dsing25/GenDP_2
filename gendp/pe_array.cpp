@@ -2365,6 +2365,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         } else if (magic_id == 19) {
             // Sort prefix-sum: ISA-lowered, gr[7]-gr[10] for temp
             // (gr[1]-gr[4] are live across this magic from sort loop).
+            // ISA lowering: SPM load -> 3-NOP settle -> s1c store;
+            // each s1c accumulate has a //NOP 1-cycle gap between load
+            // and the gr consumer.
             {
                 int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
                 int *spm = SPM_unit->buffer;
@@ -2372,6 +2375,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 for (int b = 0; b < SORT_RADIX_BINS; b++) {
                     for (int pe = 0; pe < 4; pe++) {
                         gr[7] = spm[pe * SPM_BANK_GROUP_SIZE + SORT_META + b];
+                        //NOP                                      // SPM 1/3
+                        //NOP                                      // SPM 2/3
+                        //NOP                                      // SPM 3/3
                         s1c[16 + pe * SORT_RADIX_BINS + b] = gr[7];
                     }
                 }
@@ -2380,6 +2386,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[7] = 0;
                     for (int pe = 0; pe < 4; pe++) {
                         gr[8] = s1c[16 + pe * SORT_RADIX_BINS + b];
+                        //NOP                                      // s1c 1-cycle gap
                         gr[7] = gr[7] + gr[8];
                     }
                     s1c[b] = gr[7];
