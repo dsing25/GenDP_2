@@ -216,3 +216,10 @@ magic is already being touched for a true fix.
 for traceability; the triage set above is the authoritative plan-of-record for
 Round 1+ fixes. When a magic is fixed, the fixer updates the relevant cell in
 place to `done`/`waived` and records evidence.)
+
+### Round 1 closed cells
+
+- **R8 (m16, setup_s1c_151_branch_next_line)**: `done` — Round 1 commit.
+  Inserted `//NOP` between `gr[1] = s1c[151]` load and branch to satisfy the
+  1-cycle S1c gap. Validation: `make` clean; `mode 1 -t 56 = 15/15`;
+  `gendp-isa-reviewer` zero unwaived P0/P1 on m16.
