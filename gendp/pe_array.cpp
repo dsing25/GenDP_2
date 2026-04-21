@@ -3447,12 +3447,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 // Enumeration in .humanize/rlcr/2026-04-20_20-46-30/
                 // ac11-audit-table.md.
                 for (int pe = 0; pe < 4; pe++) {
-                    if (s1c[200+pe] == 0) continue;
+                    gr[11] = s1c[200+pe];                   // s1c nis
+                    //NOP                                    // s1c 1-cycle gap
+                    int nis = gr[11];
+                    if (nis == 0) continue;
                     int pe_spm = pe * SPM_BANK_GROUP_SIZE;
                     int first_src = pe_spm + i_off;
-                    int last_src  = pe_spm + i_off
-                        + (s1c[200+pe] - 1) * 2;
-                    if (s1c[28+pe] == 0) {
+                    int last_src  = first_src + (nis - 1) * 2;
+                    gr[11] = s1c[28+pe];                    // s1c cum
+                    //NOP                                    // s1c 1-cycle gap
+                    int cum = gr[11];
+                    if (cum == 0) {
                         gr[11] = spm[first_src];            // mv: SPM->gr
                         //NOP                                // SPM lat 1/3 (AC-11 slot-safe)
                         //NOP                                // SPM lat 2/3
@@ -3504,9 +3509,26 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
                 // Advance persistent per-PE cumulative counts AFTER
                 // the seam-write gate has sampled s1c[28+pe].
+                // ISA lowering: each s1c += s1c stages through
+                // gr[11] load + gr[1] stash + second gr[11] load +
+                // add + RAW barrier + store.
                 for (int pe = 0; pe < 4; pe++) {
-                    s1c[20+pe] += s1c[196+pe];
-                    s1c[28+pe] += s1c[200+pe];
+                    gr[11] = s1c[196+pe];
+                    //NOP                                    // s1c gap
+                    gr[1]  = gr[11];
+                    gr[11] = s1c[20+pe];
+                    //NOP                                    // s1c gap
+                    gr[11] = gr[11] + gr[1];
+                    //NOP                                    // RAW barrier
+                    s1c[20+pe] = gr[11];
+                    gr[11] = s1c[200+pe];
+                    //NOP                                    // s1c gap
+                    gr[1]  = gr[11];
+                    gr[11] = s1c[28+pe];
+                    //NOP                                    // s1c gap
+                    gr[11] = gr[11] + gr[1];
+                    //NOP                                    // RAW barrier
+                    s1c[28+pe] = gr[11];
                 }
                 gr[2] += DEDUP_TILE;
             }
