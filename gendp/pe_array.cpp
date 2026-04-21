@@ -2980,15 +2980,29 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 // 4 boundary vd values in s1c[159..162]
                 // vd at split[1], split[2], split[3] (internal boundaries)
                 // + sentinel for split[4]=n_a (use vd at n_a-1 or max)
+                // ISA lowering: s1c→gr w/ 1-cycle gap; MM→gr w/ waitLSQ+NOP
+                // staging before the s1c store. gr[11] is the CLAUDE-safe
+                // controller scratch (BL-20260417-ctrl-sync-gr).
                 for (int pe = 0; pe < 3; pe++) {
-                    int sp = s1c[155+pe]; // split[pe+1]
-                    if (sp < n_a)
-                        s1c[159+pe] = mm[db + 2*sp]; // vd at split
-                    else
+                    gr[11] = s1c[155+pe];              // s1c load sp
+                    //NOP                                // s1c 1-cycle gap
+                    if (gr[11] < n_a) {
+                        gr[11] = mm[db + 2*gr[11]];    // MM load (vd at split)
+                        // waitLSQ
+                        //NOP                            // latency settle
+                        s1c[159+pe] = gr[11];
+                    } else {
                         s1c[159+pe] = (int)0xFFFFFFFF; // sentinel
+                    }
                 }
-                s1c[162] = (n_a > 0)
-                    ? mm[db + 2*(n_a-1)] : (int)0xFFFFFFFF;
+                if (n_a > 0) {
+                    gr[11] = mm[db + 2*(n_a-1)];      // MM load (last vd)
+                    // waitLSQ
+                    //NOP                                // latency settle
+                    s1c[162] = gr[11];
+                } else {
+                    s1c[162] = (int)0xFFFFFFFF;
+                }
             }
         } else if (magic_id == 29) {
             // Tiled dedup: split search + initial tile load.
