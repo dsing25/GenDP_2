@@ -3691,32 +3691,57 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     //NOP                                    // SPM lat 3/3
                     s1c[188+pe] = gr[11];                   // mv: gr->s1c
                 }
+                // R8 fix: pre-compute per-PE nds / d_curs / nis /
+                // i_curs via gr[11] + 1-NOP staging so the chunk-
+                // outer mvdq loops below read from C++-local arrays
+                // (register-allocated in real ISA) instead of
+                // same-cycle s1c loads.
+                int nds[4], d_curs[4], nis[4], i_curs[4];
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[11] = s1c[196+pe];
+                    //NOP                                    // s1c gap
+                    nds[pe] = gr[11];
+                    gr[11] = s1c[204+pe];
+                    //NOP                                    // s1c gap
+                    d_curs[pe] = gr[11];
+                    gr[11] = s1c[200+pe];
+                    //NOP                                    // s1c gap
+                    nis[pe] = gr[11];
+                    gr[11] = s1c[208+pe];
+                    //NOP                                    // s1c gap
+                    i_curs[pe] = gr[11];
+                }
                 // Diag writeback: chunk outer, PE inner, monotonic
                 // per-PE MM cursor advances after each mvdq_copy.
                 for (int j = 0; j < max_d; j += 8) {
                     for (int pe = 0; pe < 4; pe++) {
-                        int w = s1c[196+pe] * 2;
+                        int w = nds[pe] * 2;
                         if (j >= w) continue;
                         int cnt = w - j;
                         if (cnt > 8) cnt = 8;
                         int pe_spm = pe * SPM_BANK_GROUP_SIZE;
-                        mvdq_copy(&mm[s1c[204+pe]],
+                        mvdq_copy(&mm[d_curs[pe]],
                                   &spm[pe_spm + d_off + j], cnt);
-                        s1c[204+pe] += cnt;
+                        d_curs[pe] += cnt;
                     }
                 }
                 // Intv writeback: same pattern, monotonic cursor.
                 for (int j = 0; j < max_i; j += 8) {
                     for (int pe = 0; pe < 4; pe++) {
-                        int w = s1c[200+pe] * 2;
+                        int w = nis[pe] * 2;
                         if (j >= w) continue;
                         int cnt = w - j;
                         if (cnt > 8) cnt = 8;
                         int pe_spm = pe * SPM_BANK_GROUP_SIZE;
-                        mvdq_copy(&mm[s1c[208+pe]],
+                        mvdq_copy(&mm[i_curs[pe]],
                                   &spm[pe_spm + i_off + j], cnt);
-                        s1c[208+pe] += cnt;
+                        i_curs[pe] += cnt;
                     }
+                }
+                // Write back advanced cursors to s1c.
+                for (int pe = 0; pe < 4; pe++) {
+                    s1c[204+pe] = d_curs[pe];
+                    s1c[208+pe] = i_curs[pe];
                 }
                 // Advance persistent per-PE cumulative counts AFTER
                 // the seam-write gate has sampled s1c[28+pe].
