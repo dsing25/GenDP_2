@@ -47,10 +47,11 @@ Every control-trace opcode in the simulator accepts `gr_lo[r]` /
 `pe.cpp:709-723` (src/dest side) and — after stage 3b.0's simulator
 extension — for the SPM-offset register side of `mv`/`mvd`/`mvi`/
 `mvi2`/`si` via `pe.cpp:363-372` and `pe.cpp:470-478`. Covered classes:
-data-movement (mv/mvd/mvi/mvi2/mvdq/si/set_8), arithmetic (add/sub/
-addi/subi), shifts (shifti_l/shifti_r), logical (ANDI/ORI), branches
+data-movement (mv/mvd/mvi/mvi2/si/set_8), arithmetic (add/sub/addi/
+subi), shifts (shifti_l/shifti_r), logical (ANDI/ORI), branches
 (bne/beq/bge/blt), jump, set_PC. `reg_lo`/`reg_hi` are NOT supported
-anywhere. Any ISA emission whose semantics require only the low or
+anywhere, and `mvdq` is NOT implemented on PE at all
+(`pe.cpp:2820-2825` aborts CTRL_MVDQ). Any ISA emission whose semantics require only the low or
 high 16 bits of a packed-half home (see the packed-half table below)
 MUST read the value via `gr_lo[r]` / `gr_hi[r]` rather than as the
 full 32-bit `gr[r]`. Full-width reads of a packed-half home are
@@ -204,6 +205,22 @@ CPC_FINAL_MAX    = 3   # reg[14:15] = max_epu8_pair(reg[14:15], reg[20:21])
 CPC_FINAL_TAIL   = 5   # reg[20] = max(reg[14],reg[15]); gr[15] = max_reduce
 CPC_MUL_N_78     = 8   # gr[4] = gr[1].lo * gr[11]    (section B)
 CPC_MUL_CHILD_78 = 10  # gr[8] = gr[7]    * gr[11]    (section H, reserved)
+
+
+# --- Subregister-offset encoding helpers for SPM addressing -----------------
+# When src==SPM / dest==SPM in data_movement_instruction, utils.py's
+# gr_lo / gr_hi type aliasing does not activate. The simulator's
+# resolve_reg_field decodes the top 2 bits of the 7-bit reg index:
+# idx[0..31]=CTRL_GR, idx[32..63]=CTRL_GR_LO, idx[64..95]=CTRL_GR_HI.
+# After stage 3b.0's pe::load / pe::store rs2_pos plumbing, the simulator
+# honors the selector for SPM-offset reads. These helpers encode the
+# offset-register field accordingly.
+def spm_lo(r):
+    return r + 32
+
+
+def spm_hi(r):
+    return r + 64
 
 
 # ---------------------------------------------------------------------------
@@ -469,15 +486,19 @@ def pe_0_instruction(f):
     f.write(NOP)
 
     # Loop body (3 VLIW cycles per iter). Iterates 19 times (j 0..36 step 2).
-    #   C0: mvd reg[20:21] = SPM[BEST_WOFF + gr[3]]        | NOP
+    #   C0: mvd reg[20:21] = SPM[BEST_WOFF + gr_lo[3]]     | NOP
     #   C1: set_PC CPC_FINAL_MAX                           | addi gr[3].lo += 2
     #       -> compute fires MAX_EPU8 pair on NEXT cycle using the
     #          just-delivered reg[20:21].
     #   C2: bne (gr[3].lo != SEG_LEN*VEC_WORDS) back to C0 | NOP
+    # gr_lo[3] (not gr[3]): gr[3].hi holds next_len of the last processed
+    # node when we arrive here, and full-width gr[3] would fold that into
+    # the SPM offset. ISSUE-2 (3b.0 audit block). Relies on the stage 3b.0
+    # simulator extension for SPM-offset subregister decoding.
     final_pc = f.pc
     # C0
     f.write(data_movement_instruction(
-        reg, SPM, 0, 0, 20, 0, 0, 0, GSSW_BEST_WOFF, 3, mvd))
+        reg, SPM, 0, 0, 20, 0, 0, 0, GSSW_BEST_WOFF, spm_lo(3), mvd))
     f.write(NOP)
     # C1
     f.write(data_movement_instruction(
