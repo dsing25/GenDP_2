@@ -1529,18 +1529,29 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // single predicate handles dual-stream merge and single-
             // stream drain. No separate drain path.
             //
-            // AC-7 note (Plan 2b Round 4): same cycle-accounting as
-            // M23_RD/M23_RI. Loads out_lo/out_hi (lines 1550-1551)
-            // occupy cycle N slots 0/1. The bi++ and oi++ operations
-            // bundled on line 1553 lower as cycle N+1 separator slots
-            // (independent of loaded data). The SPM stores out[oi*2]
-            // and out[oi*2+1] (lines 1552-1553) — the first consumer
-            // of out_lo/out_hi — land at cycle N+2, satisfying the
-            // 2-cycle SPM load latency. The boundary block (lines
-            // 1562-1569) reads out_lo/out_hi as pure register reads
-            // ≥2 full VLIW cycles after the cycle-N load (exhaustion
-            // checks + gpos compute + for-loop init are all
-            // intervening ops).
+            // AC-7 cycle accounting for the emit block. Each branch
+            // arm has the same shape (B-arm lines 1548..1551, A-arm
+            // lines 1553..1556):
+            //   cycle N slot 0: out_lo = spm[...]            // SPM load
+            //   cycle N slot 1: out_hi = spm[...+1]          // SPM load
+            //   cycle N+1 slot 0: out[oi*2]   = (int)out_lo  // consumer
+            //   cycle N+1 slot 1: out[oi*2+1] = (int)out_hi  // consumer
+            // Under strict 2-cycle SPM latency (shared preamble rule 6),
+            // the N+1 consumers would land in the in-flight cycle and
+            // violate AC-7. The observable behavior on HEAD is clean
+            // because the C++ simulator does not model the pipeline
+            // stall — a real-ISA lowering would need to insert 2 NOP
+            // cycles (4 NOP slots) between the SPM loads and the
+            // stores, OR reshuffle so bi++ / oi++ fall in cycle N+1
+            // and the stores move to cycle N+2. This is a lowering-
+            // level structural hazard analogous to magic-20 chain
+            // B1/B2 per the AC-11 audit, and is dispositioned as
+            // exception-approved (see ac2-reviewer-dispositions.md
+            // row 22-1 Round 2 update). Boundary block at lines
+            // 1558..1567 reads out_lo/out_hi as pure register reads
+            // many cycles later (exhaustion checks + gpos compute +
+            // for-loop init intervene), so boundary reads are AC-7
+            // legal independent of the emit-block structural note.
             uint32_t out_lo, out_hi;
             if (ai >= a_n || (bi < b_n
                     && (uint32_t)spm[bb+bi*2]
@@ -1909,6 +1920,15 @@ m23_end:    ;
             int n_diags = fspm[FIN0_META];
             int n_A = 0, n_B = 0, n_HA = 0;
             int arc_idx = 0;
+            // AC-9 edge-case probe counters (gated by GWFA_FIN0_DUMP
+            // env var). Accumulated across all magic-19 calls within a
+            // single simulator run; logged at magic-19 exit when active.
+            int dbg_nv_zero = 0;
+            int dbg_empty_bucket = 0;
+            int dbg_full_bucket = 0;
+            int dbg_absent_yes = 0;
+            int dbg_absent_no_match = 0;
+            int dbg_absent_no_full = 0;
             // GET_2BIT from interleaved SPM (Q and GS sequences)
             auto mvi2_ld = [&](int base_char_addr, int char_off) -> int {
                 int bp2 = base_char_addr + char_off;
@@ -1931,6 +1951,7 @@ m23_end:    ;
                 int lo = fspm[FIN0_ARCMETA + 2*d];
                 int hi = fspm[FIN0_ARCMETA + 2*d + 1];
                 int nv = hi - lo;
+                if (nv == 0) dbg_nv_zero++;
                 int32_t n_ext = 0;
 
                 for (int a = 0; a < nv; a++) {
@@ -1956,6 +1977,7 @@ m23_end:    ;
                         if (bkt[i] == (int)0xFFFFFFFF) {
                             bkt[i] = (int)hkey;
                             absent = 1;
+                            if (i == 0) dbg_empty_bucket++;
                             // Always record modified bucket for writeback
                             fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
                             uint32_t h2 = hkey * 2654435769U
@@ -1971,6 +1993,12 @@ m23_end:    ;
                     if (absent == -1) {
                         // Bucket full — treat as not-absent
                         absent = 0;
+                        dbg_full_bucket++;
+                        dbg_absent_no_full++;
+                    } else if (absent == 0) {
+                        dbg_absent_no_match++;
+                    } else {
+                        dbg_absent_yes++;
                     }
 
                     // Character match using precomputed ts_off
@@ -2026,6 +2054,23 @@ m23_end:    ;
             fspm[FIN0_META + 2] = n_A;
             fspm[FIN0_META + 3] = n_B;
             fspm[FIN0_META + 4] = n_HA;
+            {
+                const char *e = getenv("GWFA_FIN0_DUMP");
+                if (e && atoi(e)) {
+                    FILE *f = fopen("fin0_edges.txt", "a");
+                    if (f) {
+                        fprintf(f, "pe=%d n_diags=%d nv_zero=%d "
+                            "empty_bucket=%d full_bucket=%d "
+                            "absent_yes=%d absent_no_match=%d "
+                            "absent_no_full=%d\n",
+                            id, n_diags, dbg_nv_zero,
+                            dbg_empty_bucket, dbg_full_bucket,
+                            dbg_absent_yes, dbg_absent_no_match,
+                            dbg_absent_no_full);
+                        fclose(f);
+                    }
+                }
+            }
         m19_done: ;
         }
         (*PC)++;
