@@ -75,7 +75,7 @@ Vocabulary: `pass` | `fix-required` | `fix-preferred` | `waive:<reason>` |
 | 20 | fix-preferred (m20, count_loop) | pass | fix-preferred (m20, count_loop) | fix-preferred (m20, count_loop) | pass | done (m20 R6 natural-gap) | waive:no-mm-s2-load (m20, count_loop) | waive:no-s1c-load (m20, count_loop) | fix-preferred (m20, count_loop) | pass | pass | defer:rule12-pe-compute |
 | 21 | fix-preferred (m21, scatter_loop) | pass | fix-preferred (m21, scatter_loop) | fix-preferred (m21, scatter_loop) | pass | done (m21 R6 natural-gap) | waive:no-mm-s2-load (m21, scatter_loop) | waive:no-s1c-load (m21, scatter_loop) | fix-preferred (m21, scatter_loop) | pass | pass | defer:rule12-pe-compute |
 | 22 | fix-preferred (m22, emit_fast_path) | pass | fix-preferred (m22, entry_restore) | fix-preferred (m22, emit_fast_path) | pass | done (m22 R6 emit-path) | waive:no-mm-s2-load (m22, emit_fast_path) | waive:no-s1c-load (m22, emit_fast_path) | waive:no-bulk-transfer (m22, merge_emit) | pass | pass | defer:rule12-pe-compute |
-| 23 | fix-required (m23, state_machine) | pass | fix-required (m23, resume_restore) | fix-required (m23, state_machine) | pass | fix-required (m23, resume_restore) | waive:no-mm-s2-load (m23, state_machine) | waive:no-s1c-load (m23, state_machine) | fix-preferred (m23, intv_flush) | pass | fix-required (m23, M23_* macros) | defer:rule12-pe-compute |
+| 23 | fix-preferred (m23, state_machine) | pass | fix-preferred (m23, resume_restore) | fix-preferred (m23, state_machine) | pass | done (m23 R6 natural-gap + in-file disposition) | waive:no-mm-s2-load (m23, state_machine) | waive:no-s1c-load (m23, state_machine) | fix-preferred (m23, intv_flush) | pass | fix-preferred (m23, M23_* macros) | defer:rule12-pe-compute |
 
 ### PE citations
 
