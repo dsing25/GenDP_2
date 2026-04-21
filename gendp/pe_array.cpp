@@ -427,6 +427,15 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     // diag (2w contiguous) and arcmeta (2w contiguous) use mvdq_copy for
     // bulk bandwidth; arcs remain scalar because the 3-word dst stride
     // (vs 2-word src stride) prevents pure mvdq.
+    // F0B_ASSIGN: copy diag+arcmeta+arcs for diag index 'di' into
+    // PE pe_idx's slice of the FIN0 SPM. gr[11] is the persistent
+    // arc_ptr maintained across F0B_ASSIGN invocations within a
+    // single m20 call; the stash/advance at lines 441/449 preserves
+    // that invariant. R8 split: the 'gr[10] = s1c[A+1] - s1c[A]'
+    // pattern is split into two gr[4]-staged loads (gr[4] is free
+    // here; the f0b_rr entry sets gr[4] only via the mvdq address
+    // path and does not read it). The //NOP annotations in the
+    // macro body expand into the normal 1-cycle s1c gaps.
     #define F0B_ASSIGN(di, pe_idx) do { \
         gr[5] = s1c[8 + (pe_idx)]; \
         gr[6] = s1c[(pe_idx)]; \
@@ -436,7 +445,14 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
                   &s1c[ARC_META_BASE+gr[9]], 2); \
         mvdq_copy(&spm[gr[5]+FIN0_DIAGS+gr[7]], \
                   &s1c[32+gr[9]], 2); \
-        gr[10] = s1c[ARC_META_BASE+gr[9]+1] - s1c[ARC_META_BASE+gr[9]]; \
+        /* R8: stage arcmeta lo/hi reads via gr[4]; gr[11] already \
+           holds arc_ptr and must not be clobbered until line 449. */ \
+        gr[4] = s1c[ARC_META_BASE+gr[9]]; \
+        /*NOP*/                                             /* s1c gap */ \
+        gr[10] = s1c[ARC_META_BASE+gr[9]+1]; \
+        /*NOP*/                                             /* s1c gap */ \
+        gr[10] = gr[10] - gr[4];                            /* nv */ \
+        /*NOP*/                                             /* RAW barrier */ \
         gr[8] = s1c[4 + (pe_idx)]; \
         gr[1] = gr[11]; \
         for (int a_ = 0; a_ < gr[10]; a_++) { \
@@ -455,7 +471,13 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     f0b_rr:
         if (cursor >= total_fin0) goto f0b_rr_done;
         gr[9] = cursor + cursor;
-        gr[10] = s1c[ARC_META_BASE + gr[9]+1] - s1c[ARC_META_BASE + gr[9]];
+        // R8: split 'gr[10] = s1c[A+1] - s1c[A]' via gr[4] stash.
+        gr[4] = s1c[ARC_META_BASE + gr[9]];
+        //NOP                                    // s1c 1-cycle gap
+        gr[10] = s1c[ARC_META_BASE + gr[9]+1];
+        //NOP                                    // s1c 1-cycle gap
+        gr[10] = gr[10] - gr[4];
+        //NOP                                    // RAW barrier
         if (s1c[pe_rr] >= FIN0_N_MAX_DIAGS) goto f0b_rr_break;
         gr[7] = s1c[4 + pe_rr] + gr[10];
         if (gr[7] > FIN0_N_MAX_ARCS) goto f0b_rr_break;
@@ -474,7 +496,13 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     f0b_mv:
         if (cursor >= total_fin0) goto f0b_mv_next;
         gr[9] = cursor + cursor;
-        gr[10] = s1c[ARC_META_BASE + gr[9]+1] - s1c[ARC_META_BASE + gr[9]];
+        // R8: split 'gr[10] = s1c[A+1] - s1c[A]' via gr[4] stash.
+        gr[4] = s1c[ARC_META_BASE + gr[9]];
+        //NOP                                    // s1c 1-cycle gap
+        gr[10] = s1c[ARC_META_BASE + gr[9]+1];
+        //NOP                                    // s1c 1-cycle gap
+        gr[10] = gr[10] - gr[4];
+        //NOP                                    // RAW barrier
         if (s1c[pe] >= FIN0_N_MAX_DIAGS) goto f0b_mv_next;
         gr[7] = s1c[4 + pe] + gr[10];
         if (gr[7] > FIN0_N_MAX_ARCS) goto f0b_mv_next;
