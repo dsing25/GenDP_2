@@ -2925,17 +2925,27 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int *spm = SPM_unit->buffer;
                 int out_off = (magic_mask & 1) ? MERGE_OUT1 : MERGE_OUT0;
                 int mm_out = gr[4];
-                // Pre-compute per-PE output info
+                // Pre-compute per-PE output info.
+                // ISA lowering: route SPM→gr[11] with 3-NOP settle and
+                // s1c→gr[11] with 1-NOP gap (BL-20260417-ctrl-sync-gr).
                 int out_ns[4], mm_dsts[4], spm_srcs[4];
                 int max_words = 0, cum = 0;
                 for (int pe = 0; pe < 4; pe++) {
                     int pe_spm = pe * SPM_BANK_GROUP_SIZE;
-                    out_ns[pe] = spm[pe_spm + MERGE_META + 4];
-                    mm_dsts[pe] = mm_out + (cum + s1c[4+pe]) * 2;
+                    gr[11] = spm[pe_spm + MERGE_META + 4];   // SPM load out_n
+                    //NOP                                     // SPM lat 1/3
+                    //NOP                                     // SPM lat 2/3
+                    //NOP                                     // SPM lat 3/3
+                    out_ns[pe] = gr[11];
                     spm_srcs[pe] = pe_spm + out_off;
+                    gr[11] = s1c[4+pe];                      // s1c load
+                    //NOP                                     // s1c 1-cycle gap
+                    mm_dsts[pe] = mm_out + (cum + gr[11]) * 2;
                     int w = out_ns[pe] * 2;
                     if (w > max_words) max_words = w;
-                    cum += s1c[pe];
+                    gr[11] = s1c[pe];                        // s1c load for cum
+                    //NOP                                     // s1c 1-cycle gap
+                    cum += gr[11];
                 }
                 // Interleaved mvdq: chunk outer, PE inner
                 for (int j = 0; j < max_words; j += 8) {
