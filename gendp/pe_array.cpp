@@ -3184,92 +3184,136 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     int a_sp[5], b_sp[5];
                     a_sp[0] = 0; b_sp[0] = 0;
                     a_sp[4] = n_phase1; b_sp[4] = n_tail;
-                    // Interleaved binary search: 3 searches (pe=1,2,3)
-                    // one step per PE per round with waitLSQ between
-                    int bs_lo[3], bs_hi[3], bs_target[3];
+                    // AC-5/AC-9 architectural state migration (Round 12):
+                    // bs_lo → s1c[0..2], bs_hi → s1c[3..5],
+                    // bs_target → s1c[6..8]. These s1c slots are
+                    // overwritten at end of m28 by per-PE tile metadata
+                    // writes (s1c[pe]=pt, s1c[4+pe]=0, s1c[8+pe]=src_a).
+                    // Scratch use during bs is safe because consumer of
+                    // pt/na/src_a happens AFTER the per-PE writes.
+                    // Pivot operands compare via gr[3] (b_val stash) vs
+                    // gr[11] (a_val live). mid in gr[5]; bi2 in gr[4].
                     for (int p = 0; p < 3; p++) {
-                        bs_target[p] = (p+1) * nape;
-                        if (bs_target[p] > n_total) bs_target[p] = n_total;
-                        bs_lo[p] = bs_target[p] - n_tail;
-                        if (bs_lo[p] < 0) bs_lo[p] = 0;
-                        bs_hi[p] = bs_target[p];
-                        if (bs_hi[p] > n_phase1) bs_hi[p] = n_phase1;
+                        int tgt = (p+1) * nape;
+                        if (tgt > n_total) tgt = n_total;
+                        int lo_ = tgt - n_tail;
+                        if (lo_ < 0) lo_ = 0;
+                        int hi_ = tgt;
+                        if (hi_ > n_phase1) hi_ = n_phase1;
+                        gr[4] = tgt;
+                        s1c[6 + p] = gr[4];                      // bs_target[p]
+                        gr[4] = lo_;
+                        s1c[0 + p] = gr[4];                      // bs_lo[p]
+                        gr[4] = hi_;
+                        s1c[3 + p] = gr[4];                      // bs_hi[p]
                     }
-                    // R4 fix: replace 'while (any_active) ... for p=0..2'
-                    // with label/goto outer loop + macro-unrolled per-p
-                    // step bodies. Each step's MM reads stage through
-                    // gr[11] with '// waitLSQ' + //NOP separation
-                    // before the compare (R7).
                 m28_bs_top:
-                    if (bs_lo[0] >= bs_hi[0]
-                        && bs_lo[1] >= bs_hi[1]
-                        && bs_lo[2] >= bs_hi[2]) goto m28_bs_done;
-                    // p = 0 step (compile-time-bounded unroll)
-                    if (bs_lo[0] < bs_hi[0]) {
-                        int mid = (bs_lo[0] + bs_hi[0]) / 2;
-                        int bi2 = bs_target[0] - mid;
-                        gr[11] = (bi2 > 0)
-                            ? mm[bbase + (bi2-1)*2] : 0;
-                        // waitLSQ
-                        //NOP                                    // LSQ settle
-                        gr[3] = gr[11];                          // stash b_val
-                        gr[11] = (mid < n_phase1)
-                            ? mm[abase + mid*2] : (int)0xFFFFFFFF;
-                        // waitLSQ
-                        //NOP                                    // LSQ settle
-                        if (bi2 > 0 && mid < n_phase1
-                            && (uint32_t)gr[3] > (uint32_t)gr[11])
-                            bs_lo[0] = mid + 1;
-                        else bs_hi[0] = mid;
-                    }
+                    // Convergence check: if all lo >= hi, done.
+                    gr[11] = s1c[0]; //NOP
+                    gr[4]  = s1c[3]; //NOP
+                    if (gr[11] < gr[4]) goto m28_bs_step_any;
+                    gr[11] = s1c[1]; //NOP
+                    gr[4]  = s1c[4]; //NOP
+                    if (gr[11] < gr[4]) goto m28_bs_step_any;
+                    gr[11] = s1c[2]; //NOP
+                    gr[4]  = s1c[5]; //NOP
+                    if (gr[11] < gr[4]) goto m28_bs_step_any;
+                    goto m28_bs_done;
+                m28_bs_step_any:
+                    // p = 0 step: load lo, hi; if converged skip
+                    gr[11] = s1c[0]; //NOP  // bs_lo[0]
+                    gr[4]  = s1c[3]; //NOP  // bs_hi[0]
+                    if (gr[11] >= gr[4]) goto m28_bs_step1;
+                    gr[5] = gr[11] + gr[4];  //NOP
+                    gr[5] = gr[5] / 2;                           // mid in gr[5]
+                    gr[11] = s1c[6]; //NOP   // bs_target[0]
+                    gr[4]  = gr[11] - gr[5];                    // bi2 in gr[4]
+                    gr[11] = (gr[4] > 0) ? mm[bbase + (gr[4]-1)*2] : 0;
+                    // waitLSQ
+                    //NOP                                        // LSQ settle
+                    gr[3] = gr[11];                              // stash b_val
+                    gr[11] = (gr[5] < n_phase1)
+                        ? mm[abase + gr[5]*2] : (int)0xFFFFFFFF;
+                    // waitLSQ
+                    //NOP                                        // LSQ settle
+                    // Decide update: lo = mid+1 iff bi2>0 && mid<n_phase1 && b_val > a_val
+                    if (gr[4] <= 0) goto m28_bs_p0_hi;
+                    if (gr[5] >= n_phase1) goto m28_bs_p0_hi;
+                    if ((uint32_t)gr[3] <= (uint32_t)gr[11]) goto m28_bs_p0_hi;
+                    // bs_lo[0] = mid + 1
+                    gr[4] = gr[5] + 1; //NOP
+                    s1c[0] = gr[4];
+                    goto m28_bs_step1;
+                m28_bs_p0_hi:
+                    s1c[3] = gr[5];                              // bs_hi[0] = mid
+                m28_bs_step1:
                     // p = 1 step
-                    if (bs_lo[1] < bs_hi[1]) {
-                        int mid = (bs_lo[1] + bs_hi[1]) / 2;
-                        int bi2 = bs_target[1] - mid;
-                        gr[11] = (bi2 > 0)
-                            ? mm[bbase + (bi2-1)*2] : 0;
-                        // waitLSQ
-                        //NOP                                    // LSQ settle
-                        gr[3] = gr[11];                          // stash b_val
-                        gr[11] = (mid < n_phase1)
-                            ? mm[abase + mid*2] : (int)0xFFFFFFFF;
-                        // waitLSQ
-                        //NOP                                    // LSQ settle
-                        if (bi2 > 0 && mid < n_phase1
-                            && (uint32_t)gr[3] > (uint32_t)gr[11])
-                            bs_lo[1] = mid + 1;
-                        else bs_hi[1] = mid;
-                    }
+                    gr[11] = s1c[1]; //NOP
+                    gr[4]  = s1c[4]; //NOP
+                    if (gr[11] >= gr[4]) goto m28_bs_step2;
+                    gr[5] = gr[11] + gr[4]; //NOP
+                    gr[5] = gr[5] / 2;
+                    gr[11] = s1c[7]; //NOP
+                    gr[4]  = gr[11] - gr[5];
+                    gr[11] = (gr[4] > 0) ? mm[bbase + (gr[4]-1)*2] : 0;
+                    // waitLSQ
+                    //NOP
+                    gr[3] = gr[11];
+                    gr[11] = (gr[5] < n_phase1)
+                        ? mm[abase + gr[5]*2] : (int)0xFFFFFFFF;
+                    // waitLSQ
+                    //NOP
+                    if (gr[4] <= 0) goto m28_bs_p1_hi;
+                    if (gr[5] >= n_phase1) goto m28_bs_p1_hi;
+                    if ((uint32_t)gr[3] <= (uint32_t)gr[11]) goto m28_bs_p1_hi;
+                    gr[4] = gr[5] + 1; //NOP
+                    s1c[1] = gr[4];
+                    goto m28_bs_step2;
+                m28_bs_p1_hi:
+                    s1c[4] = gr[5];
+                m28_bs_step2:
                     // p = 2 step
-                    if (bs_lo[2] < bs_hi[2]) {
-                        int mid = (bs_lo[2] + bs_hi[2]) / 2;
-                        int bi2 = bs_target[2] - mid;
-                        gr[11] = (bi2 > 0)
-                            ? mm[bbase + (bi2-1)*2] : 0;
-                        // waitLSQ
-                        //NOP                                    // LSQ settle
-                        gr[3] = gr[11];                          // stash b_val
-                        gr[11] = (mid < n_phase1)
-                            ? mm[abase + mid*2] : (int)0xFFFFFFFF;
-                        // waitLSQ
-                        //NOP                                    // LSQ settle
-                        if (bi2 > 0 && mid < n_phase1
-                            && (uint32_t)gr[3] > (uint32_t)gr[11])
-                            bs_lo[2] = mid + 1;
-                        else bs_hi[2] = mid;
-                    }
+                    gr[11] = s1c[2]; //NOP
+                    gr[4]  = s1c[5]; //NOP
+                    if (gr[11] >= gr[4]) goto m28_bs_step_end;
+                    gr[5] = gr[11] + gr[4]; //NOP
+                    gr[5] = gr[5] / 2;
+                    gr[11] = s1c[8]; //NOP
+                    gr[4]  = gr[11] - gr[5];
+                    gr[11] = (gr[4] > 0) ? mm[bbase + (gr[4]-1)*2] : 0;
+                    // waitLSQ
+                    //NOP
+                    gr[3] = gr[11];
+                    gr[11] = (gr[5] < n_phase1)
+                        ? mm[abase + gr[5]*2] : (int)0xFFFFFFFF;
+                    // waitLSQ
+                    //NOP
+                    if (gr[4] <= 0) goto m28_bs_p2_hi;
+                    if (gr[5] >= n_phase1) goto m28_bs_p2_hi;
+                    if ((uint32_t)gr[3] <= (uint32_t)gr[11]) goto m28_bs_p2_hi;
+                    gr[4] = gr[5] + 1; //NOP
+                    s1c[2] = gr[4];
+                    goto m28_bs_step_end;
+                m28_bs_p2_hi:
+                    s1c[5] = gr[5];
+                m28_bs_step_end:
                     goto m28_bs_top;
-                m28_bs_done: ;
+                m28_bs_done:
+                    // Read bs_lo/bs_target from s1c into a_sp/b_sp locals.
+                    // Since s1c[0..8] will be overwritten later by per-PE
+                    // tile metadata, stage these reads through gr now.
                     for (int p = 0; p < 3; p++) {
-                        a_sp[p+1] = bs_lo[p];
-                        b_sp[p+1] = bs_target[p] - bs_lo[p];
+                        gr[11] = s1c[0 + p]; //NOP  // bs_lo[p]
+                        a_sp[p+1] = gr[11];
+                        gr[11] = s1c[6 + p]; //NOP  // bs_target[p]
+                        b_sp[p+1] = gr[11] - a_sp[p+1];
                         if (a_sp[p+1] < a_sp[p]) {
                             a_sp[p+1] = a_sp[p];
-                            b_sp[p+1] = bs_target[p] - a_sp[p+1];
+                            b_sp[p+1] = gr[11] - a_sp[p+1];  // tgt - lo
                         }
                         if (b_sp[p+1] < b_sp[p]) {
                             b_sp[p+1] = b_sp[p];
-                            a_sp[p+1] = bs_target[p] - b_sp[p+1];
+                            a_sp[p+1] = gr[11] - b_sp[p+1];  // tgt - hi
                         }
                     }
                     // Pre-compute tile sizes for mvdq interleaved load
