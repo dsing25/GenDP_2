@@ -519,7 +519,12 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
             //NOP                                        // SPM lat 3/3
             gr[9] = (unsigned)gr[9] >> 16;               // shifti_r: w (zero-ext)
             //NOP
-            spm[gr[8]+2] = s2->buffer[gr[14] + gr[9]];  // mv: ts_off (S2)
+            // R7: stage S2 load through gr[13] with waitLSQ+NOP before
+            // the SPM store so the ts_off value has settled.
+            gr[13] = s2->buffer[gr[14] + gr[9]];        // S2 load
+            // waitLSQ
+            //NOP                                        // LSQ settle
+            spm[gr[8]+2] = gr[13];                      // mv: ts_off
         }
         gr[11] = gr[11] + 1;                            // addi
         goto f0b_p2;
@@ -596,10 +601,12 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
                 //NOP
                 gr[9] = gr[7] + FIN0_HA + gr[9];        // add: ha addr
                 int ms = ha_off + (int)(b * 4);
-                spm[gr[9]]   = mm[ms];                   // mvd: bucket
-                spm[gr[9]+1] = mm[ms+1];
-                spm[gr[9]+2] = mm[ms+2];
-                spm[gr[9]+3] = mm[ms+3];
+                // R7/R9: use mvdq_copy for contiguous 4-word HA
+                // bucket MM->SPM transfer; waitLSQ + 2-NOP settle.
+                mvdq_copy(&spm[gr[9]], &mm[ms], 4);
+                // waitLSQ
+                //NOP                                    // LSQ settle
+                //NOP
                 s1c[12 + pe] = gr[8] + 1;               // addi: pai++
             }
             gr[1] = gr[1] + 1;                          // addi
