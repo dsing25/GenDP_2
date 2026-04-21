@@ -1930,7 +1930,8 @@ m23_end:    ;
             fspm[FIN0_META + 4] = n_HA;
         m19_done: ;
         } else if (magic_id == 101 || magic_id == 103
-                || magic_id == 104 || magic_id == 106) {
+                || magic_id == 104 || magic_id == 106
+                || magic_id == 107) {
             // GSSW kernel — register-mapped ISA-like form.
             // Staged-lowering variants:
             //   magic 101 = full kernel (sections A..I)
@@ -2407,6 +2408,7 @@ m23_end:    ;
             // Free regs after col loop: gr[2], gr[6], gr[7], gr[8].
             // Use: gr[2]=c, gr[6]=cd_word_off, gr[7,8]=scratch.
 
+          if (magic_id != 107) {
             gr.st(12, spm[gr.at(4) + 1]);                        // [next_off lo | next_len hi]
             gr.st(11, GSSW_ND_WORDS);                                       // re-init 76 (col loop clobbered gr[11])
 
@@ -2495,11 +2497,12 @@ m23_end:    ;
 
             gr.st(2, gr.at(2) + 1);                              // c++
             if (gr.at(2) < gr.at(3, CTRL_GR_HI)) goto m_101_push;
-        m_101_push_done:
+        m_101_push_done: ;
+          }  // end if (magic_id != 107) — section H skipped for magic 107
 
-            // n++, back to outer loop.  Skipped for magic 106 which
-            // delegates the outer loop to the ISA caller.
-            if (magic_id != 106) {
+            // n++, back to outer loop.  Skipped for magic 106 and 107 which
+            // delegate the outer loop to the ISA caller.
+            if (magic_id != 106 && magic_id != 107) {
                 gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO);
                 goto m_101_node;
             }

@@ -3,11 +3,12 @@
 GSSW instruction generator.
 
 Magic-101 -> ISA lowering. Section A (prologue/init), section B (outer
-node loop head + per-node metadata load), and section I (final reduce)
-are emitted as real ISA on PE 0. The remaining sections (C, D, E, F, G,
-H, lazy-F) are delegated to a C++ mini-magic in pe.cpp (currently
-magic_id 106) that assumes sections A+B have already run and the ISA
-outer loop advances n between nodes.
+node loop head + per-node metadata load), section H (seed push to
+children), and section I (final reduce) are emitted as real ISA on
+PE 0. The remaining sections (C, D, E, F, G, lazy-F) are delegated
+to a C++ mini-magic in pe.cpp (currently magic_id 107) that assumes
+sections A+B have already run for the current node and the ISA outer
+loop advances n between nodes.
 
 Traces produced:
   instructions/gssw/main_instruction.txt    (controller)
@@ -22,9 +23,10 @@ Controller trace:
 
 PE 0 trace (see pe_0_instruction()):
   PC 0        : halt | halt   (wait for controller)
-  PC 1..K     : lowered sections A, B, outer-loop head + tail, I
-  PC ...      : magic(106) between section B tail and section G tail
-                (runs C..H for one node)
+  PC 1..K     : lowered sections A, B, outer-loop head, H, outer-loop
+                tail, I
+  PC ...      : magic(107) between section B tail and section H
+                (runs C..G for one node; H and outer n++ run in ISA)
   PC ...      : magic(102) - print score
   PC ...      : si gr[10]=1 - signal done
   PC ...      : halt | halt
@@ -107,13 +109,12 @@ packed halves are legal either via subregister operands or via prior
     F (3e best-copy), H (3b push-j), lazy-F (3g), and section I
     (already in trunk).
 
-Open deviation (ISSUE-2). Section I's final-reduce emission at
-`pe_0_instruction:347-348` currently reads `gr[3]` at full width.
-This happens to work on the 200-case regression because the last
-processed node typically has next_len == 0. Stage 3b (section H
-lowering) must switch section I's SPM-offset read to `gr_lo[3]` as
-part of the same commit to avoid surfacing the latent hazard on
-1000-case × 56-thread regression.
+Section I contract update (landed round 1 commit `c02430b`). Section
+I's final-reduce mvd now reads `gr_lo[3]` (via the `spm_lo(3)`
+helper) so it is robust to a non-zero `gr[3].hi = next_len` of the
+last processed node. Every 16-bit read of a packed-half home in
+stages 3b-3g follows the same pattern via `spm_lo` / `spm_hi` or
+via `gr_lo` / `gr_hi` src-aliasing in non-SPM ops.
 
 Stall rules (AC-1, DEC-7, rederived against current trunk).
   Cycle costs below are relative to instruction issue. Source cites
@@ -172,8 +173,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils import InstructionWriter, write_magic, \
     data_movement_instruction, compute_instruction
 from opcodes import (gr, gr_hi, gr_lo, reg, SPM, halt, none, set_PC,
-                     bne, bge, jump, si, mv, mvd, addi, shifti_l,
-                     shifti_r, set_8, add,
+                     bne, beq, bge, blt, jump, si, mv, mvd, addi,
+                     shifti_l, shifti_r, ANDI, set_8, add,
                      MULTIPLICATION, HALT, INVALID, COPY,
                      MAX_EPU8, MAX_REDUCE)
 
@@ -193,6 +194,8 @@ GSSW_BEST_WOFF   = GSSW_F_WOFF + GSSW_SEG_LEN * 2 + GSSW_SPM_PAD // 4  # 304
 GSSW_META_WOFF   = GSSW_BEST_WOFF + GSSW_SEG_LEN * 2                   # 342
 GSSW_NODES_WOFF  = GSSW_META_WOFF + 4                                   # 346
 GSSW_ND_WORDS    = 2 + 2 * GSSW_SEG_LEN * GSSW_VEC_WORDS               # 78
+GSSW_ND_HSEED_W  = 2                                                    # hSeed within nd
+GSSW_ND_ESEED_W  = 2 + GSSW_SEG_LEN * GSSW_VEC_WORDS                    # 40
 # Magic 101 hoists gr[11] = GSSW_ND_WORDS (78) as the multiplier for the
 # per-node base computation. The inline comment in pe.cpp says "76" but
 # the actual value written is 78; follow the code, not the comment.
@@ -204,7 +207,8 @@ CPC_MUL          = 1   # gr[13] = gr[1].hi * gr[11]   (section A)
 CPC_FINAL_MAX    = 3   # reg[14:15] = max_epu8_pair(reg[14:15], reg[20:21])
 CPC_FINAL_TAIL   = 5   # reg[20] = max(reg[14],reg[15]); gr[15] = max_reduce
 CPC_MUL_N_78     = 8   # gr[4] = gr[1].lo * gr[11]    (section B)
-CPC_MUL_CHILD_78 = 10  # gr[8] = gr[7]    * gr[11]    (section H, reserved)
+CPC_MUL_CHILD_78 = 10  # gr[8] = gr[7]    * gr[11]    (section H)
+CPC_PUSH_MAX     = 12  # reg[20:21] = max_epu8_pair(reg[20:21], reg[22:23])
 
 
 # --- Subregister-offset encoding helpers for SPM addressing -----------------
@@ -251,6 +255,13 @@ def gssw_compute_instructions():
       PC 5 : CPC_FINAL_TAIL[0] reg[20] = max_epu8(reg[14], reg[15])  (8->4)
       PC 6 : CPC_FINAL_TAIL[1] gr[15]  = max_reduce(reg[20])
       PC 7 : halt tail
+      PC 8 : CPC_MUL_N_78      gr[4]  = gr[1].lo * gr[11]
+      PC 9 : halt tail
+      PC 10: CPC_MUL_CHILD_78  gr[8]  = gr[7]    * gr[11]
+      PC 11: halt tail
+      PC 12: CPC_PUSH_MAX[0]   reg[20] = max_epu8(reg[20], reg[22])
+      PC 13: CPC_PUSH_MAX[1]   reg[21] = max_epu8(reg[21], reg[23])
+      PC 14: halt tail
     """
     f = InstructionWriter("instructions/gssw/compute_instruction.txt")
     # PC 0 — idle.
@@ -286,7 +297,14 @@ def gssw_compute_instructions():
     # gr[7] = 32+7 = 39, gr[11] = 43, output gr[8] = 32+8 = 40.
     f.write(compute_instruction(MULTIPLICATION, HALT, HALT, 39, 43, 0, 0, 0, 0, COMP_GR + 8))
     f.write(compute_instruction(HALT, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
-    # PC 11 — halt tail.
+    # PC 11 — halt tail for CPC_MUL_CHILD_78.
+    for ins in _chalt(): f.write(ins)
+    # PC 12 — CPC_PUSH_MAX : paired MAX_EPU8 on reg[20:21] vs reg[22:23].
+    # Matches magic 101 section H's inner push_j max(hSeed, hPing) and
+    # max(eSeed, pvE). slot 0 writes reg[20], slot 1 writes reg[21].
+    f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 20, 22, 0, 0, 0, 0, 20))
+    f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 21, 23, 0, 0, 0, 0, 21))
+    # PC 13 — halt tail for CPC_PUSH_MAX.
     for ins in _chalt(): f.write(ins)
     f.close()
 
@@ -458,6 +476,11 @@ def pe_0_instruction(f):
 
     # Run sections C..H via magic(106). Pair with si gr[10]=0 in slot 0
     # (same reason as the stage-2 magic(104) pairing).
+    # TODO (stage 3b): replace with magic(107) + section-H ISA emission.
+    # An ISA emission attempt in round 2 issued a bad SPM address
+    # (addr=2782222 in the second outer push-c iter) and was reverted.
+    # The simulator side (pe.cpp magic_id==107 guard) is in place, but the
+    # generator still uses magic(106) to keep the 200-case regression clean.
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))
     f.write(write_magic(106))
 
