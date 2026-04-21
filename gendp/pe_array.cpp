@@ -2667,12 +2667,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         gr[11] = (bi2 > 0) ? mm[bbase+(bi2-1)*2] : 0;
                         // waitLSQ
                         //NOP                                    // LSQ settle
-                        uint32_t bv = (uint32_t)gr[11];
+                        gr[3] = gr[11];                          // stash bv
                         gr[11] = (mid < n_new) ? mm[abase+mid*2] : (int)0xFFFFFFFF;
                         // waitLSQ
                         //NOP                                    // LSQ settle
-                        uint32_t av = (uint32_t)gr[11];
-                        if (bi2 > 0 && mid < n_new && bv > av) bs_lo[0] = mid+1;
+                        if (bi2 > 0 && mid < n_new
+                            && (uint32_t)gr[3] > (uint32_t)gr[11])
+                            bs_lo[0] = mid+1;
                         else bs_hi[0] = mid;
                     }
                     // p = 1 step
@@ -2682,12 +2683,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         gr[11] = (bi2 > 0) ? mm[bbase+(bi2-1)*2] : 0;
                         // waitLSQ
                         //NOP                                    // LSQ settle
-                        uint32_t bv = (uint32_t)gr[11];
+                        gr[3] = gr[11];                          // stash bv
                         gr[11] = (mid < n_new) ? mm[abase+mid*2] : (int)0xFFFFFFFF;
                         // waitLSQ
                         //NOP                                    // LSQ settle
-                        uint32_t av = (uint32_t)gr[11];
-                        if (bi2 > 0 && mid < n_new && bv > av) bs_lo[1] = mid+1;
+                        if (bi2 > 0 && mid < n_new
+                            && (uint32_t)gr[3] > (uint32_t)gr[11])
+                            bs_lo[1] = mid+1;
                         else bs_hi[1] = mid;
                     }
                     // p = 2 step
@@ -2697,12 +2699,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         gr[11] = (bi2 > 0) ? mm[bbase+(bi2-1)*2] : 0;
                         // waitLSQ
                         //NOP                                    // LSQ settle
-                        uint32_t bv = (uint32_t)gr[11];
+                        gr[3] = gr[11];                          // stash bv
                         gr[11] = (mid < n_new) ? mm[abase+mid*2] : (int)0xFFFFFFFF;
                         // waitLSQ
                         //NOP                                    // LSQ settle
-                        uint32_t av = (uint32_t)gr[11];
-                        if (bi2 > 0 && mid < n_new && bv > av) bs_lo[2] = mid+1;
+                        if (bi2 > 0 && mid < n_new
+                            && (uint32_t)gr[3] > (uint32_t)gr[11])
+                            bs_lo[2] = mid+1;
                         else bs_hi[2] = mid;
                     }
                     goto m37_bs_top;
@@ -2876,7 +2879,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     {
                         main_gr[11] = s1c[159];
                         //NOP                                    // s1c 1-cycle gap
-                        uint32_t vd_b0 = (uint32_t)main_gr[11];
+                        main_gr[3] = main_gr[11];                // stash vd pivot
                         int h_lo_b0 = 0, h_hi_b0 = intv_n;
                         int l_lo_b0 = 0, l_hi_b0 = intv_n;
                     m38_b0_top:
@@ -2888,7 +2891,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             main_gr[11] = mm[ib + 2*mid];       // MM load
                             // waitLSQ
                             //NOP                                // LSQ settle
-                            if ((uint32_t)main_gr[11] < vd_b0) h_lo_b0 = mid + 1;
+                            if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3]) h_lo_b0 = mid + 1;
                             else h_hi_b0 = mid;
                         }
                     m38_b0_skip_h:
@@ -2898,7 +2901,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             main_gr[11] = mm[ib + 2*mid + 1];   // MM load
                             // waitLSQ
                             //NOP                                // LSQ settle
-                            if ((uint32_t)main_gr[11] <= vd_b0) l_lo_b0 = mid + 1;
+                            if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3]) l_lo_b0 = mid + 1;
                             else l_hi_b0 = mid;
                         }
                         goto m38_b0_top;
@@ -2910,7 +2913,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     {
                         main_gr[11] = s1c[160];
                         //NOP                                    // s1c 1-cycle gap
-                        uint32_t vd_b1 = (uint32_t)main_gr[11];
+                        main_gr[3] = main_gr[11];                // stash vd pivot
                         int h_lo_b1 = 0, h_hi_b1 = intv_n;
                         int l_lo_b1 = 0, l_hi_b1 = intv_n;
                     m38_b1_top:
@@ -2922,7 +2925,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             main_gr[11] = mm[ib + 2*mid];       // MM load
                             // waitLSQ
                             //NOP                                // LSQ settle
-                            if ((uint32_t)main_gr[11] < vd_b1) h_lo_b1 = mid + 1;
+                            if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3]) h_lo_b1 = mid + 1;
                             else h_hi_b1 = mid;
                         }
                     m38_b1_skip_h:
@@ -2932,7 +2935,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             main_gr[11] = mm[ib + 2*mid + 1];   // MM load
                             // waitLSQ
                             //NOP                                // LSQ settle
-                            if ((uint32_t)main_gr[11] <= vd_b1) l_lo_b1 = mid + 1;
+                            if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3]) l_lo_b1 = mid + 1;
                             else l_hi_b1 = mid;
                         }
                         goto m38_b1_top;
@@ -2944,7 +2947,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     {
                         main_gr[11] = s1c[161];
                         //NOP                                    // s1c 1-cycle gap
-                        uint32_t vd_b2 = (uint32_t)main_gr[11];
+                        main_gr[3] = main_gr[11];                // stash vd pivot
                         int h_lo_b2 = 0, h_hi_b2 = intv_n;
                         int l_lo_b2 = 0, l_hi_b2 = intv_n;
                     m38_b2_top:
@@ -2956,7 +2959,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             main_gr[11] = mm[ib + 2*mid];       // MM load
                             // waitLSQ
                             //NOP                                // LSQ settle
-                            if ((uint32_t)main_gr[11] < vd_b2) h_lo_b2 = mid + 1;
+                            if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3]) h_lo_b2 = mid + 1;
                             else h_hi_b2 = mid;
                         }
                     m38_b2_skip_h:
@@ -2966,7 +2969,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             main_gr[11] = mm[ib + 2*mid + 1];   // MM load
                             // waitLSQ
                             //NOP                                // LSQ settle
-                            if ((uint32_t)main_gr[11] <= vd_b2) l_lo_b2 = mid + 1;
+                            if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3]) l_lo_b2 = mid + 1;
                             else l_hi_b2 = mid;
                         }
                         goto m38_b2_top;
@@ -3057,14 +3060,14 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             ? mm[bbase + (bi2-1)*2] : 0;
                         // waitLSQ
                         //NOP                                    // LSQ settle
-                        uint32_t b_val = (uint32_t)gr[11];
+                        gr[3] = gr[11];                          // stash b_val
                         gr[11] = (mid < n_phase1)
                             ? mm[abase + mid*2] : (int)0xFFFFFFFF;
                         // waitLSQ
                         //NOP                                    // LSQ settle
-                        uint32_t a_val = (uint32_t)gr[11];
                         if (bi2 > 0 && mid < n_phase1
-                            && b_val > a_val) bs_lo[0] = mid + 1;
+                            && (uint32_t)gr[3] > (uint32_t)gr[11])
+                            bs_lo[0] = mid + 1;
                         else bs_hi[0] = mid;
                     }
                     // p = 1 step
@@ -3075,14 +3078,14 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             ? mm[bbase + (bi2-1)*2] : 0;
                         // waitLSQ
                         //NOP                                    // LSQ settle
-                        uint32_t b_val = (uint32_t)gr[11];
+                        gr[3] = gr[11];                          // stash b_val
                         gr[11] = (mid < n_phase1)
                             ? mm[abase + mid*2] : (int)0xFFFFFFFF;
                         // waitLSQ
                         //NOP                                    // LSQ settle
-                        uint32_t a_val = (uint32_t)gr[11];
                         if (bi2 > 0 && mid < n_phase1
-                            && b_val > a_val) bs_lo[1] = mid + 1;
+                            && (uint32_t)gr[3] > (uint32_t)gr[11])
+                            bs_lo[1] = mid + 1;
                         else bs_hi[1] = mid;
                     }
                     // p = 2 step
@@ -3093,14 +3096,14 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             ? mm[bbase + (bi2-1)*2] : 0;
                         // waitLSQ
                         //NOP                                    // LSQ settle
-                        uint32_t b_val = (uint32_t)gr[11];
+                        gr[3] = gr[11];                          // stash b_val
                         gr[11] = (mid < n_phase1)
                             ? mm[abase + mid*2] : (int)0xFFFFFFFF;
                         // waitLSQ
                         //NOP                                    // LSQ settle
-                        uint32_t a_val = (uint32_t)gr[11];
                         if (bi2 > 0 && mid < n_phase1
-                            && b_val > a_val) bs_lo[2] = mid + 1;
+                            && (uint32_t)gr[3] > (uint32_t)gr[11])
+                            bs_lo[2] = mid + 1;
                         else bs_hi[2] = mid;
                     }
                     goto m28_bs_top;
