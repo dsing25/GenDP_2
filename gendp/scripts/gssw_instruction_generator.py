@@ -464,6 +464,9 @@ def pe_0_instruction(f):
     f.write(NOP)
     f.write(data_movement_instruction(gr_hi, gr_hi, 0, 0, 3, 0, 0, 0, 13, 0, mv))
     f.write(NOP)
+    # DEC-5 relaxation: also capture next_len into gr[15] full-width.
+    f.write(data_movement_instruction(gr, gr_hi, 0, 0, 15, 0, 0, 0, 13, 0, mv))
+    f.write(NOP)
 
     # shifti_l gr[7] = gr[9] << 4   |   mv gr[8] = gr[12].lo
     # (seq_base_idx = graphSeq_word_base * 16 + seq_off)
@@ -474,15 +477,145 @@ def pe_0_instruction(f):
     f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 7, 8, add))
     f.write(NOP)
 
-    # Run sections C..H via magic(106). Pair with si gr[10]=0 in slot 0
-    # (same reason as the stage-2 magic(104) pairing).
-    # TODO (stage 3b): replace with magic(107) + section-H ISA emission.
-    # An ISA emission attempt in round 2 issued a bad SPM address
-    # (addr=2782222 in the second outer push-c iter) and was reverted.
-    # The simulator side (pe.cpp magic_id==107 guard) is in place, but the
-    # generator still uses magic(106) to keep the 200-case regression clean.
+    # Run sections C..G via magic(107). Section H lowered in ISA below.
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))
-    f.write(write_magic(106))
+    f.write(write_magic(107))
+
+    # === Section H (lowered): seed push to children =========================
+    # Per-node post-column-loop step. gr[15] = next_len (DEC-5 relaxed).
+    # Register plan documented in round-5 summary.
+
+    # H1: mv gr[12] = SPM[gr[4]+1] | si gr[11] = 78
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 12, 0, 0, 0, 1, 4, mv))
+    f.write(data_movement_instruction(gr, 0, 0, 0, 11, 0, 0, 0, GSSW_ND_MUL_WORDS, 0, si))
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+
+    # H4: set_PC CPC_MUL | mv gr[12] = gr_lo[12]
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MUL, 0, 0, 0, 0, 0, set_PC))
+    f.write(data_movement_instruction(gr, gr_lo, 0, 0, 12, 0, 0, 0, 12, 0, mv))
+    f.write(NOP); f.write(NOP)
+
+    # H6: addi gr[13] += NODES_WOFF | shifti_l gr[12] = gr[12] << 1
+    f.write(data_movement_instruction(gr, gr, 0, 0, 13, 0, 0, 0, GSSW_NODES_WOFF, 13, addi))
+    f.write(data_movement_instruction(gr, 0, 0, 0, 12, 0, 0, 0, 1, 12, shifti_l))
+
+    # H7: shifti_l gr[13] = gr[13] << 2 | si gr[2] = 0
+    f.write(data_movement_instruction(gr, 0, 0, 0, 13, 0, 0, 0, 2, 13, shifti_l))
+    f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 0, 0, si))
+
+    # H8: add gr[12] = gr[13] + gr[12] | NOP
+    f.write(data_movement_instruction(gr, gr, 0, 0, 12, 0, 0, 0, 13, 12, add))
+    f.write(NOP)
+
+    # H9: beq 0, gr[15], push_done_fwd | NOP
+    push_done_wi = f.write_count
+    push_done_branch_pc = f.pc
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 15, beq))
+    f.write(NOP)
+
+    push_pc = f.pc
+    # H10-H11: compute byte addr of childIds[next_off + c]
+    f.write(data_movement_instruction(gr, 0, 0, 0, 13, 0, 0, 0, 1, 2, shifti_l))
+    f.write(NOP)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 13, 0, 0, 0, 13, 12, add))
+    f.write(NOP)
+    # H12: gr[7] = word idx, gr[8] = byte offset
+    f.write(data_movement_instruction(gr, 0, 0, 0, 7, 0, 0, 0, 2, 13, shifti_r))
+    f.write(data_movement_instruction(gr, 0, 0, 0, 8, 0, 0, 0, 3, 13, ANDI))
+    # H13: mv gr[7] = SPM[gr[7]]
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 7, 0, 0, 0, 0, 7, mv))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    # H16: beq 0, gr[8], child_b0_fwd
+    child_b0_wi = f.write_count
+    child_b0_branch_pc = f.pc
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 8, beq))
+    f.write(NOP)
+    # b2 arm
+    f.write(data_movement_instruction(gr, 0, 0, 0, 7, 0, 0, 0, 16, 7, shifti_r))
+    f.write(NOP)
+    f.write(data_movement_instruction(gr, 0, 0, 0, 7, 0, 0, 0, 0xFFFF, 7, ANDI))
+    f.write(NOP)
+    child_done_jump_wi = f.write_count
+    child_done_jump_pc = f.pc
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, jump))
+    f.write(NOP)
+    # b0 arm
+    child_b0_target_pc = f.pc
+    f.patch_imm0(child_b0_wi, child_b0_target_pc - child_b0_branch_pc)
+    f.write(data_movement_instruction(gr, 0, 0, 0, 7, 0, 0, 0, 0xFFFF, 7, ANDI))
+    f.write(NOP)
+    # child_done
+    child_done_target_pc = f.pc
+    f.patch_imm0(child_done_jump_wi, child_done_target_pc - child_done_jump_pc)
+    # child * 78
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MUL_CHILD_78, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    # gr[6] = cd_word_off
+    f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0, GSSW_NODES_WOFF, 8, addi))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    # hSeed_base, eSeed_base — split into separate cycles to avoid slot
+    # 0/1 read contention on gr[6] (which was just written one cycle ago).
+    f.write(data_movement_instruction(gr, gr, 0, 0, 13, 0, 0, 0, GSSW_ND_HSEED_W, 6, addi))
+    f.write(NOP)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, GSSW_ND_ESEED_W, 6, addi))
+    f.write(NOP)
+    # reset push_j counter
+    f.write(data_movement_instruction(gr, 0, 0, 0, 6, 0, 0, 0, 0, 0, si))
+    f.write(NOP)
+    # Inner push-j loop
+    push_j_pc = f.pc
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 20, 0, 1, 0, 13, 6, mvd))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 22, 0, 1, 0, 5, 6, mvd))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_PUSH_MAX, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(data_movement_instruction(SPM, reg, 1, 0, 13, 6, 0, 0, 20, 0, mvd))
+    f.write(NOP)
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 20, 0, 1, 0, 8, 6, mvd))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 22, 0, 0, 0, GSSW_E_WOFF, 6, mvd))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_PUSH_MAX, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    # eSeed store + j+=2. Split the addi into its own cycle: pairing the
+    # paired-mvd store with addi gr[6]+=2 in slot 1 causes the store to see
+    # the post-increment gr[6] (slot 1 set_output_dest updates the regfile
+    # immediately; slot 0's store decode runs AFTER that and reads the new
+    # value — exactly the RAW that clobbers node-N+1's metadata at gr[6]=38).
+    f.write(data_movement_instruction(SPM, reg, 1, 0, 8, 6, 0, 0, 20, 0, mvd))
+    f.write(NOP)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0, 2, 6, addi))
+    f.write(NOP)
+    push_j_back_pc = f.pc
+    f.write(data_movement_instruction(
+        0, 0, 0, 0, push_j_pc - push_j_back_pc, 0, 0, 0,
+        GSSW_SEG_LEN * GSSW_VEC_WORDS, 6, bne))
+    f.write(NOP)
+    # Outer c++
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 1, 2, addi))
+    f.write(NOP)
+    push_c_back_pc = f.pc
+    f.write(data_movement_instruction(
+        0, 0, 0, 0, push_pc - push_c_back_pc, 0, 1, 0, 2, 15, blt))
+    f.write(NOP)
+    push_done_target_pc = f.pc
+    f.patch_imm0(push_done_wi, push_done_target_pc - push_done_branch_pc)
 
     # n++.   addi gr[1].lo += 1   |   NOP
     f.write(data_movement_instruction(gr_lo, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))
