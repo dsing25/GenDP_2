@@ -432,59 +432,16 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     // for bulk bandwidth; arcs use a label-driven per-arc loop
     // because the 3-word dst stride (vs 2-word src stride) prevents
     // pure mvdq.
-    // F0B_ASSIGN: copy diag+arcmeta+arcs for diag index 'di' into
-    // PE pe_idx's slice of the FIN0 SPM. SUFFIX (rr or mv) makes
-    // the f0b_arc labels unique across the two invocation sites.
-    // gr[11] is the persistent arc_ptr across F0B_ASSIGN calls; the
-    // gr[1] stash and the gr[11] += 2*nv advance at end preserve it.
-    // Arc loop architectural state: gr[9] = arc counter, gr[1] = src
-    // ptr, gr[7] = dst ptr, gr[10] = nv. Each s1c read stages
+    //
+    // Round-7+8 rewrite: the F0B_ASSIGN helper macro has been
+    // inlined at both call sites (f0b_rr and f0b_mv). Each site
+    // has its own set of f0b_arc_loop/done labels (rr vs mv) to
+    // preserve unique function-scope names. gr[11] is the persistent
+    // arc_ptr across per-diag assignments; gr[1] holds the per-diag
+    // src_ptr stash. Arc loop architectural state: gr[9] = arc
+    // counter, gr[7] = dst_ptr, gr[10] = nv. Each s1c read stages
     // through gr[3] with a 1-cycle gap; each SPM store is its own
     // ISA line.
-    #define F0B_ASSIGN(di, pe_idx, SUFFIX) do { \
-        gr[5] = s1c[8 + (pe_idx)]; \
-        gr[6] = s1c[(pe_idx)]; \
-        gr[7] = gr[6] + gr[6]; \
-        gr[9] = (di) + (di); \
-        mvdq_copy(&spm[gr[5]+FIN0_ARCMETA+gr[7]], \
-                  &s1c[ARC_META_BASE+gr[9]], 2); \
-        mvdq_copy(&spm[gr[5]+FIN0_DIAGS+gr[7]], \
-                  &s1c[32+gr[9]], 2); \
-        gr[4] = s1c[ARC_META_BASE+gr[9]]; \
-        /*NOP*/                                             /* s1c gap */ \
-        gr[10] = s1c[ARC_META_BASE+gr[9]+1]; \
-        /*NOP*/                                             /* s1c gap */ \
-        gr[10] = gr[10] - gr[4];                            /* nv */ \
-        /*NOP*/                                             /* RAW barrier */ \
-        gr[8] = s1c[4 + (pe_idx)]; \
-        gr[1] = gr[11];                                     /* src_ptr = arc_ptr */ \
-        gr[7] = gr[8] + gr[8];                              /* 2*na */ \
-        /*NOP*/                                             /* RAW barrier */ \
-        gr[7] = gr[7] + gr[8];                              /* 3*na */ \
-        /*NOP*/                                             /* RAW barrier */ \
-        gr[7] = gr[7] + gr[5];                              /* + pe_spm */ \
-        /*NOP*/                                             /* RAW barrier */ \
-        gr[7] = gr[7] + FIN0_ARCS;                          /* dst_ptr */ \
-        gr[9] = 0;                                          /* arc counter */ \
-    f0b_arc_loop_##SUFFIX: \
-        if (gr[9] >= gr[10]) goto f0b_arc_done_##SUFFIX; \
-        gr[3] = s1c[gr[1]];                                 /* arc.lo */ \
-        /*NOP*/                                             /* s1c gap */ \
-        spm[gr[7]] = gr[3];                                 /* store lo */ \
-        gr[3] = s1c[gr[1]+1];                               /* arc.hi */ \
-        /*NOP*/                                             /* s1c gap */ \
-        spm[gr[7]+1] = gr[3];                               /* store hi */ \
-        gr[9] = gr[9] + 1;                                  /* a_++ */ \
-        gr[1] = gr[1] + 2;                                  /* src += 2 */ \
-        gr[7] = gr[7] + 3;                                  /* dst += 3 */ \
-        goto f0b_arc_loop_##SUFFIX; \
-    f0b_arc_done_##SUFFIX: \
-        s1c[4+(pe_idx)] = gr[8] + gr[10]; \
-        s1c[(pe_idx)] = gr[6] + 1; \
-        gr[11] = gr[11] + gr[10];                           /* += nv */ \
-        /*NOP*/                                             /* RAW barrier */ \
-        gr[11] = gr[11] + gr[10];                           /* += nv (= 2*nv) */ \
-    } while(0)
 
     // Round-robin common-case loop: one diag per PE cycling 0,1,2,3.
     // pe_rr held architecturally in gr[2]; derived from s1c[22] at
@@ -508,7 +465,50 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         if (s1c[gr[2]] >= FIN0_N_MAX_DIAGS) goto f0b_rr_break;
         gr[7] = s1c[4 + gr[2]] + gr[10];
         if (gr[7] > FIN0_N_MAX_ARCS) goto f0b_rr_break;
-        F0B_ASSIGN(s1c[22], gr[2], rr);
+        // === Inlined F0B_ASSIGN(s1c[22], gr[2], rr) ===
+        gr[5] = s1c[8 + gr[2]];
+        gr[6] = s1c[gr[2]];
+        gr[7] = gr[6] + gr[6];
+        gr[9] = s1c[22] + s1c[22];
+        mvdq_copy(&spm[gr[5]+FIN0_ARCMETA+gr[7]],
+                  &s1c[ARC_META_BASE+gr[9]], 2);
+        mvdq_copy(&spm[gr[5]+FIN0_DIAGS+gr[7]],
+                  &s1c[32+gr[9]], 2);
+        gr[4] = s1c[ARC_META_BASE+gr[9]];
+        //NOP                                    // s1c gap
+        gr[10] = s1c[ARC_META_BASE+gr[9]+1];
+        //NOP                                    // s1c gap
+        gr[10] = gr[10] - gr[4];                 // nv
+        //NOP                                    // RAW barrier
+        gr[8] = s1c[4 + gr[2]];
+        gr[1] = gr[11];                          // src_ptr = arc_ptr
+        gr[7] = gr[8] + gr[8];                   // 2*na
+        //NOP                                    // RAW barrier
+        gr[7] = gr[7] + gr[8];                   // 3*na
+        //NOP                                    // RAW barrier
+        gr[7] = gr[7] + gr[5];                   // + pe_spm
+        //NOP                                    // RAW barrier
+        gr[7] = gr[7] + FIN0_ARCS;               // dst_ptr
+        gr[9] = 0;                               // arc counter
+    f0b_arc_loop_rr:
+        if (gr[9] >= gr[10]) goto f0b_arc_done_rr;
+        gr[3] = s1c[gr[1]];                      // arc.lo
+        //NOP                                    // s1c gap
+        spm[gr[7]] = gr[3];
+        gr[3] = s1c[gr[1]+1];                    // arc.hi
+        //NOP                                    // s1c gap
+        spm[gr[7]+1] = gr[3];
+        gr[9] = gr[9] + 1;
+        gr[1] = gr[1] + 2;
+        gr[7] = gr[7] + 3;
+        goto f0b_arc_loop_rr;
+    f0b_arc_done_rr:
+        s1c[4+gr[2]] = gr[8] + gr[10];
+        s1c[gr[2]] = gr[6] + 1;
+        gr[11] = gr[11] + gr[10];                // += nv
+        //NOP                                    // RAW barrier
+        gr[11] = gr[11] + gr[10];                // += nv (= 2*nv)
+        // === End inlined F0B_ASSIGN (rr) ===
         s1c[22] = s1c[22] + 1;
         gr[2] = gr[2] + 1;
         //NOP                                    // WAW barrier for gr[2]
@@ -535,13 +535,55 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         if (s1c[pe] >= FIN0_N_MAX_DIAGS) goto f0b_mv_next;
         gr[7] = s1c[4 + pe] + gr[10];
         if (gr[7] > FIN0_N_MAX_ARCS) goto f0b_mv_next;
-        F0B_ASSIGN(s1c[22], pe, mv);
+        // === Inlined F0B_ASSIGN(s1c[22], pe, mv) ===
+        gr[5] = s1c[8 + pe];
+        gr[6] = s1c[pe];
+        gr[7] = gr[6] + gr[6];
+        gr[9] = s1c[22] + s1c[22];
+        mvdq_copy(&spm[gr[5]+FIN0_ARCMETA+gr[7]],
+                  &s1c[ARC_META_BASE+gr[9]], 2);
+        mvdq_copy(&spm[gr[5]+FIN0_DIAGS+gr[7]],
+                  &s1c[32+gr[9]], 2);
+        gr[4] = s1c[ARC_META_BASE+gr[9]];
+        //NOP                                    // s1c gap
+        gr[10] = s1c[ARC_META_BASE+gr[9]+1];
+        //NOP                                    // s1c gap
+        gr[10] = gr[10] - gr[4];                 // nv
+        //NOP                                    // RAW barrier
+        gr[8] = s1c[4 + pe];
+        gr[1] = gr[11];                          // src_ptr = arc_ptr
+        gr[7] = gr[8] + gr[8];                   // 2*na
+        //NOP                                    // RAW barrier
+        gr[7] = gr[7] + gr[8];                   // 3*na
+        //NOP                                    // RAW barrier
+        gr[7] = gr[7] + gr[5];                   // + pe_spm
+        //NOP                                    // RAW barrier
+        gr[7] = gr[7] + FIN0_ARCS;               // dst_ptr
+        gr[9] = 0;                               // arc counter
+    f0b_arc_loop_mv:
+        if (gr[9] >= gr[10]) goto f0b_arc_done_mv;
+        gr[3] = s1c[gr[1]];                      // arc.lo
+        //NOP                                    // s1c gap
+        spm[gr[7]] = gr[3];
+        gr[3] = s1c[gr[1]+1];                    // arc.hi
+        //NOP                                    // s1c gap
+        spm[gr[7]+1] = gr[3];
+        gr[9] = gr[9] + 1;
+        gr[1] = gr[1] + 2;
+        gr[7] = gr[7] + 3;
+        goto f0b_arc_loop_mv;
+    f0b_arc_done_mv:
+        s1c[4+pe] = gr[8] + gr[10];
+        s1c[pe] = gr[6] + 1;
+        gr[11] = gr[11] + gr[10];                // += nv
+        //NOP                                    // RAW barrier
+        gr[11] = gr[11] + gr[10];                // += nv (= 2*nv)
+        // === End inlined F0B_ASSIGN (mv) ===
         s1c[22] = s1c[22] + 1;
         goto f0b_mv;
     f0b_mv_next:
         (void)0;
     }
-    #undef F0B_ASSIGN
 
     // s1c[22] is already authoritative cursor; no write-back needed.
     s1c[23] = gr[11]; // save arc_ptr for next pass
