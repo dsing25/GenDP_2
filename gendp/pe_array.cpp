@@ -400,11 +400,13 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
     int *spm = SPM_unit->buffer;
     constexpr int ARC_META_BASE = 544;
-    int total_fin0 = s1c[20];
     constexpr int DIAG_CAP_F = (16 << 20);
     constexpr int INTV_CAP_F = (1 << 21);
     constexpr int HA_CAP_F   = (4 << 20);
     constexpr int ha_off = DIAG_CAP_F * 8 + INTV_CAP_F * 6;
+    // R3/R5 fix: no 'int total_fin0' C++ local mirror. s1c[20] is the
+    // authoritative limit; compares below reference s1c[20] directly,
+    // which lowers to a gr-staged load + compare in the ISA generator.
     int cursor = s1c[22];
 
     // === Pass 1: Round-robin + fallback assignment ===
@@ -469,7 +471,7 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     {
         int pe_rr = cursor % 4;
     f0b_rr:
-        if (cursor >= total_fin0) goto f0b_rr_done;
+        if (cursor >= s1c[20]) goto f0b_rr_done;
         gr[9] = cursor + cursor;
         // R8: split 'gr[10] = s1c[A+1] - s1c[A]' via gr[4] stash.
         gr[4] = s1c[ARC_META_BASE + gr[9]];
@@ -492,9 +494,9 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     }
 
     // Per-PE fallback: fill remaining PEs sequentially
-    for (int pe = 0; pe < 4 && cursor < total_fin0; pe++) {
+    for (int pe = 0; pe < 4 && cursor < s1c[20]; pe++) {
     f0b_mv:
-        if (cursor >= total_fin0) goto f0b_mv_next;
+        if (cursor >= s1c[20]) goto f0b_mv_next;
         gr[9] = cursor + cursor;
         // R8: split 'gr[10] = s1c[A+1] - s1c[A]' via gr[4] stash.
         gr[4] = s1c[ARC_META_BASE + gr[9]];
