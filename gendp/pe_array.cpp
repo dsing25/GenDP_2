@@ -2110,13 +2110,24 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 ? GWFA_FIN0B_BASE : GWFA_FIN0_BASE;
 
             // --- Phase 1: Read metadata from all 4 PEs ---
+            // ISA lowering: each SPM meta read stages through gr[11]
+            // with 3 //NOPs before the s1c store (AC-7 rule 6:
+            // SPM 2-cycle = 4 ISA lines between load and consumer).
             for (int pe = 0; pe < 4; pe++) {
                 gr[7] = pe * SPM_BANK_GROUP_SIZE + fin0_base; // si
                 s1c[12 + pe] = gr[7];                    // mv: pe_spm_base
                 //NOP; //NOP
-                s1c[pe] = spm[gr[7] + FIN0_META + 2];    // mv: n_A
-                s1c[4 + pe] = spm[gr[7] + FIN0_META + 3]; // mv: n_B
-                s1c[8 + pe] = spm[gr[7] + FIN0_META + 4]; // mv: n_HA
+                gr[11] = spm[gr[7] + FIN0_META + 2];    // SPM load n_A
+                //NOP                                    // SPM lat 1/3
+                //NOP                                    // SPM lat 2/3
+                //NOP                                    // SPM lat 3/3
+                s1c[pe] = gr[11];                        // mv
+                gr[11] = spm[gr[7] + FIN0_META + 3];    // SPM load n_B
+                //NOP; //NOP; //NOP                      // SPM settle
+                s1c[4 + pe] = gr[11];                    // mv
+                gr[11] = spm[gr[7] + FIN0_META + 4];    // SPM load n_HA
+                //NOP; //NOP; //NOP                      // SPM settle
+                s1c[8 + pe] = gr[11];                    // mv
             }
 
             // --- Phase 2: A writeback SPM → MM (circular A queue) ---
