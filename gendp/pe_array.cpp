@@ -662,7 +662,16 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         spm[gr[7] + FIN0_META + 4] = 0;                  // si
     }
 
-    gr[2] = (cursor < total_fin0) ? 1 : 0;
+    // Final completion flag: re-read s1c[22] (cursor) and s1c[20]
+    // (total_fin0) through gr with 1-NOP staging. Passes 2-3 have
+    // operated long after the pass-1 C++ locals were written; the
+    // authoritative values live in s1c[22]/s1c[20] and must be
+    // re-read here.
+    gr[11] = s1c[22];
+    //NOP                                       // s1c gap
+    gr[10] = s1c[20];
+    //NOP                                       // s1c gap
+    gr[2] = (gr[11] < gr[10]) ? 1 : 0;
 }
 
 int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting) {
