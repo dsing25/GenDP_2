@@ -2476,18 +2476,32 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int bin_spm_off = (magic_mask & 1)
                     ? SORT_BIN_SPM1 : SORT_BIN_SPM0;
                 for (int b = 0; b < SORT_RADIX_BINS; b++) {
-                    // Pre-compute per-PE metadata for this bin
+                    // Pre-compute per-PE metadata for this bin.
+                    // ISA lowering: SPM meta loads stage through gr[11]
+                    // with 3 //NOPs; each s1c load stages with a 1-cycle
+                    // gap so the S1c consumer is separated by >= 2 ISA
+                    // lines (BL-20260417-ctrl-sync-gr).
                     int ns[4], mm_dsts[4], spm_srcs[4];
                     int max_words = 0;
                     for (int pe = 0; pe < 4; pe++) {
                         int pe_spm = pe * SPM_BANK_GROUP_SIZE;
-                        ns[pe] = spm[pe_spm + SORT_META + 16 + b];
-                        int diag_off = s1c[b]
-                            + s1c[16 + pe * SORT_RADIX_BINS + b]
-                            + s1c[80 + pe * SORT_RADIX_BINS + b];
-                        mm_dsts[pe] = gr[4] + diag_off * 2;
+                        gr[11] = spm[pe_spm + SORT_META + 16 + b];  // SPM
+                        //NOP                                        // SPM 1/3
+                        //NOP                                        // SPM 2/3
+                        //NOP                                        // SPM 3/3
+                        ns[pe] = gr[11];
                         spm_srcs[pe] = pe_spm + bin_spm_off
                             + b * SORT_BIN_REGION_SIZE * 2;
+                        gr[11] = s1c[b];                             // s1c
+                        //NOP                                        // s1c gap
+                        int diag_off = gr[11];
+                        gr[11] = s1c[16 + pe * SORT_RADIX_BINS + b]; // s1c
+                        //NOP                                        // s1c gap
+                        diag_off += gr[11];
+                        gr[11] = s1c[80 + pe * SORT_RADIX_BINS + b]; // s1c
+                        //NOP                                        // s1c gap
+                        diag_off += gr[11];
+                        mm_dsts[pe] = gr[4] + diag_off * 2;
                         int w = ns[pe] * 2;
                         if (w > max_words) max_words = w;
                     }
@@ -2502,8 +2516,14 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                                       &spm[spm_srcs[pe] + j], cnt);
                         }
                     }
-                    for (int pe = 0; pe < 4; pe++)
-                        s1c[80 + pe * SORT_RADIX_BINS + b] += ns[pe];
+                    // Running-offset update: s1c += ns with explicit
+                    // gr[11]-staged read-modify-write (s1c gap).
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[11] = s1c[80 + pe * SORT_RADIX_BINS + b];
+                        //NOP                                        // s1c gap
+                        gr[11] = gr[11] + ns[pe];
+                        s1c[80 + pe * SORT_RADIX_BINS + b] = gr[11];
+                    }
                 }
             }
         } else if (magic_id == 37) {
