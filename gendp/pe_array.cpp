@@ -3178,47 +3178,69 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         } else if (magic_id == 30) {
             // Dedup reload: refill exhausted input buffers from MM.
             // Conditional per-PE reload with mvdq_copy for transfers.
+            // ISA lowering: stage SPM meta flags through gr[11] with 3
+            // //NOPs and s1c loads through gr[11]/gr[1] with 1 //NOP gap
+            // (BL-20260417-ctrl-sync-gr). R9 PE-outer shape retained
+            // under BL-20260416-m32-gather-dep (chunk-outer restructure
+            // caused mode-1 hang on similar dedup gather).
             {
+                auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
                 for (int pe = 0; pe < 4; pe++) {
                     int *s = &SPM_unit->buffer[
                         pe * SPM_BANK_GROUP_SIZE];
                     // Diag reload: check BUF0 and BUF1
                     for (int buf = 0; buf < 2; buf++) {
-                        if (s[DEDUP_META+10+buf] == 0
-                            && s1c[4+pe] > 0) {
-                            int off = buf ? DEDUP_DIAG_BUF1
-                                          : DEDUP_DIAG_BUF0;
-                            int tile = s1c[4+pe];
-                            if (tile > DEDUP_TILE) tile = DEDUP_TILE;
-                            int src = s1c[pe];
-                            for (int j = 0; j < tile*2; j += 8) {
-                                int cnt = tile*2 - j;
-                                if (cnt > 8) cnt = 8;
-                                mvdq_copy(&s[off+j], &mm[src+j], cnt);
+                        gr[11] = s[DEDUP_META+10+buf];        // SPM flag
+                        //NOP                                  // SPM 1/3
+                        //NOP                                  // SPM 2/3
+                        //NOP                                  // SPM 3/3
+                        if (gr[11] == 0) {
+                            gr[11] = s1c[4+pe];               // s1c rem
+                            //NOP                              // s1c 1-cycle gap
+                            if (gr[11] > 0) {
+                                int off = buf ? DEDUP_DIAG_BUF1
+                                              : DEDUP_DIAG_BUF0;
+                                int tile = gr[11];
+                                if (tile > DEDUP_TILE) tile = DEDUP_TILE;
+                                gr[1] = s1c[pe];              // s1c src
+                                //NOP                          // s1c gap
+                                for (int j = 0; j < tile*2; j += 8) {
+                                    int cnt = tile*2 - j;
+                                    if (cnt > 8) cnt = 8;
+                                    mvdq_copy(&s[off+j], &mm[gr[1]+j], cnt);
+                                }
+                                s1c[pe] = gr[1] + tile * 2;
+                                s1c[4+pe] -= tile;
+                                s[DEDUP_META+10+buf] = tile;
                             }
-                            s1c[pe] = src + tile * 2;
-                            s1c[4+pe] -= tile;
-                            s[DEDUP_META+10+buf] = tile;
                         }
                     }
                     // Intv reload: check BUF0 and BUF1
                     for (int buf = 0; buf < 2; buf++) {
-                        if (s[DEDUP_META+12+buf] == 0
-                            && s1c[12+pe] > 0) {
-                            int off = buf ? DEDUP_INTV_BUF1
-                                          : DEDUP_INTV_BUF0;
-                            int tile = s1c[12+pe];
-                            if (tile > DEDUP_TILE) tile = DEDUP_TILE;
-                            int src = s1c[8+pe];
-                            for (int j = 0; j < tile*2; j += 8) {
-                                int cnt = tile*2 - j;
-                                if (cnt > 8) cnt = 8;
-                                mvdq_copy(&s[off+j], &mm[src+j], cnt);
+                        gr[11] = s[DEDUP_META+12+buf];        // SPM flag
+                        //NOP                                  // SPM 1/3
+                        //NOP                                  // SPM 2/3
+                        //NOP                                  // SPM 3/3
+                        if (gr[11] == 0) {
+                            gr[11] = s1c[12+pe];              // s1c rem
+                            //NOP                              // s1c 1-cycle gap
+                            if (gr[11] > 0) {
+                                int off = buf ? DEDUP_INTV_BUF1
+                                              : DEDUP_INTV_BUF0;
+                                int tile = gr[11];
+                                if (tile > DEDUP_TILE) tile = DEDUP_TILE;
+                                gr[1] = s1c[8+pe];            // s1c src
+                                //NOP                          // s1c gap
+                                for (int j = 0; j < tile*2; j += 8) {
+                                    int cnt = tile*2 - j;
+                                    if (cnt > 8) cnt = 8;
+                                    mvdq_copy(&s[off+j], &mm[gr[1]+j], cnt);
+                                }
+                                s1c[8+pe] = gr[1] + tile * 2;
+                                s1c[12+pe] -= tile;
+                                s[DEDUP_META+12+buf] = tile;
                             }
-                            s1c[8+pe] = src + tile * 2;
-                            s1c[12+pe] -= tile;
-                            s[DEDUP_META+12+buf] = tile;
                         }
                     }
                 }
