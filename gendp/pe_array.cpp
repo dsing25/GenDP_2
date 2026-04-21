@@ -3454,21 +3454,34 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 // Gather deduped diags → diag_base
                 // Bulk mvdq per PE, boundary max-merge at PE seams only.
                 // Within each PE, output is already unique (no dup vd).
+                // ISA lowering: s1c loads route through gr[11] with
+                // 1-NOP gap; MM boundary reads route through gr[11]
+                // with // waitLSQ + //NOP settle before consumer.
                 int n_a_final = 0;
                 uint32_t last_vd = 0xFFFFFFFF;
                 for (int pe = 0; pe < 4; pe++) {
-                    int base = s1c[16 + pe];
-                    int cnt  = s1c[20 + pe];
+                    gr[11] = s1c[16 + pe];                   // s1c base
+                    //NOP                                     // s1c 1-cycle gap
+                    int base = gr[11];
+                    gr[11] = s1c[20 + pe];                   // s1c cnt
+                    //NOP                                     // s1c 1-cycle gap
+                    int cnt = gr[11];
                     if (cnt <= 0) continue;
                     int skip = 0;
                     // Boundary check: first element vs last output
                     if (n_a_final > 0) {
-                        uint32_t vd0 = (uint32_t)mm[
-                            mm_sort_buf + base*2];
-                        if (vd0 == last_vd) {
-                            int k0 = mm[mm_sort_buf + base*2 + 1];
-                            int pk = mm[diag_base+(n_a_final-1)*2+1];
-                            if (k0 > pk)
+                        gr[11] = mm[mm_sort_buf + base*2];   // MM load vd0
+                        // waitLSQ
+                        //NOP                                 // LSQ settle
+                        if ((uint32_t)gr[11] == last_vd) {
+                            gr[11] = mm[mm_sort_buf + base*2 + 1];  // MM k0
+                            // waitLSQ
+                            //NOP                             // LSQ settle
+                            int k0 = gr[11];
+                            gr[11] = mm[diag_base+(n_a_final-1)*2+1]; // MM pk
+                            // waitLSQ
+                            //NOP                             // LSQ settle
+                            if (k0 > gr[11])
                                 mm[diag_base+(n_a_final-1)*2+1] = k0;
                             skip = 1; // skip merged element
                         }
@@ -3482,9 +3495,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         mvdq_copy(&mm[dst + j], &mm[src + j], c);
                     }
                     n_a_final += cnt - skip;
-                    if (cnt > skip)
-                        last_vd = (uint32_t)mm[mm_sort_buf
-                            + (base + cnt - 1) * 2];
+                    if (cnt > skip) {
+                        gr[11] = mm[mm_sort_buf
+                            + (base + cnt - 1) * 2];         // MM load last_vd
+                        // waitLSQ
+                        //NOP                                 // LSQ settle
+                        last_vd = (uint32_t)gr[11];
+                    }
                 }
                 // Gather intv from MM_DEDUP_INTV_OUT → MM_INTV
                 // Gather intv: bulk mvdq per PE interior, s1c-based
@@ -3498,8 +3515,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int intv_n = 0;
                 uint32_t last_intv_hi = 0;
                 for (int pe = 0; pe < 4; pe++) {
-                    int base = s1c[24 + pe];
-                    int cnt  = s1c[28 + pe];
+                    gr[11] = s1c[24 + pe];                   // s1c base
+                    //NOP                                     // s1c 1-cycle gap
+                    int base = gr[11];
+                    gr[11] = s1c[28 + pe];                   // s1c cnt
+                    //NOP                                     // s1c 1-cycle gap
+                    int cnt = gr[11];
                     if (cnt <= 0) continue;
                     int skip = 0;
 #ifdef PLAN2A_SEAM_ASSERT
@@ -3537,10 +3558,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             (unsigned)mm_last_hi, cnt, base);
                     }
 #endif
-                    // Boundary merge: use s1c first intv of this PE
+                    // Boundary merge: use s1c first intv of this PE.
+                    // s1c reads stage through gr[11] with 1-NOP gap.
                     if (intv_n > 0) {
-                        uint32_t lo0 = (uint32_t)s1c[176 + pe];
-                        uint32_t hi0 = (uint32_t)s1c[180 + pe];
+                        gr[11] = s1c[176 + pe];              // s1c lo0
+                        //NOP                                 // s1c 1-cycle gap
+                        uint32_t lo0 = (uint32_t)gr[11];
+                        gr[11] = s1c[180 + pe];              // s1c hi0
+                        //NOP                                 // s1c 1-cycle gap
+                        uint32_t hi0 = (uint32_t)gr[11];
                         if (lo0 <= last_intv_hi) {
                             // Merge into last output's hi
                             if (hi0 > last_intv_hi) {
