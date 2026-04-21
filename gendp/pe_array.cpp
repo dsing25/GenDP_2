@@ -2925,107 +2925,206 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     // label suffixes because C++ function-scope labels
                     // cannot be reused across a for-loop body.
                     auto &main_gr = main_addressing_register;
-                    // b = 0
+                    // b = 0: AC-5/AC-9 architectural rewrite per Codex
+                    // Round-10 plan. All search state lives in s1c
+                    // scratch slots (final l_lo/h_lo already land at
+                    // their output addresses s1c[163]/s1c[166]).
+                    //   s1c[163] = l_lo_b0 (final intv_lo[pe+1])
+                    //   s1c[166] = h_lo_b0 (final intv_hi[pe])
+                    //   s1c[169] = l_hi_b0 (scratch, discard)
+                    //   s1c[172] = h_hi_b0 (scratch, discard)
+                    // Pivot in main_gr[3]; mid computed in main_gr[5];
+                    // compare operand in main_gr[11].
                     {
                         main_gr[11] = s1c[159];
                         //NOP                                    // s1c 1-cycle gap
-                        main_gr[3] = main_gr[11];                // stash vd pivot
-                        int h_lo_b0 = 0, h_hi_b0 = intv_n;
-                        int l_lo_b0 = 0, l_hi_b0 = intv_n;
+                        main_gr[3] = main_gr[11];                // pivot
+                        s1c[163] = 0;                            // l_lo_b0 = 0
+                        s1c[166] = 0;                            // h_lo_b0 = 0
+                        main_gr[4] = intv_n;
+                        s1c[169] = main_gr[4];                   // l_hi_b0 = intv_n
+                        s1c[172] = main_gr[4];                   // h_hi_b0 = intv_n
                     m38_b0_top:
-                        if (h_lo_b0 >= h_hi_b0 && l_lo_b0 >= l_hi_b0)
-                            goto m38_b0_done;
-                        if (h_lo_b0 >= h_hi_b0) goto m38_b0_skip_h;
-                        {
-                            int mid = (h_lo_b0 + h_hi_b0) / 2;
-                            main_gr[11] = mm[ib + 2*mid];       // MM load
-                            // waitLSQ
-                            //NOP                                // LSQ settle
-                            if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3]) h_lo_b0 = mid + 1;
-                            else h_hi_b0 = mid;
-                        }
+                        // h-step: load h_lo, h_hi; if converged skip
+                        main_gr[11] = s1c[166];
+                        //NOP                                    // s1c gap
+                        main_gr[4] = s1c[172];
+                        //NOP                                    // s1c gap
+                        if (main_gr[11] >= main_gr[4]) goto m38_b0_skip_h;
+                        main_gr[5] = main_gr[11] + main_gr[4];   // lo+hi
+                        //NOP                                    // RAW barrier
+                        main_gr[5] = main_gr[5] / 2;             // mid
+                        main_gr[11] = mm[ib + 2*main_gr[5]];
+                        // waitLSQ
+                        //NOP                                    // LSQ settle
+                        if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3])
+                            goto m38_b0_h_up_lo;
+                        s1c[172] = main_gr[5];                   // h_hi = mid
+                        goto m38_b0_skip_h;
+                    m38_b0_h_up_lo:
+                        main_gr[4] = main_gr[5] + 1;             // mid+1
+                        //NOP                                    // RAW barrier
+                        s1c[166] = main_gr[4];                   // h_lo = mid+1
                     m38_b0_skip_h:
-                        if (l_lo_b0 >= l_hi_b0) goto m38_b0_top;
-                        {
-                            int mid = (l_lo_b0 + l_hi_b0) / 2;
-                            main_gr[11] = mm[ib + 2*mid + 1];   // MM load
-                            // waitLSQ
-                            //NOP                                // LSQ settle
-                            if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3]) l_lo_b0 = mid + 1;
-                            else l_hi_b0 = mid;
-                        }
-                        goto m38_b0_top;
-                    m38_b0_done:
-                        s1c[166] = h_lo_b0;
-                        s1c[163] = l_lo_b0;
+                        // l-step: load l_lo, l_hi; if converged skip
+                        main_gr[11] = s1c[163];
+                        //NOP                                    // s1c gap
+                        main_gr[4] = s1c[169];
+                        //NOP                                    // s1c gap
+                        if (main_gr[11] >= main_gr[4]) goto m38_b0_check_done;
+                        main_gr[5] = main_gr[11] + main_gr[4];
+                        //NOP                                    // RAW barrier
+                        main_gr[5] = main_gr[5] / 2;
+                        main_gr[11] = mm[ib + 2*main_gr[5] + 1];
+                        // waitLSQ
+                        //NOP                                    // LSQ settle
+                        if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3])
+                            goto m38_b0_l_up_lo;
+                        s1c[169] = main_gr[5];                   // l_hi = mid
+                        goto m38_b0_check_done;
+                    m38_b0_l_up_lo:
+                        main_gr[4] = main_gr[5] + 1;
+                        //NOP                                    // RAW barrier
+                        s1c[163] = main_gr[4];                   // l_lo = mid+1
+                    m38_b0_check_done:
+                        // Full-convergence check: loop if either still unconverged
+                        main_gr[11] = s1c[166];
+                        //NOP
+                        main_gr[4] = s1c[172];
+                        //NOP
+                        if (main_gr[11] < main_gr[4]) goto m38_b0_top;
+                        main_gr[11] = s1c[163];
+                        //NOP
+                        main_gr[4] = s1c[169];
+                        //NOP
+                        if (main_gr[11] < main_gr[4]) goto m38_b0_top;
+                        // Done; outputs already at s1c[166] and s1c[163].
                     }
-                    // b = 1
+                    // b = 1: s1c[164]=l_lo, s1c[167]=h_lo (outputs);
+                    //        s1c[170]=l_hi, s1c[173]=h_hi (scratch).
                     {
                         main_gr[11] = s1c[160];
                         //NOP                                    // s1c 1-cycle gap
-                        main_gr[3] = main_gr[11];                // stash vd pivot
-                        int h_lo_b1 = 0, h_hi_b1 = intv_n;
-                        int l_lo_b1 = 0, l_hi_b1 = intv_n;
+                        main_gr[3] = main_gr[11];                // pivot
+                        s1c[164] = 0;
+                        s1c[167] = 0;
+                        main_gr[4] = intv_n;
+                        s1c[170] = main_gr[4];
+                        s1c[173] = main_gr[4];
                     m38_b1_top:
-                        if (h_lo_b1 >= h_hi_b1 && l_lo_b1 >= l_hi_b1)
-                            goto m38_b1_done;
-                        if (h_lo_b1 >= h_hi_b1) goto m38_b1_skip_h;
-                        {
-                            int mid = (h_lo_b1 + h_hi_b1) / 2;
-                            main_gr[11] = mm[ib + 2*mid];       // MM load
-                            // waitLSQ
-                            //NOP                                // LSQ settle
-                            if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3]) h_lo_b1 = mid + 1;
-                            else h_hi_b1 = mid;
-                        }
+                        main_gr[11] = s1c[167];
+                        //NOP
+                        main_gr[4] = s1c[173];
+                        //NOP
+                        if (main_gr[11] >= main_gr[4]) goto m38_b1_skip_h;
+                        main_gr[5] = main_gr[11] + main_gr[4];
+                        //NOP
+                        main_gr[5] = main_gr[5] / 2;
+                        main_gr[11] = mm[ib + 2*main_gr[5]];
+                        // waitLSQ
+                        //NOP
+                        if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3])
+                            goto m38_b1_h_up_lo;
+                        s1c[173] = main_gr[5];
+                        goto m38_b1_skip_h;
+                    m38_b1_h_up_lo:
+                        main_gr[4] = main_gr[5] + 1;
+                        //NOP
+                        s1c[167] = main_gr[4];
                     m38_b1_skip_h:
-                        if (l_lo_b1 >= l_hi_b1) goto m38_b1_top;
-                        {
-                            int mid = (l_lo_b1 + l_hi_b1) / 2;
-                            main_gr[11] = mm[ib + 2*mid + 1];   // MM load
-                            // waitLSQ
-                            //NOP                                // LSQ settle
-                            if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3]) l_lo_b1 = mid + 1;
-                            else l_hi_b1 = mid;
-                        }
-                        goto m38_b1_top;
-                    m38_b1_done:
-                        s1c[167] = h_lo_b1;
-                        s1c[164] = l_lo_b1;
+                        main_gr[11] = s1c[164];
+                        //NOP
+                        main_gr[4] = s1c[170];
+                        //NOP
+                        if (main_gr[11] >= main_gr[4]) goto m38_b1_check_done;
+                        main_gr[5] = main_gr[11] + main_gr[4];
+                        //NOP
+                        main_gr[5] = main_gr[5] / 2;
+                        main_gr[11] = mm[ib + 2*main_gr[5] + 1];
+                        // waitLSQ
+                        //NOP
+                        if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3])
+                            goto m38_b1_l_up_lo;
+                        s1c[170] = main_gr[5];
+                        goto m38_b1_check_done;
+                    m38_b1_l_up_lo:
+                        main_gr[4] = main_gr[5] + 1;
+                        //NOP
+                        s1c[164] = main_gr[4];
+                    m38_b1_check_done:
+                        main_gr[11] = s1c[167];
+                        //NOP
+                        main_gr[4] = s1c[173];
+                        //NOP
+                        if (main_gr[11] < main_gr[4]) goto m38_b1_top;
+                        main_gr[11] = s1c[164];
+                        //NOP
+                        main_gr[4] = s1c[170];
+                        //NOP
+                        if (main_gr[11] < main_gr[4]) goto m38_b1_top;
                     }
-                    // b = 2
+                    // b = 2: s1c[165]=l_lo, s1c[168]=h_lo (outputs);
+                    //        s1c[171]=l_hi, s1c[174]=h_hi (scratch).
                     {
                         main_gr[11] = s1c[161];
                         //NOP                                    // s1c 1-cycle gap
-                        main_gr[3] = main_gr[11];                // stash vd pivot
-                        int h_lo_b2 = 0, h_hi_b2 = intv_n;
-                        int l_lo_b2 = 0, l_hi_b2 = intv_n;
+                        main_gr[3] = main_gr[11];                // pivot
+                        s1c[165] = 0;
+                        s1c[168] = 0;
+                        main_gr[4] = intv_n;
+                        s1c[171] = main_gr[4];
+                        s1c[174] = main_gr[4];
                     m38_b2_top:
-                        if (h_lo_b2 >= h_hi_b2 && l_lo_b2 >= l_hi_b2)
-                            goto m38_b2_done;
-                        if (h_lo_b2 >= h_hi_b2) goto m38_b2_skip_h;
-                        {
-                            int mid = (h_lo_b2 + h_hi_b2) / 2;
-                            main_gr[11] = mm[ib + 2*mid];       // MM load
-                            // waitLSQ
-                            //NOP                                // LSQ settle
-                            if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3]) h_lo_b2 = mid + 1;
-                            else h_hi_b2 = mid;
-                        }
+                        main_gr[11] = s1c[168];
+                        //NOP
+                        main_gr[4] = s1c[174];
+                        //NOP
+                        if (main_gr[11] >= main_gr[4]) goto m38_b2_skip_h;
+                        main_gr[5] = main_gr[11] + main_gr[4];
+                        //NOP
+                        main_gr[5] = main_gr[5] / 2;
+                        main_gr[11] = mm[ib + 2*main_gr[5]];
+                        // waitLSQ
+                        //NOP
+                        if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3])
+                            goto m38_b2_h_up_lo;
+                        s1c[174] = main_gr[5];
+                        goto m38_b2_skip_h;
+                    m38_b2_h_up_lo:
+                        main_gr[4] = main_gr[5] + 1;
+                        //NOP
+                        s1c[168] = main_gr[4];
                     m38_b2_skip_h:
-                        if (l_lo_b2 >= l_hi_b2) goto m38_b2_top;
-                        {
-                            int mid = (l_lo_b2 + l_hi_b2) / 2;
-                            main_gr[11] = mm[ib + 2*mid + 1];   // MM load
-                            // waitLSQ
-                            //NOP                                // LSQ settle
-                            if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3]) l_lo_b2 = mid + 1;
-                            else l_hi_b2 = mid;
-                        }
-                        goto m38_b2_top;
-                    m38_b2_done:
-                        s1c[168] = h_lo_b2;
-                        s1c[165] = l_lo_b2;
+                        main_gr[11] = s1c[165];
+                        //NOP
+                        main_gr[4] = s1c[171];
+                        //NOP
+                        if (main_gr[11] >= main_gr[4]) goto m38_b2_check_done;
+                        main_gr[5] = main_gr[11] + main_gr[4];
+                        //NOP
+                        main_gr[5] = main_gr[5] / 2;
+                        main_gr[11] = mm[ib + 2*main_gr[5] + 1];
+                        // waitLSQ
+                        //NOP
+                        if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3])
+                            goto m38_b2_l_up_lo;
+                        s1c[171] = main_gr[5];
+                        goto m38_b2_check_done;
+                    m38_b2_l_up_lo:
+                        main_gr[4] = main_gr[5] + 1;
+                        //NOP
+                        s1c[165] = main_gr[4];
+                    m38_b2_check_done:
+                        main_gr[11] = s1c[168];
+                        //NOP
+                        main_gr[4] = s1c[174];
+                        //NOP
+                        if (main_gr[11] < main_gr[4]) goto m38_b2_top;
+                        main_gr[11] = s1c[165];
+                        //NOP
+                        main_gr[4] = s1c[171];
+                        //NOP
+                        if (main_gr[11] < main_gr[4]) goto m38_b2_top;
                     }
                 }
             }
