@@ -10,7 +10,7 @@ Vocabulary: `pass` | `fix-required` | `fix-preferred` | `waive:<reason>` |
 
 | Magic | R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10 | R11 | R12 |
 |-------|----|----|----|----|----|----|----|----|----|-----|-----|-----|
-| 16 | fix-required (m16, setup) | pass | pass | pass | pass | waive:no-spm-read (m16, setup) | waive:no-mm-s2-load (m16, setup) | fix-required (m16, setup) | waive:no-bulk-transfer (m16, setup) | waive:no-minmax (m16, setup) | pass | pass |
+| 16 | fix-preferred (m16, setup) | pass | pass | pass | pass | waive:no-spm-read (m16, setup) | waive:no-mm-s2-load (m16, setup) | done (m16 R8, d098372) | waive:no-bulk-transfer (m16, setup) | waive:no-minmax (m16, setup) | pass | pass |
 | 18 | fix-required (m18, fin0_writeback) | fix-required (m18, fin0_writeback) | pass | fix-required (m18, fin0_writeback) | pass | fix-required (m18, fin0_writeback) | waive:no-mm-s2-load (m18, fin0_writeback) | pass | waive:queue-writeback-pattern (m18, fin0_writeback) | waive:no-minmax (m18, fin0_writeback) | pass | pass |
 | 19 | pass | fix-required (m19, prefix_sum) | pass | fix-required (m19, prefix_sum) | pass | fix-required (m19, prefix_sum) | waive:no-mm-s2-load (m19, prefix_sum) | fix-required (m19, prefix_sum) | waive:metadata-prefix-only (m19, prefix_sum) | waive:no-minmax (m19, prefix_sum) | pass | pass |
 | 20 | fix-required (m20, fin0_load_batch) | fix-required (m20, fin0_load_batch) | fix-required (m20, fin0_load_batch) | fix-required (m20, fin0_load_batch) | pass | pass | fix-required (m20, fin0_load_batch) | fix-required (m20, fin0_load_batch) | pass | waive:no-minmax (m20, fin0_load_batch) | fix-required (m20, fin0_load_batch) | pass |
