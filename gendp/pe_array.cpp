@@ -2287,6 +2287,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             s1c[153] = gr[20];                       // active_diag_base
             // Clamp n_phase1_v to [0, n_a] using branches
             gr[1] = s1c[151];                        // n_phase1_v
+            //NOP                                    // s1c 1-cycle latency gap
             if (gr[1] >= 0) goto m16_clamp_hi;
             gr[1] = 0;
         m16_clamp_hi:
