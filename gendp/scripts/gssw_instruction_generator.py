@@ -173,7 +173,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils import InstructionWriter, write_magic, \
     data_movement_instruction, compute_instruction
 from opcodes import (gr, gr_hi, gr_lo, reg, SPM, halt, none, set_PC,
-                     bne, beq, bge, blt, jump, si, mv, mvd, addi,
+                     bne, beq, bge, blt, jump, si, mv, mvd, mvi2, addi,
                      shifti_l, shifti_r, ANDI, set_8, add,
                      MULTIPLICATION, HALT, INVALID, COPY,
                      MAX_EPU8, MAX_REDUCE)
@@ -526,9 +526,80 @@ def pe_0_instruction(f):
     f.write(NOP); f.write(NOP)
     f.write(NOP); f.write(NOP)
 
-    # Run sections D..G via magic(108). Section H lowered in ISA below.
+    # === Section D+G (lowered): column loop wrapping (stage 3d) ==============
+    # ISA owns the outer column iteration; magic(109) runs one column's
+    # body (E + lazy-F + F) per call. Strategy:
+    #   - Copy gr[2].hi (seq_len) into gr[12] (full width) BEFORE the loop
+    #     so the D-head bge can compare gr[2].lo to gr[12].lo without
+    #     straddling a subregister/full-gr boundary.
+    #   - D-head per iter: mvi2 seq[col] → gr[13], bge col >= seq_len.
+    #   - magic(109): runs E + lazy-F + F for this column.
+    #   - G-tail per iter: swap gr[5]/gr[6] via gr[11] temp, addi
+    #     gr[2].lo += 1, jump back to col head.
+    #
+    # Simulator note: mvi2's SPM-offset subregister support was added this
+    # stage (pe.cpp:2861 now passes src_resolved into the addr_regfile
+    # read of reg_1), so `gr_lo[2]` encodes correctly as the mvi2 offset.
+
+    # Copy seq_len to gr[12] (full). mv gr[12] = gr_hi[2] sign-extends the
+    # 16-bit seq_len into the full 32-bit gr[12]; seq_len is positive, so
+    # gr[12].lo = seq_len and gr[12].hi = 0.
+    f.write(data_movement_instruction(gr, gr_hi, 0, 0, 12, 0, 0, 0, 2, 0, mv))
+    f.write(NOP)
+
+    # col = 0
+    f.write(data_movement_instruction(gr_lo, 0, 0, 0, 2, 0, 0, 0, 0, 0, si))
+    f.write(NOP)
+
+    col_pc = f.pc
+
+    # mvi2 gr[13] = SPM[gr[7] + gr[2].lo] — seq[col] as 2-bit extract.
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 13, 0, 1, 0, 7, spm_lo(2), mvi2))
+    f.write(NOP)
+    # SPM latency (2 cycles) + mvi2 delivery.
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+
+    # bge gr[2].lo >= gr[12].lo, col_done_fwd_patch. src=gr with
+    # reg_1 = spm_lo(12) forces both comp_0 and comp_1 to use
+    # CTRL_GR_LO; comp_0 reads gr[imm_1=2].lo = col, comp_1 reads
+    # gr[reg_1=12].lo = seq_len.
+    bge_col_wi = f.write_count
+    bge_col_pc = f.pc
+    f.write(data_movement_instruction(0, gr, 0, 0, 0, 0, 1, 0, 2, spm_lo(12), bge))
+    f.write(NOP)
+
+    # Body: run sections E + lazy-F + F via magic(109). gr[13] = seq[col]
+    # at entry (from the mvi2 above); magic 109's first section-E op
+    # computes vP_word_base from gr[13].
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))
-    f.write(write_magic(108))
+    f.write(write_magic(109))
+
+    # Section G (lowered): swap gr[5] (hPing) and gr[6] (hPong) via gr[11]
+    # temp. gr[11] holds colMax after magic 109's section F, then gets
+    # clobbered here — safe because section H ISA re-inits gr[11] = 78.
+    # Three separate VLIW cycles to avoid src-position conflicts between
+    # paired mv's.
+    f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 5, 0, mv))
+    f.write(NOP)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 6, 0, mv))
+    f.write(NOP)
+    f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0, 11, 0, mv))
+    f.write(NOP)
+
+    # col += 1 on its own cycle (matches magic 101's CTRL_GR_LO semantic).
+    f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 2, 0, 0, 0, 1, 2, addi))
+    f.write(NOP)
+
+    # Jump back to col_pc.
+    col_back_pc = f.pc
+    f.write(data_movement_instruction(
+        0, 0, 0, 0, col_pc - col_back_pc, 0, 0, 0, 0, 0, jump))
+    f.write(NOP)
+
+    # col_done: patch the D-head bge to land here.
+    col_done_pc = f.pc
+    f.patch_imm0(bge_col_wi, col_done_pc - bge_col_pc)
 
     # === Section H (lowered): seed push to children =========================
     # Per-node post-column-loop step. gr[15] = next_len (DEC-5 relaxed).

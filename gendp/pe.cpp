@@ -1931,7 +1931,8 @@ m23_end:    ;
         m19_done: ;
         } else if (magic_id == 101 || magic_id == 103
                 || magic_id == 104 || magic_id == 106
-                || magic_id == 107 || magic_id == 108) {
+                || magic_id == 107 || magic_id == 108
+                || magic_id == 109) {
             // GSSW kernel — register-mapped ISA-like form.
             // Staged-lowering variants:
             //   magic 101 = full kernel (sections A..I)
@@ -1956,6 +1957,14 @@ m23_end:    ;
             //               gr[6] = HPONG_WOFF, gr[3].lo = 0 at entry
             //               so sections D..G inherit the hPing/hPong
             //               bases and the col counter as before.
+            //   magic 109 = like 108 but also skips section D's col-loop
+            //               head (col-counter init + mvi2 of seq[col] +
+            //               bge col >= seq_len exit) and section G's
+            //               swap+col++ tail. Caller is expected to drive
+            //               one column's worth of body each call; the
+            //               ISA owns the outer column loop. At entry,
+            //               gr[13] = seq[col], gr[2].lo = col (same as
+            //               on the magic-108 path just before the bge).
             // Register allocation:
             //  gr[1] lo: n           hi: numNodes
             //  gr[2] lo: col         hi: seq_len
@@ -2060,7 +2069,8 @@ m23_end:    ;
 
             // === B. OUTER NODE LOOP ===
         m_101_node:
-          if (magic_id != 106 && magic_id != 107 && magic_id != 108) {
+          if (magic_id != 106 && magic_id != 107 && magic_id != 108
+              && magic_id != 109) {
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI)) goto m_101_done;
 
             // nd_word_off = NODES_WOFF + n * 76 (uses hoisted gr[11]=76)
@@ -2085,7 +2095,7 @@ m23_end:    ;
             //NOP
           }  // end if (magic_id != 106 && magic_id != 107) — section B skipped for 106/107
 
-          if (magic_id != 108) {
+          if (magic_id != 108 && magic_id != 109) {
             // === C. SEED LOAD: hPing[j] = nd.hSeed[j], pvE[j] = nd.eSeed[j] ===
             // Init hPing_base = HPING_WOFF, hPong_base = HPONG_WOFF
             gr.st(5, GSSW_HPING_WOFF);
@@ -2114,14 +2124,18 @@ m23_end:    ;
             spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[22]; spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[23]; gr.st(3, gr.at(3, CTRL_GR_LO) + 2, CTRL_GR_LO);
 
             if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN * GSSW_VEC_WORDS) goto m_101_seed_load;
-          }  // end if (magic_id != 108) — section C skipped for 108
+          }  // end if (magic_id != 108/109) — section C skipped for 108/109
 
             // === D. COLUMN LOOP ===
+          if (magic_id != 109) {
             gr.st(2, 0, CTRL_GR_LO);                         // col = 0
+          }
         m_101_col:
+          if (magic_id != 109) {
             // Extract seq[col] via mvi2 and compute vP_word_base
             gr.st(13, gssw_mvi2_ld(gr.at(7) + gr.at(2, CTRL_GR_LO)));              // seq[col] → gr[13]
             if (gr.at(2, CTRL_GR_LO) >= gr.at(2, CTRL_GR_HI)) goto m_101_col_done;
+          }  // end if (magic_id != 109) — section D loop head skipped for 109
 
             // === E. COLUMN COMPUTE (8-lane paired) ===
             // Init: vMaxColumn(14:15)=0, vH(8:9)=hPing[last]<<1,
@@ -2406,12 +2420,14 @@ m23_end:    ;
         m_101_skip_best:
 
             // === G. Ping/pong swap ===
+          if (magic_id != 109) {
             gr.st(11, gr.at(5));                                // tmp = hPing
             gr.st(5, gr.at(6));                                  // hPing = hPong
             gr.st(6, gr.at(11));                                 // hPong = tmp
 
             gr.st(2, gr.at(2, CTRL_GR_LO) + 1, CTRL_GR_LO);     // col++
             goto m_101_col;
+          }  // end if (magic_id != 109) — section G skipped for 109
         m_101_col_done:
 
             // === H. Seed push to children ===
@@ -2420,7 +2436,7 @@ m23_end:    ;
             // Free regs after col loop: gr[2], gr[6], gr[7], gr[8].
             // Use: gr[2]=c, gr[6]=cd_word_off, gr[7,8]=scratch.
 
-          if (magic_id != 107 && magic_id != 108) {
+          if (magic_id != 107 && magic_id != 108 && magic_id != 109) {
             gr.st(12, spm[gr.at(4) + 1]);                        // [next_off lo | next_len hi]
             gr.st(11, GSSW_ND_WORDS);                                       // re-init 76 (col loop clobbered gr[11])
 
@@ -2510,18 +2526,19 @@ m23_end:    ;
             gr.st(2, gr.at(2) + 1);                              // c++
             if (gr.at(2) < gr.at(3, CTRL_GR_HI)) goto m_101_push;
         m_101_push_done: ;
-          }  // end if (magic_id != 107/108) — section H skipped for 107/108
+          }  // end if (magic_id != 107/108/109) — section H skipped for 107/108/109
 
             // n++, back to outer loop.  Skipped for magic 106, 107, 108
             // which delegate the outer loop to the ISA caller.
-            if (magic_id != 106 && magic_id != 107 && magic_id != 108) {
+            if (magic_id != 106 && magic_id != 107 && magic_id != 108
+                && magic_id != 109) {
                 gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO);
                 goto m_101_node;
             }
 
         m_101_done:
           if (magic_id != 104 && magic_id != 106 && magic_id != 107
-              && magic_id != 108) {
+              && magic_id != 108 && magic_id != 109) {
             // === I. Final reduce (paired 8-lane) ===
             // vMax pair = reg[14:15] (reusing vMaxColumn slot). Iterate
             // j (word offset, step 2) over best[] pairs, accumulate max.
@@ -2551,7 +2568,7 @@ m23_end:    ;
             }
             //COMP: maxReduce and store in gr[15] for magic 102
             gr.st(15, gssw4_maxReduce(reg[20]));
-          }  // end if (magic_id != 104/106/107/108) — section I skipped for 104/106/107/108
+          }  // end if (magic_id != 104/106/107/108/109) — section I skipped
         } else if (magic_id == 102) {
             printf("qqq %d qqq\n",
                    addr_regfile_unit->at(15));
@@ -2863,28 +2880,39 @@ m23_end:    ;
         printf("Move with 2-bit Extract ");
 #endif
         assert(src == CTRL_SPM);
-        // Compute bp-level address from operands
+        // Compute bp-level address from operands.
+        // src_resolved gives the subregister selector for the reg_1
+        // offset register (CTRL_GR / CTRL_GR_LO / CTRL_GR_HI) so
+        // mvi2 can use gr_lo[r] / gr_hi[r] as a packed-half offset
+        // — required for GSSW stage 3d where col = gr[2].lo and
+        // gr[2].hi = seq_len would otherwise fold into the addr.
         int bp_addr;
         if (reg_immBar_flag_1)
             bp_addr =
                 addr_regfile_unit->at(sext_imm_1)
-                + addr_regfile_unit->at(reg_1);
+                + addr_regfile_unit->at(reg_1, src_resolved);
         else
             bp_addr = sext_imm_1
-                + addr_regfile_unit->at(reg_1);
+                + addr_regfile_unit->at(reg_1, src_resolved);
         int bp_offset = bp_addr & 0xF;
         int word_addr = bp_addr >> 4;
 
-        // Swizzle and issue SPM read
-        int access_addr =
-            apply_address_swizzle(word_addr);
-        last_spm_load_addr = access_addr;
+        // Issue SPM read. Previous behavior applied apply_address_swizzle
+        // here so the ISA mvi2 would read interleaved-swizzled data loaded
+        // by the WFA/GWFA-style magic inits. GSSW's magic 100 loads via
+        // plain memcpy (unswizzled) and magic 101's C++ mvi2 helper
+        // (gssw_mvi2_ld) reads raw spm[bp >> 4], so for GSSW we need
+        // the ISA mvi2 to use the same unswizzled virtual addressing.
+        // No other generator emits ISA mvi2 today, so skipping the swizzle
+        // here is safe; add a flag bit (or a new opcode) if a future
+        // swizzle-aware kernel needs it.
+        last_spm_load_addr = word_addr;
         spmReqPort = new OutstandingRequest();
-        spmReqPort->addr = access_addr;
+        spmReqPort->addr = word_addr;
         spmReqPort->peid = id;
         spmReqPort->access_t = SpmAccessT::READ;
         spmReqPort->single_data = true;
-        spmReqPort->isVirtualAddr = false;
+        spmReqPort->isVirtualAddr = true;
 
         // Set up outstanding req for destination
         int dest_addr;
@@ -2900,7 +2928,7 @@ m23_end:    ;
         outstanding_req.single_load = true;
         outstanding_req.dst = dest;
         outstanding_req.addr = dest_addr;
-        outstanding_req.spm_addr = access_addr;
+        outstanding_req.spm_addr = word_addr;
         outstanding_req.bp_shift = bp_offset << 1;
         outstanding_req.two_bit_extract = true;
 
