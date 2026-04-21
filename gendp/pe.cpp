@@ -2050,7 +2050,7 @@ m23_end:    ;
 
             // === B. OUTER NODE LOOP ===
         m_101_node:
-          if (magic_id != 106) {
+          if (magic_id != 106 && magic_id != 107) {
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI)) goto m_101_done;
 
             // nd_word_off = NODES_WOFF + n * 76 (uses hoisted gr[11]=76)
@@ -2073,7 +2073,7 @@ m23_end:    ;
 
             gr.st(7, gr.at(7) + gr.at(12, CTRL_GR_LO));      // + seq_off → seq_base_idx
             //NOP
-          }  // end if (magic_id != 106) — section B skipped for magic 106
+          }  // end if (magic_id != 106 && magic_id != 107) — section B skipped for 106/107
 
             // === C. SEED LOAD: hPing[j] = nd.hSeed[j], pvE[j] = nd.eSeed[j] ===
             // Init hPing_base = HPING_WOFF, hPong_base = HPONG_WOFF
@@ -2508,7 +2508,7 @@ m23_end:    ;
             }
 
         m_101_done:
-          if (magic_id != 104 && magic_id != 106) {
+          if (magic_id != 104 && magic_id != 106 && magic_id != 107) {
             // === I. Final reduce (paired 8-lane) ===
             // vMax pair = reg[14:15] (reusing vMaxColumn slot). Iterate
             // j (word offset, step 2) over best[] pairs, accumulate max.
@@ -2538,7 +2538,7 @@ m23_end:    ;
             }
             //COMP: maxReduce and store in gr[15] for magic 102
             gr.st(15, gssw4_maxReduce(reg[20]));
-          }  // end if (magic_id != 104) — section I skipped for magic 104
+          }  // end if (magic_id != 104 && 106 && 107) — section I skipped for 104/106/107
         } else if (magic_id == 102) {
             // GSSW print score from gr[15].
             printf("qqq %d qqq\n",
