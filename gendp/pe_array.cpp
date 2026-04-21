@@ -2687,32 +2687,114 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         s1c[166+b] = best_lo; // intv_hi[pe]
                     }
                 } else {
-                    // No merge: compute boundaries via fused binary search
-                    // Both hi and lo searches run in parallel per boundary
-                    for (int b = 0; b < 3; b++) {
-                        uint32_t vd = (uint32_t)s1c[159+b];
-                        // hi search: first intv whose .lo >= vd
-                        int h_lo = 0, h_hi = intv_n;
-                        // lo search: first intv whose .hi > vd
-                        int l_lo = 0, l_hi = intv_n;
-                        while (h_lo < h_hi || l_lo < l_hi) {
-                            if (h_lo < h_hi) {
-                                int mid = (h_lo + h_hi) / 2;
-                                uint32_t val = (uint32_t)mm[ib + 2*mid];
-                                // waitLSQ
-                                if (val < vd) h_lo = mid + 1;
-                                else h_hi = mid;
-                            }
-                            if (l_lo < l_hi) {
-                                int mid = (l_lo + l_hi) / 2;
-                                uint32_t val = (uint32_t)mm[ib + 2*mid + 1];
-                                // waitLSQ
-                                if (val <= vd) l_lo = mid + 1;
-                                else l_hi = mid;
-                            }
+                    // No merge: compute boundaries via fused binary
+                    // search, lowered to explicit label/goto state
+                    // machines per boundary (AC-9 rule 4 close).
+                    // Triple-unrolled for b in {0,1,2} with unique
+                    // label suffixes because C++ function-scope labels
+                    // cannot be reused across a for-loop body.
+                    auto &main_gr = main_addressing_register;
+                    // b = 0
+                    {
+                        main_gr[11] = s1c[159];
+                        //NOP                                    // s1c 1-cycle gap
+                        uint32_t vd_b0 = (uint32_t)main_gr[11];
+                        int h_lo_b0 = 0, h_hi_b0 = intv_n;
+                        int l_lo_b0 = 0, l_hi_b0 = intv_n;
+                    m38_b0_top:
+                        if (h_lo_b0 >= h_hi_b0 && l_lo_b0 >= l_hi_b0)
+                            goto m38_b0_done;
+                        if (h_lo_b0 >= h_hi_b0) goto m38_b0_skip_h;
+                        {
+                            int mid = (h_lo_b0 + h_hi_b0) / 2;
+                            main_gr[11] = mm[ib + 2*mid];       // MM load
+                            // waitLSQ
+                            //NOP                                // LSQ settle
+                            if ((uint32_t)main_gr[11] < vd_b0) h_lo_b0 = mid + 1;
+                            else h_hi_b0 = mid;
                         }
-                        s1c[166+b] = h_lo; // intv_hi[pe]
-                        s1c[163+b] = l_lo; // intv_lo[pe+1]
+                    m38_b0_skip_h:
+                        if (l_lo_b0 >= l_hi_b0) goto m38_b0_top;
+                        {
+                            int mid = (l_lo_b0 + l_hi_b0) / 2;
+                            main_gr[11] = mm[ib + 2*mid + 1];   // MM load
+                            // waitLSQ
+                            //NOP                                // LSQ settle
+                            if ((uint32_t)main_gr[11] <= vd_b0) l_lo_b0 = mid + 1;
+                            else l_hi_b0 = mid;
+                        }
+                        goto m38_b0_top;
+                    m38_b0_done:
+                        s1c[166] = h_lo_b0;
+                        s1c[163] = l_lo_b0;
+                    }
+                    // b = 1
+                    {
+                        main_gr[11] = s1c[160];
+                        //NOP                                    // s1c 1-cycle gap
+                        uint32_t vd_b1 = (uint32_t)main_gr[11];
+                        int h_lo_b1 = 0, h_hi_b1 = intv_n;
+                        int l_lo_b1 = 0, l_hi_b1 = intv_n;
+                    m38_b1_top:
+                        if (h_lo_b1 >= h_hi_b1 && l_lo_b1 >= l_hi_b1)
+                            goto m38_b1_done;
+                        if (h_lo_b1 >= h_hi_b1) goto m38_b1_skip_h;
+                        {
+                            int mid = (h_lo_b1 + h_hi_b1) / 2;
+                            main_gr[11] = mm[ib + 2*mid];       // MM load
+                            // waitLSQ
+                            //NOP                                // LSQ settle
+                            if ((uint32_t)main_gr[11] < vd_b1) h_lo_b1 = mid + 1;
+                            else h_hi_b1 = mid;
+                        }
+                    m38_b1_skip_h:
+                        if (l_lo_b1 >= l_hi_b1) goto m38_b1_top;
+                        {
+                            int mid = (l_lo_b1 + l_hi_b1) / 2;
+                            main_gr[11] = mm[ib + 2*mid + 1];   // MM load
+                            // waitLSQ
+                            //NOP                                // LSQ settle
+                            if ((uint32_t)main_gr[11] <= vd_b1) l_lo_b1 = mid + 1;
+                            else l_hi_b1 = mid;
+                        }
+                        goto m38_b1_top;
+                    m38_b1_done:
+                        s1c[167] = h_lo_b1;
+                        s1c[164] = l_lo_b1;
+                    }
+                    // b = 2
+                    {
+                        main_gr[11] = s1c[161];
+                        //NOP                                    // s1c 1-cycle gap
+                        uint32_t vd_b2 = (uint32_t)main_gr[11];
+                        int h_lo_b2 = 0, h_hi_b2 = intv_n;
+                        int l_lo_b2 = 0, l_hi_b2 = intv_n;
+                    m38_b2_top:
+                        if (h_lo_b2 >= h_hi_b2 && l_lo_b2 >= l_hi_b2)
+                            goto m38_b2_done;
+                        if (h_lo_b2 >= h_hi_b2) goto m38_b2_skip_h;
+                        {
+                            int mid = (h_lo_b2 + h_hi_b2) / 2;
+                            main_gr[11] = mm[ib + 2*mid];       // MM load
+                            // waitLSQ
+                            //NOP                                // LSQ settle
+                            if ((uint32_t)main_gr[11] < vd_b2) h_lo_b2 = mid + 1;
+                            else h_hi_b2 = mid;
+                        }
+                    m38_b2_skip_h:
+                        if (l_lo_b2 >= l_hi_b2) goto m38_b2_top;
+                        {
+                            int mid = (l_lo_b2 + l_hi_b2) / 2;
+                            main_gr[11] = mm[ib + 2*mid + 1];   // MM load
+                            // waitLSQ
+                            //NOP                                // LSQ settle
+                            if ((uint32_t)main_gr[11] <= vd_b2) l_lo_b2 = mid + 1;
+                            else l_hi_b2 = mid;
+                        }
+                        goto m38_b2_top;
+                    m38_b2_done:
+                        s1c[168] = h_lo_b2;
+                        s1c[165] = l_lo_b2;
                     }
                 }
             }
