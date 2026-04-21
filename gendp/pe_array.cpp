@@ -511,6 +511,7 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         F0B_ASSIGN(s1c[22], gr[2], rr);
         s1c[22] = s1c[22] + 1;
         gr[2] = gr[2] + 1;
+        //NOP                                    // WAW barrier for gr[2]
         gr[2] = gr[2] & 3;
         goto f0b_rr;
     f0b_rr_break:
