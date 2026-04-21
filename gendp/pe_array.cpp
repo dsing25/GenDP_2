@@ -3526,7 +3526,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int *mm = gwfa_get_mm();
                 constexpr int DIAG_CAP_V2 = (16 << 20);
                 constexpr int MM_INTV2 = DIAG_CAP_V2 * 6;
-                int diag_base   = s1c[144]; // original diag_base
+                // s1c[144] stages through gr[11] with 1-NOP gap.
+                gr[11] = s1c[144];
+                //NOP                                       // s1c gap
+                int diag_base   = gr[11]; // original diag_base
                 int mm_sort_buf = gr[4];
                 int mm_intv_out = gr[7];
 
@@ -3670,8 +3673,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     // last_intv_hi already reflects the merged tail
                     // (possibly bumped to hi0 at the merge branch),
                     // so no further update is needed here.
-                    if (cnt > skip)
-                        last_intv_hi = (uint32_t)s1c[188 + pe];
+                    if (cnt > skip) {
+                        gr[11] = s1c[188 + pe];
+                        //NOP                                 // s1c 1-cycle gap
+                        last_intv_hi = (uint32_t)gr[11];
+                    }
                 }
 
                 // Clear sort/dedup SPM region per PE
