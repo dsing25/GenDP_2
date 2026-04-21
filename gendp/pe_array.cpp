@@ -781,6 +781,20 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
     bool is_magic = (instruction & magic_mask);
     int  magic_payload = instruction & magic_payload_mask;
 
+    // See pe::decode for rationale. Top 2 bits of the 6-bit reg idx encode
+    // CTRL_GR / CTRL_GR_LO / CTRL_GR_HI when src/dest type is CTRL_GR.
+    auto resolve_gr_half = [](int& reg_idx, int type) -> int {
+        if (type != CTRL_GR) return type;
+        int high = reg_idx >> 4;
+        int resolved = type;
+        if (high == 1) resolved = CTRL_GR_LO;
+        else if (high == 2) resolved = CTRL_GR_HI;
+        reg_idx &= 0xF;
+        return resolved;
+    };
+    src = resolve_gr_half(reg_1, src);
+    dest = resolve_gr_half(reg_0, dest);
+
 #ifdef PROFILE
     printf("PC = %d @%d:%016lx\t", *PC, cycle, instruction);
 #endif
@@ -3907,6 +3921,20 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
     int sext_imm_1 = reg_imm_1 | (reg_imm_1_sign_bit ? imm_sign_extend_mask : 0);
     int reg_1 = (instruction & reg_1_mask) >> CTRL_OPCODE_WIDTH;
     int opcode = instruction & opcode_mask;
+
+    // See pe::decode for rationale. Top 2 bits of the 6-bit reg idx encode
+    // CTRL_GR / CTRL_GR_LO / CTRL_GR_HI when src/dest type is CTRL_GR.
+    auto resolve_gr_half = [](int& reg_idx, int type) -> int {
+        if (type != CTRL_GR) return type;
+        int high = reg_idx >> 4;
+        int resolved = type;
+        if (high == 1) resolved = CTRL_GR_LO;
+        else if (high == 2) resolved = CTRL_GR_HI;
+        reg_idx &= 0xF;
+        return resolved;
+    };
+    src = resolve_gr_half(reg_1, src);
+    dest = resolve_gr_half(reg_0, dest);
 
 #ifdef PROFILE
     printf("PC = %d\t", *PC);

@@ -1,6 +1,8 @@
 import inspect
 import os
 
+from opcodes import gr as _gr_type, gr_lo as _gr_lo_type, gr_hi as _gr_hi_type
+
 def compute_instruction(op_0, op_1, op_2, in_addr_0, in_addr_1, in_addr_2, in_addr_3, in_addr_4, in_addr_5, out_addr):
     '''
     in_addr_0 can be immediate
@@ -36,18 +38,34 @@ def data_movement_instruction(dest, src, reg_immBar_0, reg_auto_increase_0, imm_
     8 imm_1
     9 reg_1
    10 opcode
+
+    reg fields are 6 bits: idx[0:15]=full 32-bit gr/reg, idx[16:31]=gr lo-half,
+    idx[32:47]=gr hi-half. gr_lo/gr_hi passed as dest/src type are rewritten here
+    to (type=gr, idx+=16 or 32) so the hi/lo selector rides in the reg index.
     '''
-    instr = "0" * 4 \
+    # Collapse gr_lo / gr_hi type aliases into (gr, offset reg idx).
+    if dest == _gr_lo_type:
+        dest, reg_0 = _gr_type, reg_0 + 16
+    elif dest == _gr_hi_type:
+        dest, reg_0 = _gr_type, reg_0 + 32
+    if src == _gr_lo_type:
+        src, reg_1 = _gr_type, reg_1 + 16
+    elif src == _gr_hi_type:
+        src, reg_1 = _gr_type, reg_1 + 32
+    assert 0 <= reg_0 < 48, f"reg_0 {reg_0} out of 6-bit gr range [0,48)"
+    assert 0 <= reg_1 < 48, f"reg_1 {reg_1} out of 6-bit gr range [0,48)"
+
+    instr = "0" * 2 \
             + "{:0>4b}".format(dest) \
             + "{:0>4b}".format(src) \
             + "{:0>1b}".format(reg_immBar_0) \
             + "{:0>1b}".format(reg_auto_increase_0) \
             + "{:0>16b}".format(imm_0 & 0xffff) \
-            + "{:0>5b}".format(reg_0) \
+            + "{:0>6b}".format(reg_0) \
             + "{:0>1b}".format(reg_immBar_1) \
             + "{:0>1b}".format(reg_auto_increase_1) \
             + "{:0>16b}".format(imm_1 & 0xffff) \
-            + "{:0>5b}".format(reg_1) \
+            + "{:0>6b}".format(reg_1) \
             + "{:0>6b}".format(opcode)
     value = int(instr, 2)
     return hex(value) + "\n"
@@ -95,10 +113,10 @@ class InstructionWriter:
         self.file.seek(0)
         lines = self.file.readlines()
         val = int(lines[write_index].strip(), 16)
-        # imm_0 is at bits [49:34]: reg_0(5)+flag_2(1)+flag_3(1)
-        # +imm_1(16)+reg_1(5)+opcode(6) = 34 bits below
-        mask = 0xFFFF << 34
-        val = (val & ~mask) | ((new_imm0 & 0xFFFF) << 34)
+        # imm_0 is at bits [51:36]: reg_0(6)+flag_2(1)+flag_3(1)
+        # +imm_1(16)+reg_1(6)+opcode(6) = 36 bits below
+        mask = 0xFFFF << 36
+        val = (val & ~mask) | ((new_imm0 & 0xFFFF) << 36)
         lines[write_index] = hex(val) + "\n"
         self.file.seek(0)
         self.file.writelines(lines)

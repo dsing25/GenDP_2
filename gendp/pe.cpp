@@ -694,6 +694,25 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
     bool is_magic = (instruction & magic_mask);
     int  magic_payload = instruction & magic_payload_mask;
 
+    // Resolve gr hi/lo selector encoded in the top 2 bits of the 6-bit reg idx
+    // when the corresponding src/dest type is CTRL_GR. After resolution the
+    // effective type becomes CTRL_GR_LO / CTRL_GR_HI as appropriate and the
+    // reg idx is masked to its low 4 bits (valid gr addressing-register id).
+    //   idx[0:15]  -> CTRL_GR        (full 32-bit)
+    //   idx[16:31] -> CTRL_GR_LO     (lo 16-bit half)
+    //   idx[32:47] -> CTRL_GR_HI     (hi 16-bit half)
+    auto resolve_gr_half = [](int& reg_idx, int type) -> int {
+        if (type != CTRL_GR) return type;
+        int high = reg_idx >> 4;
+        int resolved = type;
+        if (high == 1) resolved = CTRL_GR_LO;
+        else if (high == 2) resolved = CTRL_GR_HI;
+        reg_idx &= 0xF;
+        return resolved;
+    };
+    src = resolve_gr_half(reg_1, src);
+    dest = resolve_gr_half(reg_0, dest);
+
     src_dest[0] = src;
     src_dest[1] = dest;
     *op = opcode;

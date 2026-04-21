@@ -39,6 +39,16 @@ LINES_PER_ENTRY = {
     'readNFilter.txt': 1,    # 0 or 1
 }
 
+# Pinned regression cases that have historically exposed
+# simulator bugs. Run these every invocation regardless of mode.
+# (dataset_index, expected_score)
+REGRESSION_CASES = [
+    (5178,   50),
+    (54989,  22),
+    (60726,  48),
+    (141509, 44),
+]
+
 
 def load_golden(path, limit=None):
     """Load golden scores (one per line)."""
@@ -103,6 +113,54 @@ def load_dataset_entries(path, n):
                     break
         data[fname] = entries
     return data
+
+
+def load_dataset_entry_at(idx):
+    """Return {filename: entry_string} for a single dataset index."""
+    entries = {}
+    for fname, lpe in LINES_PER_ENTRY.items():
+        with open(DUMP_DIR / fname) as f:
+            if fname in ('graph.soa', 'matchProfiles.txt'):
+                f.readline()  # skip count header
+            for _ in range(idx):
+                for _ in range(lpe):
+                    f.readline()
+            lines = []
+            for _ in range(lpe):
+                l = f.readline()
+                if not l:
+                    raise RuntimeError(
+                        f"{fname} exhausted at idx {idx}")
+                lines.append(l.rstrip('\n'))
+        entries[fname] = '\n'.join(lines)
+    return entries
+
+
+def run_regression_cases():
+    """Run the pinned regression indices. Returns (passed, failed, errors)."""
+    print()
+    print("=== Regression cases ===")
+    passed = failed = errors = 0
+    for idx, expected in REGRESSION_CASES:
+        try:
+            entry = load_dataset_entry_at(idx)
+        except Exception as e:
+            print(f"  [{idx}] ERROR loading: {e}")
+            errors += 1
+            continue
+        _, score = run_single_case((idx, entry))
+        if score is None:
+            errors += 1
+            continue
+        if score == expected:
+            print(f"  [{idx}] OK   sim={score} expected={expected}")
+            passed += 1
+        else:
+            print(f"  [{idx}] FAIL sim={score} expected={expected}")
+            failed += 1
+    print(f"Regression: {passed} passed, {failed} failed"
+          + (f", {errors} errors" if errors else ""))
+    return passed, failed, errors
 
 
 def run_single_case(args):
@@ -273,7 +331,11 @@ def main():
     print(f"Golden consumed: {g_idx}/{len(golden)}")
     print("=" * 50)
 
-    sys.exit(1 if (failed or errors) else 0)
+    # Always run the pinned regression cases on top of the
+    # mode's batch. Their pass/fail folds into the exit code.
+    r_passed, r_failed, r_errors = run_regression_cases()
+
+    sys.exit(1 if (failed or errors or r_failed or r_errors) else 0)
 
 
 if __name__ == '__main__':
