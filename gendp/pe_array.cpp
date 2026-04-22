@@ -2918,12 +2918,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 // R8: stage s1c[149] through mgr[11] with 1-NOP gap.
                 mgr[11] = s1c[149];
                 //NOP                                    // s1c 1-cycle gap
-                bool merge_skipped = (mgr[11] < 0);
-                // AC-5 (R3): intv_n architectural in mgr[5]; C++ local
-                // eliminated. mgr[5] is dead at m38 entry and clobbered
-                // by the no-merge binary-search as mid after line ~3005,
-                // so its lifetime here is head + mgr[28] broadcast.
-                if (merge_skipped) {
+                // AC-5 (R3): merge_skipped bool eliminated. The sign
+                // of s1c[149] (negative = merge was skipped) is the
+                // signal. We delay overwriting s1c[149] until inside
+                // each arm of the second decision below, so the
+                // second decision can re-read s1c[149] and re-test
+                // the original sign. intv_n architectural in mgr[5].
+                if (mgr[11] < 0) {                       // site 1 test
                     mgr[11] = s1c[148];
                     //NOP                                // s1c 1-cycle gap
                     mgr[5] = mgr[11];                   // intv_n
@@ -2935,22 +2936,20 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         mgr[5] = mgr[5] + mgr[11];      // intv_n += val
                     }
                 }
-                s1c[149] = mgr[5];                       // store intv_n
+                // Shared post-head (does NOT overwrite s1c[149])
                 mgr[11] = s1c[145];                     // n_a
                 //NOP                                    // s1c 1-cycle gap
                 mgr[24] = mgr[11];
                 mgr[28] = mgr[5];                        // intv_n broadcast
-                // Compute intv boundary positions (AC-7)
-                mgr[11] = s1c[152];                     // active_intv_base
+                // Re-read s1c[149] for site 2 test (original sign).
+                mgr[11] = s1c[149];
                 //NOP                                    // s1c 1-cycle gap
-                int ib = mgr[11];
-                if (!merge_skipped) {
-                    // AC-5 (R3): eliminate best_hi/best_lo/hp/lp C++
-                    // locals. best_hi/best_lo live in mgr[3]/mgr[4]
-                    // architectural for the merge-path only (m38 ends
-                    // at closing brace; gr[3]/gr[4] are dead at exit).
-                    // hp/lp folded into direct mgr[11] compares.
-                    // intv_n re-read from s1c[149] per b-iteration.
+                if (mgr[11] >= 0) {                      // !merge_skipped
+                    // merge-path min-reduction; commit intv_n here.
+                    // AC-5 (R3): best_hi/best_lo/hp/lp C++ locals
+                    // eliminated (Round 15). best_hi=mgr[3],
+                    // best_lo=mgr[4], hp/lp folded into mgr[11].
+                    s1c[149] = mgr[5];                   // store intv_n
                     for (int b = 0; b < 3; b++) {
                         mgr[11] = s1c[149];                  // intv_n
                         //NOP                                  // s1c gap
@@ -2976,12 +2975,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         s1c[166+b] = mgr[4]; // intv_hi[pe]
                     }
                 } else {
-                    // No merge: compute boundaries via fused binary
-                    // search, lowered to explicit label/goto state
-                    // machines per boundary (AC-9 rule 4 close).
-                    // Triple-unrolled for b in {0,1,2} with unique
-                    // label suffixes because C++ function-scope labels
-                    // cannot be reused across a for-loop body.
+                    // No merge: commit intv_n, then compute
+                    // boundaries via fused binary search, lowered
+                    // to explicit label/goto state machines per
+                    // boundary (AC-9 rule 4 close). Triple-unrolled
+                    // for b in {0,1,2} with unique label suffixes.
+                    s1c[149] = mgr[5];                   // store intv_n
+                    // AC-5 (R3): `int ib` C++ local eliminated. The
+                    // active_intv_base value stays in s1c[152] and
+                    // is re-read through main_gr[4] scratch just
+                    // before each `mm[ib + 2*mid (+1)?]` load site.
                     auto &main_gr = main_addressing_register;
                     // b = 0: AC-5/AC-9 architectural rewrite per Codex
                     // Round-10 plan. All search state lives in s1c
@@ -3013,7 +3016,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[5] = main_gr[11] + main_gr[4];   // lo+hi
                         //NOP                                    // RAW barrier
                         main_gr[5] = main_gr[5] / 2;             // mid
-                        main_gr[11] = mm[ib + 2*main_gr[5]];
+                        main_gr[4] = s1c[152];                   // ib re-read
+                        //NOP                                    // s1c gap
+                        main_gr[11] = mm[main_gr[4] + 2*main_gr[5]];
                         // waitLSQ
                         //NOP                                    // LSQ settle
                         if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3])
@@ -3034,7 +3039,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[5] = main_gr[11] + main_gr[4];
                         //NOP                                    // RAW barrier
                         main_gr[5] = main_gr[5] / 2;
-                        main_gr[11] = mm[ib + 2*main_gr[5] + 1];
+                        main_gr[4] = s1c[152];                   // ib re-read
+                        //NOP                                    // s1c gap
+                        main_gr[11] = mm[main_gr[4] + 2*main_gr[5] + 1];
                         // waitLSQ
                         //NOP                                    // LSQ settle
                         if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3])
@@ -3080,7 +3087,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[5] = main_gr[11] + main_gr[4];
                         //NOP
                         main_gr[5] = main_gr[5] / 2;
-                        main_gr[11] = mm[ib + 2*main_gr[5]];
+                        main_gr[4] = s1c[152];                   // ib re-read
+                        //NOP                                    // s1c gap
+                        main_gr[11] = mm[main_gr[4] + 2*main_gr[5]];
                         // waitLSQ
                         //NOP
                         if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3])
@@ -3100,7 +3109,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[5] = main_gr[11] + main_gr[4];
                         //NOP
                         main_gr[5] = main_gr[5] / 2;
-                        main_gr[11] = mm[ib + 2*main_gr[5] + 1];
+                        main_gr[4] = s1c[152];                   // ib re-read
+                        //NOP                                    // s1c gap
+                        main_gr[11] = mm[main_gr[4] + 2*main_gr[5] + 1];
                         // waitLSQ
                         //NOP
                         if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3])
@@ -3144,7 +3155,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[5] = main_gr[11] + main_gr[4];
                         //NOP
                         main_gr[5] = main_gr[5] / 2;
-                        main_gr[11] = mm[ib + 2*main_gr[5]];
+                        main_gr[4] = s1c[152];                   // ib re-read
+                        //NOP                                    // s1c gap
+                        main_gr[11] = mm[main_gr[4] + 2*main_gr[5]];
                         // waitLSQ
                         //NOP
                         if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3])
@@ -3164,7 +3177,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[5] = main_gr[11] + main_gr[4];
                         //NOP
                         main_gr[5] = main_gr[5] / 2;
-                        main_gr[11] = mm[ib + 2*main_gr[5] + 1];
+                        main_gr[4] = s1c[152];                   // ib re-read
+                        //NOP                                    // s1c gap
+                        main_gr[11] = mm[main_gr[4] + 2*main_gr[5] + 1];
                         // waitLSQ
                         //NOP
                         if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3])
