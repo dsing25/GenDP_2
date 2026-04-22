@@ -3383,6 +3383,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[11] = 0;
                     //NOP                               // gr settle
                     s1c[40] = gr[11];                   // a_sp[0]
+                    //NOP                               // 1-port s1c gap
                     s1c[45] = gr[11];                   // b_sp[0]
                     gr[11] = n_phase1;
                     //NOP
@@ -3403,15 +3404,18 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         gr[5]  = s1c[40 + p]; //NOP    // prior a_sp[p]
                         if (gr[3] < gr[5]) {
                             gr[3] = gr[5];              // a_sp[p+1] = a_sp[p]
+                            //NOP                        // RAW barrier for gr[3]
                             gr[4] = gr[11] - gr[3];    // recompute b_sp
                         }
                         // Fixup 2: if b_sp candidate < b_sp[p], use b_sp[p]
                         gr[5]  = s1c[45 + p]; //NOP    // prior b_sp[p]
                         if (gr[4] < gr[5]) {
                             gr[4] = gr[5];              // b_sp[p+1] = b_sp[p]
+                            //NOP                        // RAW barrier for gr[4]
                             gr[3] = gr[11] - gr[4];    // recompute a_sp
                         }
                         s1c[41 + p] = gr[3];            // a_sp[p+1]
+                        //NOP                            // 1-port s1c gap
                         s1c[46 + p] = gr[4];            // b_sp[p+1]
                     }
                     // Pre-compute tile sizes for mvdq interleaved load
