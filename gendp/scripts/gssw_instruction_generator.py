@@ -176,7 +176,7 @@ from opcodes import (gr, gr_hi, gr_lo, reg, SPM, halt, none, set_PC,
                      bne, beq, bge, blt, jump, si, mv, mvd, mvi2, addi,
                      shifti_l, shifti_r, ANDI, set_8, add,
                      MULTIPLICATION, HALT, INVALID, COPY,
-                     MAX_EPU8, MAX_REDUCE)
+                     MAX_EPU8, MAX_REDUCE, ADDS_EPU8, SUBS_EPU8, SLLI_64)
 
 # Pre-made NOP (two-slot-agnostic data-movement no-op).
 NOP = data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)
@@ -210,6 +210,14 @@ CPC_MUL_N_78     = 8   # gr[4] = gr[1].lo * gr[11]    (section B)
 CPC_MUL_CHILD_78 = 10  # gr[8] = gr[7]    * gr[11]    (section H)
 CPC_PUSH_MAX     = 12  # reg[20:21] = max_epu8_pair(reg[20:21], reg[22:23])
 CPC_MAXCOL       = 14  # reg[20] = max(reg[14],reg[15]); gr[11] = max_reduce (section F)
+# Stage 3f: section E main body compute regions. Each region is one PC
+# with two slots (lo/hi) that compute the paired 8-lane step.
+CPC_E_SHIFT      = 17  # reg[8:9] = SLLI_64(reg[8:9], 8)  — cross-lane byte shift
+CPC_MAIN_S1      = 19  # vH = subs(adds(vH, profScore), vBias)
+CPC_MAIN_S2      = 21  # vH = max(max(vH, e), vF)
+CPC_MAIN_S3      = 23  # vMaxColumn = max(vMaxColumn, vH)
+CPC_MAIN_S4      = 25  # e = max(subs(e, vGapE), subs(vH, vGapO))
+CPC_MAIN_S5      = 27  # vF = max(subs(vF, vGapE), subs(vH, vGapO))
 
 
 # --- Subregister-offset encoding helpers for SPM addressing -----------------
@@ -315,6 +323,40 @@ def gssw_compute_instructions():
     f.write(compute_instruction(MAX_REDUCE, INVALID, COPY, 20, 0, 0, 0, 0, 0, COMP_GR + 11))
     f.write(compute_instruction(HALT, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
     # PC 16 — halt tail for CPC_MAXCOL.
+    for ins in _chalt(): f.write(ins)
+    # PC 17 — CPC_E_SHIFT (section E prologue): reg[8:9] = SLLI_64(reg[8:9], 8).
+    # SLLI_64 is an immediate opcode (sys_def.h:117); cu_inputs[s][0] is
+    # taken from input_addr[0] field directly (not a regfile read), so we
+    # pass 8 as the shift amount. Slot 0 emits the new low word (reg[8]);
+    # slot 1 emits the new high word (reg[9]).
+    f.write(compute_instruction(SLLI_64, HALT, HALT, 8, 8, 9, 0, 0, 0, 8))
+    f.write(compute_instruction(SLLI_64, HALT, HALT, 8, 8, 9, 0, 0, 0, 9))
+    # PC 18 — halt tail for CPC_E_SHIFT.
+    for ins in _chalt(): f.write(ins)
+    # PC 19 — CPC_MAIN_S1 (section E step 1): vH = subs(adds(vH,profScore),vBias).
+    f.write(compute_instruction(ADDS_EPU8, COPY, SUBS_EPU8, 8, 16, 0, 0, 0, 0, 8))
+    f.write(compute_instruction(ADDS_EPU8, COPY, SUBS_EPU8, 9, 17, 0, 0, 1, 0, 9))
+    # PC 20 — halt tail for CPC_MAIN_S1.
+    for ins in _chalt(): f.write(ins)
+    # PC 21 — CPC_MAIN_S2: vH = max(max(vH, e), vF).
+    f.write(compute_instruction(MAX_EPU8, COPY, MAX_EPU8, 8, 12, 0, 0, 10, 0, 8))
+    f.write(compute_instruction(MAX_EPU8, COPY, MAX_EPU8, 9, 13, 0, 0, 11, 0, 9))
+    # PC 22 — halt tail for CPC_MAIN_S2.
+    for ins in _chalt(): f.write(ins)
+    # PC 23 — CPC_MAIN_S3: vMaxColumn = max(vMaxColumn, vH).
+    f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 14, 8, 0, 0, 0, 0, 14))
+    f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 15, 9, 0, 0, 0, 0, 15))
+    # PC 24 — halt tail for CPC_MAIN_S3.
+    for ins in _chalt(): f.write(ins)
+    # PC 25 — CPC_MAIN_S4: e = max(subs(e, vGapE), subs(vH, vGapO)).
+    f.write(compute_instruction(SUBS_EPU8, SUBS_EPU8, MAX_EPU8, 12, 4, 0, 0, 8, 2, 12))
+    f.write(compute_instruction(SUBS_EPU8, SUBS_EPU8, MAX_EPU8, 13, 5, 0, 0, 9, 3, 13))
+    # PC 26 — halt tail for CPC_MAIN_S4.
+    for ins in _chalt(): f.write(ins)
+    # PC 27 — CPC_MAIN_S5: vF = max(subs(vF, vGapE), subs(vH, vGapO)).
+    f.write(compute_instruction(SUBS_EPU8, SUBS_EPU8, MAX_EPU8, 10, 4, 0, 0, 8, 2, 10))
+    f.write(compute_instruction(SUBS_EPU8, SUBS_EPU8, MAX_EPU8, 11, 5, 0, 0, 9, 3, 11))
+    # PC 28 — halt tail for CPC_MAIN_S5.
     for ins in _chalt(): f.write(ins)
     f.close()
 
@@ -579,12 +621,167 @@ def pe_0_instruction(f):
     f.write(data_movement_instruction(0, gr, 0, 0, 0, 0, 1, 0, 2, spm_lo(12), bge))
     f.write(NOP)
 
-    # Body: run sections E + lazy-F via magic(110). gr[13] = seq[col]
-    # at entry (from the mvi2 above); magic 110's first section-E op
-    # computes vP_word_base from gr[13]. reg[14:15] = vMaxColumn pair at
-    # magic 110 exit.
+    # === Section E (lowered): prologue + 19-iter main inner DP loop =========
+    # State at entry: gr[5]=hPing_base, gr[6]=hPong_base (per current
+    # col parity), gr[13]=seq[col] (just mvi2'd), gr[2].lo=col,
+    # gr[12].lo=seq_len. reg[0:1]=vBias, reg[2:3]=vGapO, reg[4:5]=vGapE,
+    # reg[6:7]=vZero (from section A).
+    # At exit: reg[8:9]=vH, reg[10:11]=vF, reg[12:13]=e (next iter's),
+    # reg[14:15]=vMaxColumn. gr[3]=0 (bne fell through at 38, .hi=0).
+    # Magic 111 (lazy-F only) is called after; section F + G ISA continue.
+
+    # Prologue: mvd reg[8:9] = hPing[last pair] (vH init).
+    f.write(data_movement_instruction(
+        reg, SPM, 0, 0, 8, 0, 0, 0,
+        (GSSW_SEG_LEN - 1) * GSSW_VEC_WORDS, 5, mvd))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+
+    # mvd reg[12:13] = pvE[0:1] (e init).
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 12, 0, 0, 0, GSSW_E_WOFF, 0, mvd))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+
+    # vF = 0.
+    f.write(data_movement_instruction(reg, 0, 0, 0, 10, 0, 0, 0, 0, 0, set_8))
+    f.write(data_movement_instruction(reg, 0, 0, 0, 11, 0, 0, 0, 0, 0, set_8))
+    # vMaxColumn = 0.
+    f.write(data_movement_instruction(reg, 0, 0, 0, 14, 0, 0, 0, 0, 0, set_8))
+    f.write(data_movement_instruction(reg, 0, 0, 0, 15, 0, 0, 0, 0, 0, set_8))
+
+    # vP_word_base = gr[13]*38 + PROF_WOFF via unrolled shift-add.
+    # 38 = 32 + 4 + 2 = (<<5) + (<<2) + (<<1). Use gr[11] and overwrite
+    # gr[13] for scratch. gr[11] is clobbered by section F anyway.
+    # Cycle a: slot 0 shifti_l gr[11]=gr[13]<<5 | slot 1 shifti_l gr[8]=gr[13]<<2.
+    # Slot 1 decodes first, reads original gr[13]; slot 0 reads original gr[13].
+    f.write(data_movement_instruction(gr, 0, 0, 0, 11, 0, 0, 0, 5, 13, shifti_l))
+    f.write(data_movement_instruction(gr, 0, 0, 0, 8, 0, 0, 0, 2, 13, shifti_l))
+    # Cycle b: shifti_l gr[13] = gr[13] << 1 (destructive on gr[13]).
+    f.write(data_movement_instruction(gr, 0, 0, 0, 13, 0, 0, 0, 1, 13, shifti_l))
+    f.write(NOP)
+    # Cycle c: add gr[8] = gr[8] + gr[11].
+    f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, 8, 11, add))
+    f.write(NOP)
+    # Cycle d: add gr[8] = gr[8] + gr[13].
+    f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, 8, 13, add))
+    f.write(NOP)
+    # Cycle e: addi gr[8] += PROF_WOFF.
+    f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, GSSW_PROF_WOFF, 8, addi))
+    f.write(NOP)
+
+    # Compute-trace barrier + cross-lane byte shift: reg[8:9] <<= 8.
+    # Park compute at PC 0 (idle HALT) first to drain any in-flight writes,
+    # then set_PC CPC_E_SHIFT. Immediate shift amount = 8 (encoded in
+    # input_addr[0] of CPC_E_SHIFT).
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_E_SHIFT, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+
+    # pvF_zero loop: 19 iters clearing SPM[F_WOFF + 0..37] to 0 using
+    # reg[6:7] = vZero. Slot-swap: addi in slot 0, mvd store in slot 1.
+    # Slot 1 decodes first -> reads OLD gr[3].lo for the store addr;
+    # slot 0 addi writes NEW gr[3].lo for the next iter.
+    f.write(data_movement_instruction(gr_lo, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))
+    f.write(NOP)
+    pvf_pc = f.pc
+    f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 3, 0, 0, 0, 2, 3, addi))
+    f.write(data_movement_instruction(SPM, reg, 0, 0, GSSW_F_WOFF, spm_lo(3), 0, 0, 6, 0, mvd))
+    pvf_back_pc = f.pc
+    f.write(data_movement_instruction(
+        0, 0, 0, 0, pvf_pc - pvf_back_pc, 0, 0, 0,
+        GSSW_SEG_LEN * GSSW_VEC_WORDS, 3, bne))
+    f.write(NOP)
+    # SPM drain.
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+
+    # Initial profScore load: reg[16:17] = SPM[gr[8] + 0]; gr[8] += 2.
+    # Slot-swap: addi in slot 0, mvd in slot 1. mvd reads OLD gr[8]
+    # (= vP_word_base); addi then writes gr[8] = vP_word_base + 2.
+    f.write(data_movement_instruction(gr, gr, 0, 0, 8, 0, 0, 0, 2, 8, addi))
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 16, 0, 1, 0, 8, 0, mvd))
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+
+    # Reset main-loop j counter.
+    f.write(data_movement_instruction(gr_lo, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))
+    f.write(NOP)
+
+    # --- Main inner DP loop body (19 iters × 15 VLIW cycles) -----------------
+    # Interleaving (each step fires its CPC region; compute executes next
+    # cycle on the regfile reads of THIS cycle; result committed by end of
+    # that next cycle; the step AFTER that reads the committed result).
+    #
+    # The 2-cycle spacing between set_PCs (set_PC + NOP | SPM-op, then
+    # set_PC of the next step) ensures the next step's compute reads the
+    # previous step's output.
+    main_pc = f.pc
+    # Cycle 1: set_PC CPC_MAIN_S1 | NOP
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_S1, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    # Cycle 2: mvd load next profScore | NOP
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 16, 0, 1, 0, 8, spm_lo(3), mvd))
+    f.write(NOP)
+    # Cycle 3: set_PC CPC_MAIN_S2 | NOP
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_S2, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    # Cycle 4: mvd store pvF[j] = reg[10:11] (old vF) | NOP
+    f.write(data_movement_instruction(SPM, reg, 0, 0, GSSW_F_WOFF, spm_lo(3), 0, 0, 10, 0, mvd))
+    f.write(NOP)
+    # Cycle 5: set_PC CPC_MAIN_S3 | NOP
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_S3, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    # Cycle 6: mvd store hPong[j] = reg[8:9] | NOP
+    f.write(data_movement_instruction(SPM, reg, 1, 0, 6, spm_lo(3), 0, 0, 8, 0, mvd))
+    f.write(NOP)
+    # Cycle 7: set_PC CPC_MAIN_S4 | NOP
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_S4, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    # Cycle 8: mvd reg[20:21] = hPing[j:j+1] (preload next iter vH) | NOP
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 20, 0, 1, 0, 5, spm_lo(3), mvd))
+    f.write(NOP)
+    # Cycle 9: set_PC CPC_MAIN_S5 | NOP
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_S5, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    # Cycle 10: mvd store pvE[j] = reg[12:13] | NOP
+    f.write(data_movement_instruction(SPM, reg, 0, 0, GSSW_E_WOFF, spm_lo(3), 0, 0, 12, 0, mvd))
+    f.write(NOP)
+    # Cycle 11: mv reg[8]=reg[20] | mv reg[9]=reg[21]
+    f.write(data_movement_instruction(reg, reg, 0, 0, 8, 0, 0, 0, 20, 0, mv))
+    f.write(data_movement_instruction(reg, reg, 0, 0, 9, 0, 0, 0, 21, 0, mv))
+    # Cycle 12: SPM drain pair
+    f.write(NOP); f.write(NOP)
+    # Cycle 13: addi gr[3].lo += 2 (slot 0) | mvd reg[12:13] = SPM[E_WOFF+2+gr[3].lo] (slot 1)
+    # Slot 1 decodes first -> reads OLD gr[3].lo; mvd reads e[j+2:j+3]
+    # (= NEXT iter's e). Slot 0 addi writes NEW gr[3].lo for next iter's bne.
+    f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 3, 0, 0, 0, 2, 3, addi))
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 12, 0, 0, 0, GSSW_E_WOFF + 2, spm_lo(3), mvd))
+    # Cycle 14: drain
+    f.write(NOP); f.write(NOP)
+    # Cycle 15: bne gr[3] != 38, main_pc
+    main_back_pc = f.pc
+    f.write(data_movement_instruction(
+        0, 0, 0, 0, main_pc - main_back_pc, 0, 0, 0,
+        GSSW_SEG_LEN * GSSW_VEC_WORDS, 3, bne))
+    f.write(NOP)
+
+    # Drain compute before magic 111.
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+
+    # Body: run lazy-F only via magic(111). State at entry:
+    # reg[8:9]=vH, reg[10:11]=vF (post-step5), reg[12:13]=e_next,
+    # reg[14:15]=vMaxColumn. gr[5]/gr[6]=hPing/hPong (pre-G swap).
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))
-    f.write(write_magic(110))
+    f.write(write_magic(111))
 
     # === Section F (lowered): horizontal max + conditional best_copy =========
     # Fire CPC_MAXCOL: slot 0 of PC 14 does reg[20] = max_epu8(reg[14],

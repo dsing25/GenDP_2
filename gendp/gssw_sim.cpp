@@ -512,7 +512,7 @@ void gssw_simulation(
         // by the lowered GSSW kernel dispatch on the SIMD ALU. The
         // per-slot SIMD+gr-source fallback keeps scalar gr ops
         // (multiplications, shifts) correct within the same mode.
-        pa->run(100000, 1, PE_4_SETTING,
+        pa->run(5000000, 1, PE_4_SETTING,
                 MAIN_INSTRUCTION_1);
 
         // Cleanup

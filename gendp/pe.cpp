@@ -2087,7 +2087,7 @@ m23_end:    ;
             // === B. OUTER NODE LOOP ===
         m_101_node:
           if (magic_id != 106 && magic_id != 107 && magic_id != 108
-              && magic_id != 109 && magic_id != 110) {
+              && magic_id != 109 && magic_id != 110 && magic_id != 111) {
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI)) goto m_101_done;
 
             // nd_word_off = NODES_WOFF + n * 76 (uses hoisted gr[11]=76)
@@ -2112,7 +2112,8 @@ m23_end:    ;
             //NOP
           }  // end if (magic_id != 106 && magic_id != 107) — section B skipped for 106/107
 
-          if (magic_id != 108 && magic_id != 109 && magic_id != 110) {
+          if (magic_id != 108 && magic_id != 109 && magic_id != 110
+              && magic_id != 111) {
             // === C. SEED LOAD: hPing[j] = nd.hSeed[j], pvE[j] = nd.eSeed[j] ===
             // Init hPing_base = HPING_WOFF, hPong_base = HPONG_WOFF
             gr.st(5, GSSW_HPING_WOFF);
@@ -2141,18 +2142,18 @@ m23_end:    ;
             spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO)] = reg[22]; spm[GSSW_E_WOFF + gr.at(3, CTRL_GR_LO) + 1] = reg[23]; gr.st(3, gr.at(3, CTRL_GR_LO) + 2, CTRL_GR_LO);
 
             if (gr.at(3, CTRL_GR_LO) < GSSW_SEG_LEN * GSSW_VEC_WORDS) goto m_101_seed_load;
-          }  // end if (magic_id != 108/109/110) — section C skipped
+          }  // end if (magic_id != 108/109/110/111) — section C skipped
 
             // === D. COLUMN LOOP ===
-          if (magic_id != 109 && magic_id != 110) {
+          if (magic_id != 109 && magic_id != 110 && magic_id != 111) {
             gr.st(2, 0, CTRL_GR_LO);                         // col = 0
           }
         m_101_col:
-          if (magic_id != 109 && magic_id != 110) {
+          if (magic_id != 109 && magic_id != 110 && magic_id != 111) {
             // Extract seq[col] via mvi2 and compute vP_word_base
             gr.st(13, gssw_mvi2_ld(gr.at(7) + gr.at(2, CTRL_GR_LO)));              // seq[col] → gr[13]
             if (gr.at(2, CTRL_GR_LO) >= gr.at(2, CTRL_GR_HI)) goto m_101_col_done;
-          }  // end if (magic_id != 109/110) — section D loop head skipped
+          }  // end if (magic_id != 109/110/111) — section D loop head skipped
 
             // === E. COLUMN COMPUTE (8-lane paired) ===
             // Init: vMaxColumn(14:15)=0, vH(8:9)=hPing[last]<<1,
@@ -2160,6 +2161,7 @@ m23_end:    ;
             //       zero pvF[]. All array indices are in WORDS; each pair
             //       slot = 2 words, so last pair = (SEG_LEN-1)*2.
             //set comp PC
+          if (magic_id != 111) {
 
             // mvd: vH pair = hPing[(SEG_LEN-1)*2 : +1]
             reg[8] = spm[gr.at(5) + (GSSW_SEG_LEN - 1) * GSSW_VEC_WORDS];
@@ -2257,6 +2259,7 @@ m23_end:    ;
             {
                 //NOP
             }
+          }  // end if (magic_id != 111) — section E skipped for 111
 
         m_101_main_done:
 
@@ -2440,14 +2443,14 @@ m23_end:    ;
           }  // end if (magic_id != 110) — section F skipped for 110
 
             // === G. Ping/pong swap ===
-          if (magic_id != 109 && magic_id != 110) {
+          if (magic_id != 109 && magic_id != 110 && magic_id != 111) {
             gr.st(11, gr.at(5));                                // tmp = hPing
             gr.st(5, gr.at(6));                                  // hPing = hPong
             gr.st(6, gr.at(11));                                 // hPong = tmp
 
             gr.st(2, gr.at(2, CTRL_GR_LO) + 1, CTRL_GR_LO);     // col++
             goto m_101_col;
-          }  // end if (magic_id != 109/110) — section G skipped
+          }  // end if (magic_id != 109/110/111) — section G skipped
         m_101_col_done:
 
             // === H. Seed push to children ===
@@ -2457,7 +2460,7 @@ m23_end:    ;
             // Use: gr[2]=c, gr[6]=cd_word_off, gr[7,8]=scratch.
 
           if (magic_id != 107 && magic_id != 108 && magic_id != 109
-              && magic_id != 110) {
+              && magic_id != 110 && magic_id != 111) {
             gr.st(12, spm[gr.at(4) + 1]);                        // [next_off lo | next_len hi]
             gr.st(11, GSSW_ND_WORDS);                                       // re-init 76 (col loop clobbered gr[11])
 
@@ -2547,19 +2550,20 @@ m23_end:    ;
             gr.st(2, gr.at(2) + 1);                              // c++
             if (gr.at(2) < gr.at(3, CTRL_GR_HI)) goto m_101_push;
         m_101_push_done: ;
-          }  // end if (magic_id != 107/108/109/110) — section H skipped
+          }  // end if (magic_id != 107/108/109/110/111) — section H skipped
 
             // n++, back to outer loop.  Skipped for magic 106, 107, 108
             // which delegate the outer loop to the ISA caller.
             if (magic_id != 106 && magic_id != 107 && magic_id != 108
-                && magic_id != 109 && magic_id != 110) {
+                && magic_id != 109 && magic_id != 110 && magic_id != 111) {
                 gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO);
                 goto m_101_node;
             }
 
         m_101_done:
           if (magic_id != 104 && magic_id != 106 && magic_id != 107
-              && magic_id != 108 && magic_id != 109 && magic_id != 110) {
+              && magic_id != 108 && magic_id != 109 && magic_id != 110
+              && magic_id != 111) {
             // === I. Final reduce (paired 8-lane) ===
             // vMax pair = reg[14:15] (reusing vMaxColumn slot). Iterate
             // j (word offset, step 2) over best[] pairs, accumulate max.
@@ -2589,7 +2593,7 @@ m23_end:    ;
             }
             //COMP: maxReduce and store in gr[15] for magic 102
             gr.st(15, gssw4_maxReduce(reg[20]));
-          }  // end if (magic_id != 104/106/107/108/109/110) — section I skipped
+          }  // end if (magic_id != 104/106/107/108/109/110/111) — section I skipped
         } else if (magic_id == 102) {
             printf("qqq %d qqq\n",
                    addr_regfile_unit->at(15));
