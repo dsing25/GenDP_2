@@ -560,11 +560,14 @@ def pe_0_instruction(f):
     f.write(NOP)
     f.write(NOP); f.write(NOP)
     f.write(NOP); f.write(NOP)
-    f.write(data_movement_instruction(SPM, reg, 0, 0, GSSW_E_WOFF, spm_lo(3), 0, 0, 22, 0, mvd))
-    f.write(NOP)
-    # Split addi from final store (same RAW fix as stage 3b).
+    # pvE store + j+=2, slot-swap:
+    #   slot 0 = addi gr_lo[3] += 2 (WRITE)
+    #   slot 1 = mvd SPM[E_WOFF + gr_lo[3]] = reg[22:23] (READ gr_lo[3])
+    # Slot 1 decodes first and reads OLD gr_lo[3] for the store addr;
+    # slot 0 addi then writes the NEW gr_lo[3] for the next iter's bne.
+    # Saves one VLIW per iter × 19 iters vs the earlier split form.
     f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 3, 0, 0, 0, 2, 3, addi))
-    f.write(NOP)
+    f.write(data_movement_instruction(SPM, reg, 0, 0, GSSW_E_WOFF, spm_lo(3), 0, 0, 22, 0, mvd))
     seed_load_back_pc = f.pc
     f.write(data_movement_instruction(
         0, 0, 0, 0, seed_load_pc - seed_load_back_pc, 0, 0, 0,
@@ -973,15 +976,15 @@ def pe_0_instruction(f):
     f.write(data_movement_instruction(0, 0, 0, 0, CPC_PUSH_MAX, 0, 0, 0, 0, 0, set_PC))
     f.write(NOP)
     f.write(NOP); f.write(NOP)
-    # eSeed store + j+=2. Split the addi into its own cycle: pairing the
-    # paired-mvd store with addi gr[6]+=2 in slot 1 causes the store to see
-    # the post-increment gr[6] (slot 1 set_output_dest updates the regfile
-    # immediately; slot 0's store decode runs AFTER that and reads the new
-    # value — exactly the RAW that clobbers node-N+1's metadata at gr[6]=38).
-    f.write(data_movement_instruction(SPM, reg, 1, 0, 8, 6, 0, 0, 20, 0, mvd))
-    f.write(NOP)
+    # eSeed store + j+=2, slot-swap:
+    #   slot 0 = addi gr[6] += 2 (WRITE)
+    #   slot 1 = mvd SPM[gr[8]+gr[6]] = reg[20:21] (READ gr[6])
+    # Slot 1 decodes first (pe.cpp:303-304) and reads OLD gr[6] (= 36 on
+    # iter 19) for the store addr; slot 0 addi then writes gr[6] = 38 for
+    # the next iter's bne. This replaces the earlier split-into-two-cycles
+    # form and saves one VLIW per iter × 19 iters.
     f.write(data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0, 2, 6, addi))
-    f.write(NOP)
+    f.write(data_movement_instruction(SPM, reg, 1, 0, 8, 6, 0, 0, 20, 0, mvd))
     push_j_back_pc = f.pc
     f.write(data_movement_instruction(
         0, 0, 0, 0, push_j_pc - push_j_back_pc, 0, 0, 0,
