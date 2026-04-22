@@ -500,6 +500,7 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         gr[9] = s1c[22] + s1c[22];
         mvdq_copy(&spm[gr[5]+FIN0_ARCMETA+gr[7]],
                   &s1c[ARC_META_BASE+gr[9]], 2);
+        //NOP                                    // structural: mvdq+mvdq
         mvdq_copy(&spm[gr[5]+FIN0_DIAGS+gr[7]],
                   &s1c[32+gr[9]], 2);
         gr[4] = s1c[ARC_META_BASE+gr[9]];
@@ -570,6 +571,7 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         gr[9] = s1c[22] + s1c[22];
         mvdq_copy(&spm[gr[5]+FIN0_ARCMETA+gr[7]],
                   &s1c[ARC_META_BASE+gr[9]], 2);
+        //NOP                                    // structural: mvdq+mvdq
         mvdq_copy(&spm[gr[5]+FIN0_DIAGS+gr[7]],
                   &s1c[32+gr[9]], 2);
         gr[4] = s1c[ARC_META_BASE+gr[9]];
@@ -740,6 +742,7 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
                 gr[9] = gr[9] + gr[9];                   // add: 4*pai
                 //NOP
                 gr[9] = gr[7] + FIN0_HA + gr[9];        // add: ha addr
+                //NOP                                    // RAW barrier on gr[9]
                 int ms = ha_off + (int)(b * 4);          // DEC-HASH-PATH carve-out
                 // R7/R9: use mvdq_copy for contiguous 4-word HA
                 // bucket MM->SPM transfer; waitLSQ + 2-NOP settle.
