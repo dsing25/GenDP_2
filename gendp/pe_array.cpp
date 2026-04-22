@@ -756,10 +756,9 @@ f0b_prologue_done:
                 // 11, 12, 13, 14, 16, 17, 18, 20, 21, 25, 26, 27, 28,
                 // 31}. Each step uses (uint32_t) casts to keep strict
                 // 32-bit modulo semantics on the host.
-                gr[13] = gr[6];                          // bit 0: acc = hk
-                //NOP                                    // RAW barrier
-                gr[3] = (int)((uint32_t)gr[6] << 3);     // shifti_l 3
-                //NOP
+                gr[13] = gr[6];                          // bit 0: acc = hk (slot 0: mv)
+                gr[3] = (int)((uint32_t)gr[6] << 3);     // shifti_l 3 (slot 1, paired)
+                //NOP                                    // RAW barrier on gr[3]
                 gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 3
                 //NOP
                 gr[3] = (int)((uint32_t)gr[6] << 4);     // shifti_l 4
