@@ -814,8 +814,8 @@ def pe_0_instruction(f):
     # simulator has no assertion — verified empirically). If the bne
     # falls through on the last iter, set_PC still fires unconditionally
     # and compute will run one extra S1 at the post-loop cycle; that
-    # corrupts reg[8:9] but magic 111 (lazy-F) reloads reg[8:9] from
-    # SPM immediately, so the corruption is harmless.
+    # corrupts reg[8:9] but the lazy-F prologue below reloads reg[8:9]
+    # from hPong[0:1] immediately, so the corruption is harmless.
     main_pc = f.pc
     # C1
     f.write(NOP)
@@ -842,11 +842,11 @@ def pe_0_instruction(f):
         GSSW_SEG_LEN * GSSW_VEC_WORDS, 3, bne))
     f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_BODY, 0, 0, 0, 0, 0, set_PC))
 
-    # === Lazy-F prologue (stage 3g.1 ISA lowering) ==========================
+    # === Lazy-F prologue (stage 3g ISA lowering) ===========================
     # Sets up lazy-F state (gr[3].lo=0, reg[8:9]=hPong[0:1],
     # reg[18:19]=pvF[0:1], reg[10:11] shifted left by 1 byte, gr[13] =
-    # initial cmpgt_any OR reduction). magic(112) then runs the lazy-F
-    # loop only (prologue skipped via the magic_id == 112 guard in pe.cpp).
+    # initial cmpgt_any OR reduction). The lazy-F loop body follows in
+    # ISA (no magic) — replacing the former magic(111)/(112) dispatch.
     #
     # State at entry: reg[10:11]=vF (post-S5 iter 19), reg[12:13]=e_next,
     # reg[14:15]=vMaxColumn. reg[8:9] is corrupted by the post-main-loop
@@ -862,7 +862,7 @@ def pe_0_instruction(f):
     #   P6: set_PC CPC_F_SHIFT         | NOP
     #   P7: NOP pair                                          [F_SHIFT fires]
     #   P8: NOP pair                                          [LAZYF_CMP fires]
-    #   P9: NOP pair    (commit gr[13] before magic 112 reads it)
+    #   P9: NOP pair    (commit gr[13] before lazy-F head beq reads it)
     # Timing: hPong load @ P2 ready P4; pvF load @ P4 ready P6. F_SHIFT
     # at P7 reads reg[10:11] pre-shift, writes post-shift at end of P7.
     # LAZYF_CMP at P8 reads reg[8:9]=hPong, reg[18:19]=pvF, reg[10:11]=
