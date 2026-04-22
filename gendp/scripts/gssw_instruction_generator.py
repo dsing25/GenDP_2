@@ -842,19 +842,48 @@ def pe_0_instruction(f):
         GSSW_SEG_LEN * GSSW_VEC_WORDS, 3, bne))
     f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_BODY, 0, 0, 0, 0, 0, set_PC))
 
-    # Drain compute before magic 111. set_PC(0) halts the compute trace;
-    # before it takes effect one extra S1 may fire (harmless — magic 111
-    # reloads reg[8:9] from SPM).
+    # === Lazy-F prologue (stage 3g.1 ISA lowering) ==========================
+    # Sets up lazy-F state (gr[3].lo=0, reg[8:9]=hPong[0:1],
+    # reg[18:19]=pvF[0:1], reg[10:11] shifted left by 1 byte, gr[13] =
+    # initial cmpgt_any OR reduction). magic(112) then runs the lazy-F
+    # loop only (prologue skipped via the magic_id == 112 guard in pe.cpp).
+    #
+    # State at entry: reg[10:11]=vF (post-S5 iter 19), reg[12:13]=e_next,
+    # reg[14:15]=vMaxColumn. reg[8:9] is corrupted by the post-main-loop
+    # extra S1 but gets reloaded below. gr[3].lo=38, gr[5]=hPing,
+    # gr[6]=hPong.
+    #
+    # Cycle schedule (slot 0 | slot 1):
+    #   P1: set_PC 0 (halt compute)    | si gr_lo[3] = 0
+    #   P2: NOP                        | mvd reg[8:9] = SPM[gr[6] + 0]
+    #   P3: NOP pair    (SPM load spacing, single outstanding_req/PE)
+    #   P4: NOP                        | mvd reg[18:19] = SPM[F_WOFF + 0]
+    #   P5: NOP pair    (SPM drain before F_SHIFT reads reg[10:11])
+    #   P6: set_PC CPC_F_SHIFT         | NOP
+    #   P7: NOP pair                                          [F_SHIFT fires]
+    #   P8: NOP pair                                          [LAZYF_CMP fires]
+    #   P9: NOP pair    (commit gr[13] before magic 112 reads it)
+    # Timing: hPong load @ P2 ready P4; pvF load @ P4 ready P6. F_SHIFT
+    # at P7 reads reg[10:11] pre-shift, writes post-shift at end of P7.
+    # LAZYF_CMP at P8 reads reg[8:9]=hPong, reg[18:19]=pvF, reg[10:11]=
+    # post-shift. All valid.
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, set_PC))
+    f.write(data_movement_instruction(gr_lo, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))
+    f.write(NOP)
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 8, 0, 0, 0, 0, 6, mvd))
+    f.write(NOP); f.write(NOP)
+    f.write(NOP)
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 18, 0, 0, 0, GSSW_F_WOFF, 0, mvd))
+    f.write(NOP); f.write(NOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_F_SHIFT, 0, 0, 0, 0, 0, set_PC))
     f.write(NOP)
     f.write(NOP); f.write(NOP)
     f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
 
-    # Body: run lazy-F only via magic(111). State at entry:
-    # reg[8:9]=vH, reg[10:11]=vF (post-step5), reg[12:13]=e_next,
-    # reg[14:15]=vMaxColumn. gr[5]/gr[6]=hPing/hPong (pre-G swap).
+    # Body: run lazy-F LOOP only via magic(112) (prologue done above).
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))
-    f.write(write_magic(111))
+    f.write(write_magic(112))
 
     # === Section F (lowered): horizontal max + conditional best_copy =========
     # Fire CPC_MAXCOL: slot 0 of PC 14 does reg[20] = max_epu8(reg[14],
