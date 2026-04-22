@@ -2987,35 +2987,37 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     s1c[149] = 0;
                 }
                 s1c[148] = n_total;
-                // Load boundary vd values and init PE tracking.
-                // R8 fix: pre-load boundary_vd[0..2] and per-PE pt counts
-                // into gr-staged C++ locals before the PE-unroll so the
-                // SPM stores inside the loop read from settled locals.
-                gr[11] = s1c[159];
-                //NOP                                    // s1c 1-cycle gap
-                int bvd0 = gr[11];
-                gr[11] = s1c[160];
-                //NOP                                    // s1c 1-cycle gap
-                int bvd1 = gr[11];
-                gr[11] = s1c[161];
-                //NOP                                    // s1c 1-cycle gap
-                int bvd2 = gr[11];
-                int pts[4];
-                for (int pe = 0; pe < 4; pe++) {
-                    gr[11] = s1c[pe];
-                    //NOP                                // s1c 1-cycle gap
-                    pts[pe] = gr[11];
-                }
-                int pe_base = 0;
+                // AC-5 Stage B (Round 16): bvd0/bvd1/bvd2, pts[4], and
+                // pe_base C++ locals eliminated. Per-PE re-reads of
+                // s1c[159..161] through gr[11] store directly to the
+                // SPM boundary_vd slots. pts[pe] re-read from s1c[pe]
+                // per PE. pe_base architectural in gr[5] (dead at m37
+                // entry; scratch after bs loop completes).
+                //
+                // gr[5] safety: m37's bs loop uses gr[5] as `mid` and
+                // leaves it stale after m37_bs_done. No caller contract
+                // on gr[5] at m37 exit (m33/m35 consume gr[4], not
+                // gr[5]). This differs from the Round-14 attempt that
+                // used gr[4] as pe_base and clobbered the m37→m33/m35
+                // out_buf contract (BL-20260421).
+                gr[5] = 0; // pe_base architectural
                 for (int pe = 0; pe < 4; pe++) {
                     int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
-                    spm[MERGE_META + 13] = bvd0; // boundary_vd[0]
-                    spm[MERGE_META + 14] = bvd1; // boundary_vd[1]
-                    spm[MERGE_META + 15] = bvd2; // boundary_vd[2]
+                    gr[11] = s1c[159];
+                    //NOP                                // s1c 1-cycle gap
+                    spm[MERGE_META + 13] = gr[11];      // boundary_vd[0]
+                    gr[11] = s1c[160];
+                    //NOP                                // s1c 1-cycle gap
+                    spm[MERGE_META + 14] = gr[11];      // boundary_vd[1]
+                    gr[11] = s1c[161];
+                    //NOP                                // s1c 1-cycle gap
+                    spm[MERGE_META + 15] = gr[11];      // boundary_vd[2]
                     for (int i = 0; i < 6; i++) spm[976+i] = -1; // hi/lo_pos
-                    spm[982] = 0; // cumulative output count
-                    spm[983] = pe_base; // global output base for this PE
-                    pe_base += pts[pe]; // prefix sum (pre-staged)
+                    spm[982] = 0;                       // cumulative output count
+                    spm[983] = gr[5];                   // pe_base
+                    gr[11] = s1c[pe];                   // pts[pe]
+                    //NOP                                // s1c 1-cycle gap
+                    gr[5] = gr[5] + gr[11];             // pe_base += pts[pe]
                 }
             }
         } else if (magic_id == 38) {
