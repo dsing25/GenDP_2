@@ -304,7 +304,9 @@ def gwfa_main_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin
     f.write(write_magic(MAGIC_18_F0A))                                                               # magic18 writeback
     f.write(write_magic(MAGIC_20_F0A))                                                               # magic20 load next, sets gr[2]
-    f.write(data_movement_instruction(0, 0, 0, 0, -4, 0, 0, 0, 0, 2, bne))                         # bne gr[2]!=0 → loop (-4)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                      # waitLSQ: m20 MM loads → next m18
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                      # waitLSQ seam (2x)
+    f.write(data_movement_instruction(0, 0, 0, 0, -6, 0, 0, 0, 0, 2, bne))                         # bne gr[2]!=0 → loop (-6)
     # Final/only FIN0 pass — overlapped with magic14
     f.patch_imm0(br_skip_mp_a, f.write_count - br_skip_mp_a)
     f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_A, 0, 0, 0, 0, 0, set_PC))               # set_PC PE_FIN0_A
@@ -327,7 +329,9 @@ def gwfa_main_instruction():
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin
     f.write(write_magic(MAGIC_18_F0B))                                                               # magic18 writeback
     f.write(write_magic(MAGIC_20_F0B))                                                               # magic20 load next, sets gr[2]
-    f.write(data_movement_instruction(0, 0, 0, 0, -4, 0, 0, 0, 0, 2, bne))                         # bne gr[2]!=0 → loop (-4)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                      # waitLSQ: m20 MM loads → next m18
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                      # waitLSQ seam (2x)
+    f.write(data_movement_instruction(0, 0, 0, 0, -6, 0, 0, 0, 0, 2, bne))                         # bne gr[2]!=0 → loop (-6)
     # Final/only FIN0 pass — overlapped with magic14
     f.patch_imm0(br_skip_mp_b, f.write_count - br_skip_mp_b)
     f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_B, 0, 0, 0, 0, 0, set_PC))               # set_PC PE_FIN0_B
@@ -346,10 +350,12 @@ def gwfa_main_instruction():
     f.write(write_magic(MAGIC_18_F0B))                                                               # magic18 FIN0_B
     f.write(data_movement_instruction(0, 0, 0, 0, prologue_start - f.write_count, 0, 0, 0, 0, 2, beq))  # beq gr[2]==0 → PROLOGUE
     f.write(write_magic(MAGIC_20_F0B))                                                               # magic20 FIN0_B
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                      # waitLSQ: m20 → m18
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                      # waitLSQ seam (2x)
     f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_B, 0, 0, 0, 0, 0, set_PC))               # set_PC PE_FIN0_B
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin
     f.write(write_magic(MAGIC_18_F0B))                                                               # magic18 FIN0_B
-    f.write(data_movement_instruction(0, 0, 0, 0, -5, 0, 0, 0, 0, 0, jump))                        # jump -5
+    f.write(data_movement_instruction(0, 0, 0, 0, -7, 0, 0, 0, 0, 0, jump))                        # jump -7
     # --- DRAIN_AFTER_B: flush deferred FIN0_B, writeback P2_BUF1 → FIN0_A drain ---
     f.patch_imm0(br_drainB, f.write_count - br_drainB)
     f.write(write_magic(MAGIC_18_F0B))                                                               # magic18 FIN0_B (flush deferred)
@@ -361,10 +367,12 @@ def gwfa_main_instruction():
     f.write(write_magic(MAGIC_18_F0A))                                                               # magic18 FIN0_A
     f.write(data_movement_instruction(0, 0, 0, 0, prologue_start - f.write_count, 0, 0, 0, 0, 2, beq))  # beq gr[2]==0 → PROLOGUE
     f.write(write_magic(MAGIC_20_F0A))                                                               # magic20 FIN0_A
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                      # waitLSQ: m20 → m18
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                      # waitLSQ seam (2x)
     f.write(data_movement_instruction(0, 0, 0, 0, PE_FIN0_A, 0, 0, 0, 0, 0, set_PC))               # set_PC PE_FIN0_A
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                         # spin
     f.write(write_magic(MAGIC_18_F0A))                                                               # magic18 FIN0_A
-    f.write(data_movement_instruction(0, 0, 0, 0, -5, 0, 0, 0, 0, 0, jump))                        # jump -5
+    f.write(data_movement_instruction(0, 0, 0, 0, -7, 0, 0, 0, 0, 0, jump))                        # jump -7
     # --- P2_SINGLE_BUF0: only BUF0 loaded, no overlap ---
     f.patch_imm0(br_single, f.write_count - br_single)
     f.write(data_movement_instruction(0, 0, 0, 0, PE_P2_BUF0, 0, 0, 0, 0, 0, set_PC))              # set_PC PE_P2_BUF0

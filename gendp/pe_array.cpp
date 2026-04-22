@@ -448,12 +448,23 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         s1c[4 + pe] = 0;                                // na=0
         s1c[8 + pe] = pe * SPM_BANK_GROUP_SIZE + fin0_base;
     }
-    // Arc data pointer: resume from saved position or compute initial
-    if (s1c[22] == 0) {
-        gr[11] = s1c[21] * 2 + ARC_META_BASE;           // arc_data_start
-    } else {
-        gr[11] = s1c[23];                                // resume arc_ptr
-    }
+    // Arc data pointer: resume from saved position or compute initial.
+    // ISA lowering: stage cursor through gr[3] with 1-cycle s1c gap; use
+    // bne label to select between the two paths (no runtime if/else).
+    gr[3] = s1c[22];                                    // stage cursor
+    //NOP                                               // s1c 1-cycle gap
+    if (gr[3] != 0) goto f0b_resume;                    // bne: continuation
+    gr[11] = s1c[21];                                   // arc_data_start_hint
+    //NOP                                               // s1c 1-cycle gap
+    gr[11] = gr[11] + gr[11];                           // add: *2
+    //NOP                                               // RAW barrier
+    gr[11] = gr[11] + ARC_META_BASE;                    // addi: + ARC_META_BASE
+    goto f0b_prologue_done;
+f0b_resume:
+    gr[11] = s1c[23];                                   // resume arc_ptr
+    //NOP                                               // s1c 1-cycle gap
+f0b_prologue_done:
+    (void)0;
 
     // Inline assignment: copy diag+arcmeta+arcs from s1c to PE's SPM.
     // diag (2w contiguous) and arcmeta (2w contiguous) use mvdq_copy
@@ -624,7 +635,10 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         for (int pe = 0; pe < 4; pe++) {
             gr[7] = s1c[4 + pe];                         // mv
             //NOP
-            if (gr[7] > gr[5]) gr[5] = gr[7];
+            if (gr[7] <= gr[5]) goto f0b_p2_max_skip;    // bge: skip mv
+            gr[5] = gr[7];
+        f0b_p2_max_skip:
+            (void)0;
         }
         gr[14] = gr[29] & 0xFFFF;                       // andi: seq_off_s2
         gr[11] = 0;                                      // si: a=0
@@ -673,7 +687,10 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         for (int pe = 0; pe < 4; pe++) {
             gr[7] = s1c[pe];                             // mv
             //NOP
-            if (gr[7] > gr[2]) gr[2] = gr[7];
+            if (gr[7] <= gr[2]) goto f0b_p3_max_skip;    // bge: skip mv
+            gr[2] = gr[7];
+        f0b_p3_max_skip:
+            (void)0;
         }
         s1c[12]=0; s1c[13]=0; s1c[14]=0; s1c[15]=0;    // pai[0..3]=0
         gr[14] = 0;                                      // si: d=0
@@ -2252,10 +2269,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // Magic 20: FIN0 subsequent batch load (15a-only).
             // Resumes multi-pass state from s1c, loads next batch.
             // gr[2] = 1 if more passes needed, 0 if done.
-            int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
-            int fin0_base = (magic_mask & 2)
-                ? GWFA_FIN0B_BASE : GWFA_FIN0_BASE;
-            fin0_load_batch(fin0_base, magic_mask);
+            // ISA lowering: mask select via goto+label (no runtime
+            // if/else, no cross-line C++ local). Each variant dispatches
+            // the helper with its hardcoded FIN0 base.
+            if ((magic_mask & 2) == 0) goto m20_f0a_call;     // beq
+            fin0_load_batch(GWFA_FIN0B_BASE, magic_mask);
+            goto m20_done;
+        m20_f0a_call:
+            fin0_load_batch(GWFA_FIN0_BASE, magic_mask);
+        m20_done:
+            (void)0;
         } else if (magic_id == 18) {
             // Magic 18: FIN0 writeback — read PE output from
             // FIN_0_TILE, write A/B queues and HA buckets to MM.
@@ -2298,7 +2321,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 for (int pe = 0; pe < 4; pe++) {
                     gr[7] = s1c[pe];                      // mv: n_A
                     //NOP
-                    if (gr[7] > gr[5]) gr[5] = gr[7];    // max
+                    if (gr[7] <= gr[5]) goto m18_a_max_skip; // bge: skip mv
+                    gr[5] = gr[7];                        // mv: max
+                m18_a_max_skip:
+                    (void)0;
                 }
                 // Per-PE forward src ptrs → s1c[16..19]
                 for (int pe = 0; pe < 4; pe++) {
@@ -2345,7 +2371,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 for (int pe = 0; pe < 4; pe++) {
                     gr[7] = s1c[4 + pe];                  // mv: n_B
                     //NOP
-                    if (gr[7] > gr[5]) gr[5] = gr[7];    // max
+                    if (gr[7] <= gr[5]) goto m18_b_max_skip; // bge: skip mv
+                    gr[5] = gr[7];                        // mv: max
+                m18_b_max_skip:
+                    (void)0;
                 }
                 // Per-PE backward src ptrs → s1c[16..19]
                 for (int pe = 0; pe < 4; pe++) {
@@ -2388,7 +2417,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 for (int pe = 0; pe < 4; pe++) {
                     gr[7] = s1c[8 + pe];                  // mv: n_HA
                     //NOP
-                    if (gr[7] > gr[5]) gr[5] = gr[7];    // max
+                    if (gr[7] <= gr[5]) goto m18_ha_max_skip; // bge: skip mv
+                    gr[5] = gr[7];                        // mv: max
+                m18_ha_max_skip:
+                    (void)0;
                 }
                 gr[11] = 0;                               // si: i
                 //NOP
