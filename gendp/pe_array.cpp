@@ -404,6 +404,11 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     constexpr int INTV_CAP_F = (1 << 21);
     constexpr int HA_CAP_F   = (4 << 20);
     constexpr int ha_off = DIAG_CAP_F * 8 + INTV_CAP_F * 6;
+    // Half-register extraction helper (Plan 3a AC-8): zero-extended
+    // high 16 bits of a 32-bit gr source; lowerable to the ISA
+    // `mv gr_hi[X] → gr[Y]` data-move op instead of a shifti_r.
+    // C++ runtime value is identical to `(unsigned)x >> 16`.
+    #define GR_HI(x) (((unsigned)(x)) >> 16)
     // R3/R5 fix: no 'int total_fin0' or 'int cursor' C++ local mirrors.
     // s1c[20] is the authoritative limit, s1c[22] the authoritative
     // cursor. Compares and arithmetic below reference them directly;
@@ -605,7 +610,7 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         for (int pe = 0; pe < 4; pe++) {
             gr[10] = s1c[4 + pe];                        // mv: na[pe]
             //NOP
-            if (gr[11] >= gr[10]) continue;               // bge: skip
+            if (gr[11] >= gr[10]) goto f0b_p2_pe_skip;   // bge: skip
             gr[7] = s1c[8 + pe];                         // mv: pe_spm
             gr[8] = gr[11] + gr[11];                     // add: 2*a
             gr[8] = gr[8] + gr[11];                      // add: 3*a
@@ -616,14 +621,17 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
             //NOP                                        // SPM lat 1/3 (AC-11 slot-safe)
             //NOP                                        // SPM lat 2/3
             //NOP                                        // SPM lat 3/3
-            gr[9] = (unsigned)gr[9] >> 16;               // shifti_r: w (zero-ext)
+            gr[9] = GR_HI(gr[9]);                        // mv gr_hi[9] → gr[9] (AC-8 half-reg)
             //NOP
             // R7: stage S2 load through gr[13] with waitLSQ+NOP before
             // the SPM store so the ts_off value has settled.
             gr[13] = s2->buffer[gr[14] + gr[9]];        // S2 load
             // waitLSQ
-            //NOP                                        // LSQ settle
+            //NOP                                        // LSQ settle 1/2
+            //NOP                                        // LSQ settle 2/2
             spm[gr[8]+2] = gr[13];                      // mv: ts_off
+        f0b_p2_pe_skip:
+            (void)0;
         }
         gr[11] = gr[11] + 1;                            // addi
         goto f0b_p2;
@@ -649,7 +657,7 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
         for (int pe = 0; pe < 4; pe++) {
             gr[13] = s1c[pe];                            // mv: nd[pe]
             //NOP
-            if (gr[14] >= gr[13]) continue;               // bge: skip
+            if (gr[14] >= gr[13]) goto f0b_p3_pe_skip;   // bge: skip
             gr[7] = s1c[8 + pe];                         // mv: pe_spm
             gr[9] = gr[14] + gr[14];                     // add: 2*d
             //NOP
@@ -689,19 +697,23 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
                 gr[4] = gr[5] + 1;                       // addi: i_val+1 (fills gap 1/3)
                 //NOP                                    // SPM lat 2/3 (AC-11 slot-safe)
                 //NOP                                    // SPM lat 3/3
-                gr[3] = (unsigned)gr[3] >> 16;           // shifti_r: w (zero-ext)
-                // non-ISA: hash multiply
+                gr[3] = GR_HI(gr[3]);                    // mv gr_hi[3] → gr[3] (AC-8 half-reg)
+                // DEC-HASH-PATH carve-out (user-confirmed 2026-04-22):
+                // controller ISA lacks int multiply on gr[]; Fibonacci-hash
+                // lowering deferred to 3a follow-on. hk/h/b/ms kept as
+                // C++ locals for 3a; formal ISA lowering is out of scope.
                 uint32_t hk = ((uint32_t)gr[3] << 16)
                     | ((uint32_t)gr[4] & 0xFFFF);
                 uint32_t h = hk * 2654435769U >> (32-22);
                 uint32_t b = (h >> 2) & 0xFFFFF;
+                // end DEC-HASH-PATH carve-out
                 // 4*pai for HA addr
                 gr[9] = gr[8] + gr[8];                   // add: 2*pai
                 //NOP                                    // RAW barrier
                 gr[9] = gr[9] + gr[9];                   // add: 4*pai
                 //NOP
                 gr[9] = gr[7] + FIN0_HA + gr[9];        // add: ha addr
-                int ms = ha_off + (int)(b * 4);
+                int ms = ha_off + (int)(b * 4);          // DEC-HASH-PATH carve-out
                 // R7/R9: use mvdq_copy for contiguous 4-word HA
                 // bucket MM->SPM transfer; waitLSQ + 2-NOP settle.
                 mvdq_copy(&spm[gr[9]], &mm[ms], 4);
@@ -713,6 +725,8 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
             gr[1] = gr[1] + 1;                          // addi
             goto f0b_p3_a;
         f0b_p3_a_done:
+            (void)0;
+        f0b_p3_pe_skip:
             (void)0;
         }
         gr[14] = gr[14] + 1;                            // addi
@@ -745,6 +759,7 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     gr[10] = s1c[20];
     //NOP                                       // s1c gap
     gr[2] = (gr[11] < gr[10]) ? 1 : 0;
+    #undef GR_HI
 }
 
 int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, int main_instruction_setting) {
