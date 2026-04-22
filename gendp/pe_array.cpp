@@ -744,26 +744,117 @@ f0b_prologue_done:
                 gr[3] = GR_HI(gr[3]);                    // mv gr_hi[3] → gr[3] (AC-8 half-reg; sign-ext)
                 //NOP                                    // RAW barrier
                 gr[3] = gr[3] & 0xFFFF;                  // andi: clear sign-ext for hash-input upper half
-                // DEC-HASH-PATH carve-out (user-confirmed 2026-04-22):
-                // controller ISA lacks int multiply on gr[]; Fibonacci-hash
-                // lowering deferred to 3a follow-on. hk/h/b/ms kept as
-                // C++ locals for 3a; formal ISA lowering is out of scope.
-                uint32_t hk = ((uint32_t)gr[3] << 16)
-                    | ((uint32_t)gr[4] & 0xFFFF);
-                uint32_t h = hk * 2654435769U >> (32-22);
-                uint32_t b = (h >> 2) & 0xFFFFF;
-                // end DEC-HASH-PATH carve-out
-                // 4*pai for HA addr
+                // Build hk = (w_hi << 16) | (i_val+1 & 0xFFFF) in gr[6]
+                gr[4] = gr[4] & 0xFFFF;                  // andi: mask i_val+1 to low 16
+                //NOP                                    // RAW barrier
+                gr[6] = (int)((uint32_t)gr[3] << 16);    // shifti_l 16: w_hi → hi 16
+                //NOP                                    // RAW barrier
+                gr[6] = (int)((uint32_t)gr[6] + (uint32_t)gr[4]); // add: hk
+                //NOP                                    // RAW barrier
+                // Multiply: gr[13] = hk * 0x9E3779B9 (mod 2^32) via
+                // shift+add over set-bit positions {0, 3, 4, 5, 7, 8,
+                // 11, 12, 13, 14, 16, 17, 18, 20, 21, 25, 26, 27, 28,
+                // 31}. Each step uses (uint32_t) casts to keep strict
+                // 32-bit modulo semantics on the host.
+                gr[13] = gr[6];                          // bit 0: acc = hk
+                //NOP                                    // RAW barrier
+                gr[3] = (int)((uint32_t)gr[6] << 3);     // shifti_l 3
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 3
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 4);     // shifti_l 4
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 4
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 5);     // shifti_l 5
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 5
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 7);     // shifti_l 7
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 7
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 8);     // shifti_l 8
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 8
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 11);    // shifti_l 11
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 11
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 12);    // shifti_l 12
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 12
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 13);    // shifti_l 13
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 13
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 14);    // shifti_l 14
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 14
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 16);    // shifti_l 16
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 16
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 17);    // shifti_l 17
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 17
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 18);    // shifti_l 18
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 18
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 20);    // shifti_l 20
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 20
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 21);    // shifti_l 21
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 21
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 25);    // shifti_l 25
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 25
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 26);    // shifti_l 26
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 26
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 27);    // shifti_l 27
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 27
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 28);    // shifti_l 28
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 28
+                //NOP
+                gr[3] = (int)((uint32_t)gr[6] << 31);    // shifti_l 31
+                //NOP
+                gr[13] = (int)((uint32_t)gr[13] + (uint32_t)gr[3]); // bit 31
+                //NOP                                    // RAW barrier
+                // Derive b = (product >> 12) & 0xFFFFF in gr[13]
+                gr[13] = (int)((uint32_t)gr[13] >> 12);  // shifti_r 12
+                //NOP                                    // RAW barrier
+                gr[13] = gr[13] & 0xFFFFF;               // andi 20-bit mask
+                //NOP                                    // RAW barrier
+                // Compute MM source address ms = ha_off + (b << 2) in gr[6]
+                gr[6] = (int)((uint32_t)gr[13] << 2);    // shifti_l 2: b*4
+                //NOP                                    // RAW barrier
+                gr[6] = gr[6] + ha_off;                  // addi: + ha_off
+                //NOP                                    // RAW barrier
+                // HA dst SPM address gr[9] = gr[7] + FIN0_HA + 4*pai
                 gr[9] = gr[8] + gr[8];                   // add: 2*pai
                 //NOP                                    // RAW barrier
                 gr[9] = gr[9] + gr[9];                   // add: 4*pai
                 //NOP
                 gr[9] = gr[7] + FIN0_HA + gr[9];        // add: ha addr
                 //NOP                                    // RAW barrier on gr[9]
-                int ms = ha_off + (int)(b * 4);          // DEC-HASH-PATH carve-out
                 // R7/R9: use mvdq_copy for contiguous 4-word HA
                 // bucket MM->SPM transfer; waitLSQ + 2-NOP settle.
-                mvdq_copy(&spm[gr[9]], &mm[ms], 4);
+                // MM source address held in gr[6] (architectural).
+                mvdq_copy(&spm[gr[9]], &mm[gr[6]], 4);
                 // waitLSQ
                 //NOP                                    // LSQ settle
                 //NOP
