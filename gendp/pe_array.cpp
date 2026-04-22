@@ -2399,6 +2399,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         } else if (magic_id == 16) {
             // Sync counters, save state, setup DIAG sort (DIAG-first order).
             auto &gr = main_addressing_register;
+            // seam-helper-waived (DEC-4)
             gwfa_sync_counters(gr[24], (uint32_t)gr[25],
                 (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
             int *mm = gwfa_get_mm();
@@ -2409,6 +2410,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // Save state for later phases
             s1c[144] = gr[20];                       // diag_base
             s1c[145] = gr[24];                       // n_a
+            // seam-helper-waived (DEC-4)
             s1c[146] = (int)gwfa_get_intv_n();       // old intv_n
             s1c[155] = gr[28];                       // next_intv_n
             s1c[152] = MM_INTV;                      // active_intv_base
