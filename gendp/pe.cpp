@@ -54,101 +54,83 @@ void pe::reset() {
     PC[0] = 0;
     PC[1] = 0;
     ras = 0;
-    outstanding_req.clear();
+    outstanding_reqs.clear();
     spmReqPort = nullptr;
     halted = false;
 }
 
 void pe::recieve_spm_data(int data[LINE_SIZE]){
-    if (!outstanding_req.valid){
+    if (outstanding_reqs.empty()){
         fprintf(stderr, "Error: No outstanding request present, but recieve_spm_data called for PE[%d]\n", id);
         exit(-1);
     }
+    // FIFO pop: the oldest pending load is the one whose data just landed.
+    const OutstandingReq req = outstanding_reqs.front();
+    outstanding_reqs.pop_front();
 #ifdef PROFILE
     printf("PE[%d] @%d recv SPM: ", id, cycle);
 #endif
-    switch (outstanding_req.dst){
+    switch (req.dst){
         case CTRL_REG:
-            if (outstanding_req.single_load) {
+            if (req.single_load) {
                 {
-                int val =
-                    data[outstanding_req.spm_addr & 1];
-                if (outstanding_req.two_bit_extract)
-                    val = (val >> outstanding_req.bp_shift)
-                        & 0x3;
-                regfile_unit->register_file[
-                    outstanding_req.addr] = val;
+                int val = data[req.spm_addr & 1];
+                if (req.two_bit_extract)
+                    val = (val >> req.bp_shift) & 0x3;
+                regfile_unit->register_file[req.addr] = val;
                 }
 #ifdef PROFILE
                 printf("reg[%d] = %d\n",
-                    outstanding_req.addr,
-                    data[outstanding_req.spm_addr & 1]);
+                    req.addr, data[req.spm_addr & 1]);
 #endif
             } else {
-                for (int i = 0;
-                     i < LINE_SIZE; i++)
-                    regfile_unit->register_file[
-                        outstanding_req.addr + i] =
-                        data[i];
+                for (int i = 0; i < LINE_SIZE; i++)
+                    regfile_unit->register_file[req.addr + i] = data[i];
 #ifdef PROFILE
                 printf("reg[%d,%d] = [%d,%d]\n",
-                    outstanding_req.addr,
-                    outstanding_req.addr+1,
-                    data[0], data[1]);
+                    req.addr, req.addr+1, data[0], data[1]);
 #endif
             }
             break;
         case CTRL_GR:
         case CTRL_GR_LO:
         case CTRL_GR_HI:
-            if (outstanding_req.single_load) {
-                int val = data[outstanding_req.spm_addr & 1];
-                if (outstanding_req.two_bit_extract)
-                    val = (val >> outstanding_req.bp_shift)
-                        & 0x3;
-                addr_regfile_unit->st(
-                    outstanding_req.addr, val,
-                    outstanding_req.dst);
+            if (req.single_load) {
+                int val = data[req.spm_addr & 1];
+                if (req.two_bit_extract)
+                    val = (val >> req.bp_shift) & 0x3;
+                addr_regfile_unit->st(req.addr, val, req.dst);
 #ifdef PROFILE
                 printf("gr[%d] = %d\n",
-                    outstanding_req.addr,
-                    data[outstanding_req.spm_addr & 1]);
+                    req.addr, data[req.spm_addr & 1]);
 #endif
             } else {
                 // mvd to gr: deliver both words to consecutive gr
                 // indices (previously only word 0 was written, leaving
                 // the second half untouched — broke lowered GSSW).
                 for (int i = 0; i < LINE_SIZE; i++)
-                    addr_regfile_unit->st(
-                        outstanding_req.addr + i,
-                        data[i], outstanding_req.dst);
+                    addr_regfile_unit->st(req.addr + i, data[i], req.dst);
 #ifdef PROFILE
                 printf("gr[%d,%d] = [%d,%d]\n",
-                    outstanding_req.addr,
-                    outstanding_req.addr + 1,
-                    data[0], data[1]);
+                    req.addr, req.addr + 1, data[0], data[1]);
 #endif
             }
             break;
         case CTRL_OUT_PORT:
             {
-            int val =
-                data[outstanding_req.spm_addr & 1];
-            if (outstanding_req.two_bit_extract)
-                val = (val >> outstanding_req.bp_shift)
-                    & 0x3;
+            int val = data[req.spm_addr & 1];
+            if (req.two_bit_extract)
+                val = (val >> req.bp_shift) & 0x3;
             store_data = val;
             }
 #ifdef PROFILE
-            printf("out = %d\n",
-                data[outstanding_req.spm_addr & 1]);
+            printf("out = %d\n", data[req.spm_addr & 1]);
 #endif
             break;
         default:
-            fprintf(stderr, "Error: Unsupported dst %d for SPM load in PE[%d]\n", outstanding_req.dst, id);
+            fprintf(stderr, "Error: Unsupported dst %d for SPM load in PE[%d]\n", req.dst, id);
             exit(-1);
     }
-    outstanding_req.clear();
 #ifdef PROFILE
     //if (id == 0){
     //    printf("\nzkn @%d:%d\n", cycle-1, data[0]);
@@ -491,12 +473,16 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
                 " store in PE[%d]\n", dest_pos, id);
             exit(-1);
         }
-        assert(!outstanding_req.valid);
-        outstanding_req.valid = true;
-        outstanding_req.single_load = single_data;
-        outstanding_req.dst = dest_pos;
-        outstanding_req.addr = dest_addr;
-        outstanding_req.spm_addr = last_spm_load_addr;
+        // Allow up to SPM_ACCESS_LATENCY (=2) loads in flight per PE.
+        // Responses are consumed FIFO in recieve_spm_data.
+        assert(outstanding_reqs.size() < (size_t)SPM_ACCESS_LATENCY);
+        OutstandingReq req;
+        req.valid = true;
+        req.single_load = single_data;
+        req.dst = dest_pos;
+        req.addr = dest_addr;
+        req.spm_addr = last_spm_load_addr;
+        outstanding_reqs.push_back(req);
         //still log the dest we're sending to
 #ifdef PROFILE
         switch (dest_pos) {
@@ -2283,14 +2269,16 @@ m23_end:    ;
         else
             dest_addr = sext_imm_0
                 + addr_regfile_unit->at(reg_0);
-        assert(!outstanding_req.valid);
-        outstanding_req.valid = true;
-        outstanding_req.single_load = true;
-        outstanding_req.dst = dest;
-        outstanding_req.addr = dest_addr;
-        outstanding_req.spm_addr = word_addr;
-        outstanding_req.bp_shift = bp_offset << 1;
-        outstanding_req.two_bit_extract = true;
+        assert(outstanding_reqs.size() < (size_t)SPM_ACCESS_LATENCY);
+        OutstandingReq req;
+        req.valid = true;
+        req.single_load = true;
+        req.dst = dest;
+        req.addr = dest_addr;
+        req.spm_addr = word_addr;
+        req.bp_shift = bp_offset << 1;
+        req.two_bit_extract = true;
+        outstanding_reqs.push_back(req);
 
         if (reg_auto_increasement_flag_0)
             addr_regfile_unit->st(reg_0, addr_regfile_unit->at(reg_0) + 1);

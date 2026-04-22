@@ -4,6 +4,7 @@
 #include "compute_unit_32.h"
 #include "crossbar.h"
 #include "simulator.h"
+#include <deque>
 
 class FIFO;
 
@@ -98,7 +99,11 @@ class pe {
         crossbar crossbar_unit;
 
         //-1 means there is no outstanding request
-        OutstandingReq outstanding_req;
+        // SPM load destination queue. Up to SPM_ACCESS_LATENCY (=2) loads
+        // may be in flight concurrently; responses return in FIFO issue
+        // order. store() pushes at enqueue; recieve_spm_data() pops the
+        // front when SPM completes.
+        std::deque<OutstandingReq> outstanding_reqs;
 
         // Set by load() when reading SPM, consumed by store()
         int last_spm_load_addr = 0;
