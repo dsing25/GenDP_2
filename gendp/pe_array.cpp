@@ -3254,9 +3254,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 } else {
                     int n_total = n_phase1 + n_tail;
                     int nape = (n_total + 3) / 4;
-                    int a_sp[5], b_sp[5];
-                    a_sp[0] = 0; b_sp[0] = 0;
-                    a_sp[4] = n_phase1; b_sp[4] = n_tail;
+                    // AC-5 Stage B (Round 16): a_sp[0..4] → s1c[40..44],
+                    // b_sp[0..4] → s1c[45..49]. Scratch range chosen to
+                    // avoid overlap with per-PE metadata writes at
+                    // s1c[0..23] and the cross-magic intv_base/cursor
+                    // at s1c[24..31]. Lifetime: post-bs → per-PE compute.
                     // AC-5/AC-9 architectural state migration (Round 12):
                     // bs_lo → s1c[0..2], bs_hi → s1c[3..5],
                     // bs_target → s1c[6..8]. These s1c slots are
@@ -3375,35 +3377,61 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 m28_bs_step_end:
                     goto m28_bs_top;
                 m28_bs_done:
-                    // Read bs_lo/bs_target from s1c into a_sp/b_sp locals.
-                    // Stash bs_lo into gr[3] after the first load so the
-                    // subtraction has both operands in distinct gr regs
-                    // (fixes the unstaged-C++-local clobber hazard).
+                    // AC-5 Stage B: compute a_sp/b_sp into s1c[40..49].
+                    // Initialize a_sp[0]=b_sp[0]=0, a_sp[4]=n_phase1,
+                    // b_sp[4]=n_tail.
+                    gr[11] = 0;
+                    //NOP                               // gr settle
+                    s1c[40] = gr[11];                   // a_sp[0]
+                    s1c[45] = gr[11];                   // b_sp[0]
+                    gr[11] = n_phase1;
+                    //NOP
+                    s1c[44] = gr[11];                   // a_sp[4]
+                    gr[11] = n_tail;
+                    //NOP
+                    s1c[49] = gr[11];                   // b_sp[4]
+                    // Compute a_sp[p+1], b_sp[p+1] for p=0,1,2.
+                    // Candidate a_sp in gr[3], candidate b_sp in gr[4].
+                    // Prior a_sp[p]/b_sp[p] staged through gr[5] for
+                    // the fixup compares.
                     for (int p = 0; p < 3; p++) {
-                        gr[11] = s1c[0 + p]; //NOP  // bs_lo[p]
-                        gr[3]  = gr[11];             // stash bs_lo
-                        gr[11] = s1c[6 + p]; //NOP  // bs_target[p]
-                        a_sp[p+1] = gr[3];
-                        b_sp[p+1] = gr[11] - gr[3];
-                        if (a_sp[p+1] < a_sp[p]) {
-                            a_sp[p+1] = a_sp[p];
-                            b_sp[p+1] = gr[11] - a_sp[p+1];
+                        gr[11] = s1c[0 + p]; //NOP     // bs_lo[p]
+                        gr[3]  = gr[11];                // a_sp candidate
+                        gr[11] = s1c[6 + p]; //NOP     // bs_target[p]
+                        gr[4]  = gr[11] - gr[3];        // b_sp candidate
+                        // Fixup 1: if a_sp candidate < a_sp[p], use a_sp[p]
+                        gr[5]  = s1c[40 + p]; //NOP    // prior a_sp[p]
+                        if (gr[3] < gr[5]) {
+                            gr[3] = gr[5];              // a_sp[p+1] = a_sp[p]
+                            gr[4] = gr[11] - gr[3];    // recompute b_sp
                         }
-                        if (b_sp[p+1] < b_sp[p]) {
-                            b_sp[p+1] = b_sp[p];
-                            a_sp[p+1] = gr[11] - b_sp[p+1];
+                        // Fixup 2: if b_sp candidate < b_sp[p], use b_sp[p]
+                        gr[5]  = s1c[45 + p]; //NOP    // prior b_sp[p]
+                        if (gr[4] < gr[5]) {
+                            gr[4] = gr[5];              // b_sp[p+1] = b_sp[p]
+                            gr[3] = gr[11] - gr[4];    // recompute a_sp
                         }
+                        s1c[41 + p] = gr[3];            // a_sp[p+1]
+                        s1c[46 + p] = gr[4];            // b_sp[p+1]
                     }
                     // Pre-compute tile sizes for mvdq interleaved load
                     int max_pt = 0;
                     int a0s[4], a1s[4], b0s[4], b1s[4];
                     int a_srcs[4], b_srcs[4];
                     for (int pe = 0; pe < 4; pe++) {
-                        int pa_s = a_sp[pe];
-                        int pa_n = a_sp[pe+1] - pa_s;
+                        // AC-5 Stage B: read a_sp[pe]/a_sp[pe+1] and
+                        // b_sp[pe]/b_sp[pe+1] from s1c[40..49] via gr[11]
+                        // staged loads. pa_s/pb_s/pa_n/pb_n are scalar
+                        // per-iter locals used in this block only.
+                        gr[11] = s1c[40 + pe]; //NOP     // a_sp[pe]
+                        int pa_s = gr[11];
+                        gr[11] = s1c[41 + pe]; //NOP     // a_sp[pe+1]
+                        int pa_n = gr[11] - pa_s;
                         if (pa_n < 0) pa_n = 0;
-                        int pb_s = b_sp[pe];
-                        int pb_n = b_sp[pe+1] - pb_s;
+                        gr[11] = s1c[45 + pe]; //NOP     // b_sp[pe]
+                        int pb_s = gr[11];
+                        gr[11] = s1c[46 + pe]; //NOP     // b_sp[pe+1]
+                        int pb_n = gr[11] - pb_s;
                         if (pb_n < 0) pb_n = 0;
                         int pt = pa_n + pb_n;
                         if (pt > max_pt) max_pt = pt;
