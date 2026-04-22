@@ -176,7 +176,8 @@ from opcodes import (gr, gr_hi, gr_lo, reg, SPM, halt, none, set_PC,
                      bne, beq, bge, blt, jump, si, mv, mvd, mvi2, addi,
                      shifti_l, shifti_r, ANDI, set_8, add,
                      MULTIPLICATION, HALT, INVALID, COPY,
-                     MAX_EPU8, MAX_REDUCE, ADDS_EPU8, SUBS_EPU8, SLLI_64)
+                     MAX_EPU8, MAX_REDUCE, ADDS_EPU8, SUBS_EPU8, SLLI_64,
+                     COMP_GT, BWISE_OR)
 
 # Pre-made NOP (two-slot-agnostic data-movement no-op).
 NOP = data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none)
@@ -218,6 +219,15 @@ CPC_MAXCOL       = 14  # reg[20] = max(reg[14],reg[15]); gr[11] = max_reduce (se
 # timing (single `//set comp pc` above m_101_main:).
 CPC_E_SHIFT      = 17  # reg[8:9] = SLLI_64(reg[8:9], 8)  — cross-lane byte shift
 CPC_MAIN_BODY    = 19  # S1 (PC19)->S2->S3->S4->S5->TAIL (PC24), halt at PC25
+# Stage 3g: lazy-F compute regions. CPC_LAZYF_BODY is 5 contiguous PCs
+# for the 5 iter-body steps; CPC_F_SHIFT shifts vF by 1 byte (used in
+# prologue + wraparound); CPC_LAZYF_CMP computes the cmpgt_any OR
+# reduction into gr[13].lo/.hi. set_PC CPC_F_SHIFT fires both F_SHIFT
+# and LAZYF_CMP in sequence (contiguous PCs); set_PC CPC_LAZYF_CMP
+# alone fires just the cmp (used on normal iter tails).
+CPC_LAZYF_BODY   = 26  # S1 (PC26)..S5 (PC30), halt tail at PC31
+CPC_F_SHIFT      = 32  # reg[10:11] = SLLI_64(reg[10:11], 8), then CMP at PC33
+CPC_LAZYF_CMP    = 33  # gr[13].lo/.hi = cmpgt_any OR reduction
 
 
 # --- Subregister-offset encoding helpers for SPM addressing -----------------
@@ -240,8 +250,10 @@ def spm_hi(r):
 # Compute trace
 # ---------------------------------------------------------------------------
 # Compute address convention: 0-31=reg, 32-47=gr, 48-63=gr_lo, 64-79=gr_hi.
-COMP_REG = 0    # base offset for compute reg addressing
-COMP_GR  = 32   # base offset for compute gr addressing
+COMP_REG    = 0    # base offset for compute reg addressing
+COMP_GR     = 32   # base offset for compute gr addressing (full 32b)
+COMP_GR_LO  = 48   # compute reg addr: gr[idx].lo half
+COMP_GR_HI  = 64   # compute reg addr: gr[idx].hi half
 
 
 def _chalt():
@@ -282,6 +294,15 @@ def gssw_compute_instructions():
       PC 23: CPC_MAIN_BODY.S5  reg[10:11] = max(subs(vF,vGapE), subs(vH,vGapO))
       PC 24: CPC_MAIN_BODY.TAIL reg[8:9] = reg[20:21]
       PC 25: halt tail (CPC_MAIN_BODY exit)
+      PC 26: CPC_LAZYF_BODY.S1  reg[8:9]  = max(vH, vF)
+      PC 27: CPC_LAZYF_BODY.S2  reg[14:15] = max(vMC, new_vH)
+      PC 28: CPC_LAZYF_BODY.S3  reg[12:13] = max(e, subs(new_vH, vGapO))
+      PC 29: CPC_LAZYF_BODY.S4  reg[18:19] = max(vTemp, vF)
+      PC 30: CPC_LAZYF_BODY.S5  reg[10:11] = subs(vF, vGapE)
+      PC 31: halt tail (CPC_LAZYF_BODY exit)
+      PC 32: CPC_F_SHIFT        reg[10:11] = SLLI_64(reg[10:11], 8)
+      PC 33: CPC_LAZYF_CMP      gr[13].lo/.hi = cmpgt_any OR-reduction
+      PC 34: halt tail (CPC_LAZYF_CMP exit)
     """
     f = InstructionWriter("instructions/gssw/compute_instruction.txt")
     # PC 0 — idle.
@@ -369,6 +390,43 @@ def gssw_compute_instructions():
     f.write(compute_instruction(COPY, INVALID, COPY, 20, 0, 0, 0, 0, 0, 8))
     f.write(compute_instruction(COPY, INVALID, COPY, 21, 0, 0, 0, 0, 0, 9))
     # PC 25 — halt tail for CPC_MAIN_BODY.
+    for ins in _chalt(): f.write(ins)
+    # CPC_LAZYF_BODY (stage 3g lazy-F iter body): 5 contiguous PCs.
+    # Each step is slot-0 / slot-1 paired on lo/hi compute regs.
+    # PC 26 — LAZYF.S1: reg[8:9] = max(vH, vF)  (new_vH).
+    f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 8, 10, 0, 0, 0, 0, 8))
+    f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 9, 11, 0, 0, 0, 0, 9))
+    # PC 27 — LAZYF.S2: reg[14:15] = max(vMC, new_vH).
+    f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 14, 8, 0, 0, 0, 0, 14))
+    f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 15, 9, 0, 0, 0, 0, 15))
+    # PC 28 — LAZYF.S3: reg[12:13] = max(e, subs(new_vH, vGapO)).
+    # op_0 = SUBS_EPU8 on 4-input: alu_out_0 = subs(new_vH, vGapO).
+    # op_1 = COPY on 2-input: alu_out_1 = reg[12:13] (e).
+    # op_2 = MAX_EPU8: alu_out_2 = max(alu_out_0, alu_out_1).
+    f.write(compute_instruction(SUBS_EPU8, COPY, MAX_EPU8, 8, 2, 0, 0, 12, 0, 12))
+    f.write(compute_instruction(SUBS_EPU8, COPY, MAX_EPU8, 9, 3, 0, 0, 13, 0, 13))
+    # PC 29 — LAZYF.S4: reg[18:19] = max(vTemp, vF).
+    f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 18, 10, 0, 0, 0, 0, 18))
+    f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 19, 11, 0, 0, 0, 0, 19))
+    # PC 30 — LAZYF.S5: reg[10:11] = subs(vF, vGapE).
+    f.write(compute_instruction(SUBS_EPU8, INVALID, COPY, 10, 4, 0, 0, 0, 0, 10))
+    f.write(compute_instruction(SUBS_EPU8, INVALID, COPY, 11, 5, 0, 0, 0, 0, 11))
+    # PC 31 — halt tail for CPC_LAZYF_BODY.
+    for ins in _chalt(): f.write(ins)
+    # PC 32 — CPC_F_SHIFT: reg[10:11] = SLLI_64(reg[10:11], 8).
+    # SLLI_64 takes input_addr[0] as immediate shift amount; in_1/in_2 are
+    # the register pair lo/hi.
+    f.write(compute_instruction(SLLI_64, HALT, HALT, 8, 10, 11, 0, 0, 0, 10))
+    f.write(compute_instruction(SLLI_64, HALT, HALT, 8, 10, 11, 0, 0, 0, 11))
+    # PC 33 — CPC_LAZYF_CMP: gr[13].lo = cmpgt_any(vF_lo, vH_lo) | cmpgt_any(vF_hi, vH_hi).
+    #          gr[13].hi = cmpgt_any(vF_lo, vTemp_lo) | cmpgt_any(vF_hi, vTemp_hi).
+    # op_0 = COMP_GT (4-input SIMD any-lane gt -> 0/1 byte).
+    # op_1 = COMP_GT (8-bit SIMD any-lane gt on in_4/in_5).
+    # op_2 = BWISE_OR.
+    # Output: slot 0 writes gr[13].lo (48+13=61), slot 1 writes gr[13].hi (64+13=77).
+    f.write(compute_instruction(COMP_GT, COMP_GT, BWISE_OR, 10, 8, 0, 0, 11, 9, COMP_GR_LO + 13))
+    f.write(compute_instruction(COMP_GT, COMP_GT, BWISE_OR, 10, 18, 0, 0, 11, 19, COMP_GR_HI + 13))
+    # PC 34 — halt tail for CPC_LAZYF_CMP.
     for ins in _chalt(): f.write(ins)
     f.close()
 
