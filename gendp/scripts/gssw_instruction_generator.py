@@ -209,6 +209,7 @@ CPC_FINAL_TAIL   = 5   # reg[20] = max(reg[14],reg[15]); gr[15] = max_reduce
 CPC_MUL_N_78     = 8   # gr[4] = gr[1].lo * gr[11]    (section B)
 CPC_MUL_CHILD_78 = 10  # gr[8] = gr[7]    * gr[11]    (section H)
 CPC_PUSH_MAX     = 12  # reg[20:21] = max_epu8_pair(reg[20:21], reg[22:23])
+CPC_MAXCOL       = 14  # reg[20] = max(reg[14],reg[15]); gr[11] = max_reduce (section F)
 
 
 # --- Subregister-offset encoding helpers for SPM addressing -----------------
@@ -305,6 +306,15 @@ def gssw_compute_instructions():
     f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 20, 22, 0, 0, 0, 0, 20))
     f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 21, 23, 0, 0, 0, 0, 21))
     # PC 13 — halt tail for CPC_PUSH_MAX.
+    for ins in _chalt(): f.write(ins)
+    # PC 14 — CPC_MAXCOL[0] : reg[20] = max_epu8(reg[14], reg[15]).
+    # Section F (stage 3e) colMax = reduce of vMaxColumn pair.
+    f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 14, 15, 0, 0, 0, 0, 20))
+    f.write(compute_instruction(HALT, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    # PC 15 — CPC_MAXCOL[1] : gr[11] = max_reduce(reg[20]).
+    f.write(compute_instruction(MAX_REDUCE, INVALID, COPY, 20, 0, 0, 0, 0, 0, COMP_GR + 11))
+    f.write(compute_instruction(HALT, INVALID, INVALID, 0, 0, 0, 0, 0, 0, 0))
+    # PC 16 — halt tail for CPC_MAXCOL.
     for ins in _chalt(): f.write(ins)
     f.close()
 
@@ -569,17 +579,70 @@ def pe_0_instruction(f):
     f.write(data_movement_instruction(0, gr, 0, 0, 0, 0, 1, 0, 2, spm_lo(12), bge))
     f.write(NOP)
 
-    # Body: run sections E + lazy-F + F via magic(109). gr[13] = seq[col]
-    # at entry (from the mvi2 above); magic 109's first section-E op
-    # computes vP_word_base from gr[13].
+    # Body: run sections E + lazy-F via magic(110). gr[13] = seq[col]
+    # at entry (from the mvi2 above); magic 110's first section-E op
+    # computes vP_word_base from gr[13]. reg[14:15] = vMaxColumn pair at
+    # magic 110 exit.
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))
-    f.write(write_magic(109))
+    f.write(write_magic(110))
+
+    # === Section F (lowered): horizontal max + conditional best_copy =========
+    # Fire CPC_MAXCOL: slot 0 of PC 14 does reg[20] = max_epu8(reg[14],
+    # reg[15]); slot 0 of PC 15 does gr[11] = MAX_REDUCE(reg[20]). Total
+    # 2 compute cycles. Give 3 NOP pairs before reading gr[11] so the
+    # control-side bge sees the committed MAX_REDUCE output.
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAXCOL, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+
+    # bge gr_lo[14] (overallMax) >= gr_lo[11] (colMax), skip_best_fwd.
+    # src=gr with reg_1 = spm_lo(11) forces both operands via CTRL_GR_LO.
+    skip_best_wi = f.write_count
+    skip_best_pc = f.pc
+    f.write(data_movement_instruction(0, gr, 0, 0, 0, 0, 1, 0, 14, spm_lo(11), bge))
+    f.write(NOP)
+
+    # overallMax = colMax. mv gr_lo[14] = gr_lo[11].
+    f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 14, 0, 0, 0, 11, 0, mv))
+    f.write(NOP)
+
+    # j = 0 (best-copy counter).
+    f.write(data_movement_instruction(gr_lo, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))
+    f.write(NOP)
+
+    # best_copy loop: hPong[j:j+1] -> best[j:j+1], step 2, 19 iters.
+    # hPong is at gr[6] (pre-G swap, so still hPong). Structure:
+    #   C0: mvd reg[20:21] = SPM[gr[6] + gr[3].lo]   | NOP
+    #   C1-C2: NOPs (SPM latency, 2 cycles).
+    #   C3: addi gr[3].lo += 2                        | mvd SPM[BEST + gr[3].lo] = reg[20:21]
+    # The slot swap (addi in slot 0, mvd-store in slot 1) leverages the
+    # slot-1-decodes-first rule: slot 1 reads OLD gr[3].lo for the store
+    # address, then slot 0 writes NEW gr[3].lo via set_output_dest. Saves
+    # one cycle per iter vs the stage-3b pattern of addi-on-its-own-cycle.
+    #   C4: bne gr[3] != 38, loop_head                | NOP
+    best_copy_pc = f.pc
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 20, 0, 1, 0, 6, spm_lo(3), mvd))
+    f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(NOP); f.write(NOP)
+    f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 3, 0, 0, 0, 2, 3, addi))
+    f.write(data_movement_instruction(SPM, reg, 0, 0, GSSW_BEST_WOFF, spm_lo(3), 0, 0, 20, 0, mvd))
+    best_copy_back_pc = f.pc
+    f.write(data_movement_instruction(
+        0, 0, 0, 0, best_copy_pc - best_copy_back_pc, 0, 0, 0,
+        GSSW_SEG_LEN * GSSW_VEC_WORDS, 3, bne))
+    f.write(NOP)
+
+    # skip_best: patch the bge target.
+    skip_best_target_pc = f.pc
+    f.patch_imm0(skip_best_wi, skip_best_target_pc - skip_best_pc)
 
     # Section G (lowered): swap gr[5] (hPing) and gr[6] (hPong) via gr[11]
-    # temp. gr[11] holds colMax after magic 109's section F, then gets
-    # clobbered here — safe because section H ISA re-inits gr[11] = 78.
-    # Three separate VLIW cycles to avoid src-position conflicts between
-    # paired mv's.
+    # temp. gr[11] holds colMax after the section-F CPC_MAXCOL; clobbered
+    # here, then re-inited to 78 at section H entry. Three separate VLIW
+    # cycles avoid src-position conflicts between paired mv's.
     f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 5, 0, mv))
     f.write(NOP)
     f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 6, 0, mv))
