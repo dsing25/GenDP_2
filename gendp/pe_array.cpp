@@ -2698,8 +2698,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     // gr[4] caller contract (gr[4] = out_buf at m37 exit,
                     // consumed by m33/m35) is preserved — this migration
                     // uses gr[3]/gr[5]/gr[11] as scratch only; gr[4] is
-                    // assigned `out_buf` later at line ~2876 and not
-                    // touched after.
+                    // assigned `out_buf` at the end of this merge block
+                    // and not touched after until m37 exits.
                     // AC-5/AC-9 architectural state migration (Round 12):
                     // bs_lo → s1c[0..2], bs_hi → s1c[3..5],
                     // bs_tgt → s1c[6..8]. Same scheme as m28.
@@ -2827,6 +2827,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     for (int p = 0; p < 3; p++) {
                         gr[11] = s1c[0 + p]; //NOP      // bs_lo[p]
                         gr[3]  = gr[11];                 // a_sp candidate
+                        //NOP                              // RAW barrier gr[3]
                         gr[11] = s1c[6 + p]; //NOP      // bs_target[p]
                         gr[4]  = gr[11] - gr[3];         // b_sp candidate
                         gr[5]  = s1c[40 + p]; //NOP     // prior a_sp[p]
