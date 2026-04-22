@@ -2919,24 +2919,27 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 mgr[11] = s1c[149];
                 //NOP                                    // s1c 1-cycle gap
                 bool merge_skipped = (mgr[11] < 0);
-                int intv_n;
+                // AC-5 (R3): intv_n architectural in mgr[5]; C++ local
+                // eliminated. mgr[5] is dead at m38 entry and clobbered
+                // by the no-merge binary-search as mid after line ~3005,
+                // so its lifetime here is head + mgr[28] broadcast.
                 if (merge_skipped) {
                     mgr[11] = s1c[148];
                     //NOP                                // s1c 1-cycle gap
-                    intv_n = mgr[11];
+                    mgr[5] = mgr[11];                   // intv_n
                 } else {
-                    intv_n = 0;
+                    mgr[5] = 0;                          // intv_n acc
                     for (int pe = 0; pe < 4; pe++) {
                         mgr[11] = s1c[4 + pe];
                         //NOP                            // s1c 1-cycle gap
-                        intv_n += mgr[11];
+                        mgr[5] = mgr[5] + mgr[11];      // intv_n += val
                     }
                 }
-                s1c[149] = intv_n;
+                s1c[149] = mgr[5];                       // store intv_n
                 mgr[11] = s1c[145];                     // n_a
                 //NOP                                    // s1c 1-cycle gap
                 mgr[24] = mgr[11];
-                mgr[28] = intv_n;
+                mgr[28] = mgr[5];                        // intv_n broadcast
                 // Compute intv boundary positions (AC-7)
                 mgr[11] = s1c[152];                     // active_intv_base
                 //NOP                                    // s1c 1-cycle gap
