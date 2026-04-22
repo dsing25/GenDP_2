@@ -406,6 +406,11 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
             : source_addr;
         bool isVirtualAddr = !swizzle;
         last_spm_load_addr = access_addr;
+        // Per-PE SPM port is single-entry per cycle. Same-cycle dual SPM
+        // issue (both VLIW slots) would silently overwrite the first
+        // request, leaving outstanding_reqs out of sync with actual
+        // in-flight loads. Catch loudly.
+        assert(spmReqPort == nullptr);
         spmReqPort = new OutstandingRequest();
         spmReqPort->addr = access_addr;
         spmReqPort->peid = id;
@@ -530,6 +535,9 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
             int access_addr = swizzle
                 ? apply_address_swizzle(dest_addr) : dest_addr;
             bool isVirtualAddr = !swizzle;
+            // Single-entry SPM port per PE per cycle; trap same-cycle
+            // dual issue (store path).
+            assert(spmReqPort == nullptr);
             spmReqPort = new OutstandingRequest();
             spmReqPort->peid = id;
             spmReqPort->access_t = SpmAccessT::WRITE;
@@ -2253,6 +2261,9 @@ m23_end:    ;
         // here is safe; add a flag bit (or a new opcode) if a future
         // swizzle-aware kernel needs it.
         last_spm_load_addr = word_addr;
+        // Single-entry SPM port per PE per cycle; trap same-cycle
+        // dual issue (mvi2 + any other SPM op).
+        assert(spmReqPort == nullptr);
         spmReqPort = new OutstandingRequest();
         spmReqPort->addr = word_addr;
         spmReqPort->peid = id;

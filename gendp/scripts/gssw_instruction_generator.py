@@ -118,8 +118,12 @@ Stall rules (AC-1, DEC-7, rederived against current trunk).
   give the enforcement sites in the simulator for spot-checking.
   mvd load  (PE SPM -> reg/gr/out):
       dst visible to consumer:     +2 cycles
-      next same-PE reissue:        +2 cycles (outstanding_req depth=1)
-      source: pe.h:13-34,101-104; pe.cpp:62-151,419-495,2877-2884
+      next same-PE reissue:        +1 cycle  (pipelined; PE-side queue
+                                   outstanding_reqs depth=SPM_ACCESS_LATENCY=2).
+                                   SAME-cycle dual SPM issue (both VLIW
+                                   slots) still illegal — spmReqPort is
+                                   single-entry; asserted at pe.cpp.
+      source: pe.h:13-34,101-106; pe.cpp:62-151,419-499,2877-2884
   mvd store (PE reg/gr -> SPM):
       subsequent SPM read sees it: +2 cycles
       next store issue:            +1 cycle (subject to bank avail.)
