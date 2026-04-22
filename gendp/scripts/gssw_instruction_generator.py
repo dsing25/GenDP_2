@@ -2,13 +2,11 @@
 """
 GSSW instruction generator.
 
-Magic-101 -> ISA lowering. Section A (prologue/init), section B (outer
-node loop head + per-node metadata load), section H (seed push to
-children), and section I (final reduce) are emitted as real ISA on
-PE 0. The remaining sections (C, D, E, F, G, lazy-F) are delegated
-to a C++ mini-magic in pe.cpp (currently magic_id 107) that assumes
-sections A+B have already run for the current node and the ISA outer
-loop advances n between nodes.
+Magic-101 -> ISA lowering: COMPLETE. All GSSW sections (A, B, C, D, E
+including lazy-F, F, G, H, I) are emitted as real ISA on PE 0.
+The only kernel-bridge magics still emitted are:
+  magic(100) — controller-side SPM init from host (in main_instruction).
+  magic(102) — PE-side score print (one printf at kernel exit).
 
 Traces produced:
   instructions/gssw/main_instruction.txt    (controller)
@@ -23,10 +21,9 @@ Controller trace:
 
 PE 0 trace (see pe_0_instruction()):
   PC 0        : halt | halt   (wait for controller)
-  PC 1..K     : lowered sections A, B, outer-loop head, H, outer-loop
-                tail, I
-  PC ...      : magic(107) between section B tail and section H
-                (runs C..G for one node; H and outer n++ run in ISA)
+  PC 1..K     : lowered sections A, B, outer-loop head, C, D+G column
+                loop (with full section E main DP loop + lazy-F inside),
+                F, H, outer-loop tail, I
   PC ...      : magic(102) - print score
   PC ...      : si gr[10]=1 - signal done
   PC ...      : halt | halt
