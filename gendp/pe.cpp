@@ -1932,7 +1932,8 @@ m23_end:    ;
         } else if (magic_id == 101 || magic_id == 103
                 || magic_id == 104 || magic_id == 106
                 || magic_id == 107 || magic_id == 108
-                || magic_id == 109 || magic_id == 110) {
+                || magic_id == 109 || magic_id == 110
+                || magic_id == 111) {
             // GSSW kernel — register-mapped ISA-like form.
             // Staged-lowering variants:
             //   magic 101 = full kernel (sections A..I)
@@ -1973,6 +1974,14 @@ m23_end:    ;
             //               the ISA caller drives CPC_MAXCOL, the
             //               skip-best bge, the overallMax mv, and the
             //               best_copy mvd loop.
+            //   magic 111 = like 110 but also skips section E (prologue
+            //               + main inner DP loop). Magic 111 runs lazy-F
+            //               only. The ISA caller owns: loading vH from
+            //               hPing[last], loading e from pvE[0], resetting
+            //               vF/vMaxColumn, the cross-lane byte shift of
+            //               vH via SLLI_64(reg[8:9], 8), the pvF_zero
+            //               loop, the profScore preload, and the 19-iter
+            //               5-step main body via CPC_MAIN_S1..S5.
             // Register allocation:
             //  gr[1] lo: n           hi: numNodes
             //  gr[2] lo: col         hi: seq_len
