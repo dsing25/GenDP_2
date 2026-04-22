@@ -2692,9 +2692,14 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     int abase = MM_NEXT_INTV, bbase = active_intv;
                     int n_total2 = n_new + intv_n;
                     int nape = (n_total2 + 3) / 4;
-                    int a_sp[5], b_sp[5];
-                    a_sp[0] = 0; b_sp[0] = 0;
-                    a_sp[4] = n_new; b_sp[4] = intv_n;
+                    // AC-5 Stage B (Round 16): a_sp[0..4] → s1c[40..44],
+                    // b_sp[0..4] → s1c[45..49]. Layout matches m28.
+                    // Lifetime: post-bs → per-PE compute loop end.
+                    // gr[4] caller contract (gr[4] = out_buf at m37 exit,
+                    // consumed by m33/m35) is preserved — this migration
+                    // uses gr[3]/gr[5]/gr[11] as scratch only; gr[4] is
+                    // assigned `out_buf` later at line ~2876 and not
+                    // touched after.
                     // AC-5/AC-9 architectural state migration (Round 12):
                     // bs_lo → s1c[0..2], bs_hi → s1c[3..5],
                     // bs_tgt → s1c[6..8]. Same scheme as m28.
@@ -2800,30 +2805,61 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 m37_bs_step_end:
                     goto m37_bs_top;
                 m37_bs_done:
+                    // AC-5 Stage B: compute a_sp/b_sp into s1c[40..49].
+                    // Init: a_sp[0]=b_sp[0]=0, a_sp[4]=n_new, b_sp[4]=intv_n.
+                    gr[11] = 0;
+                    //NOP                               // gr settle
+                    s1c[40] = gr[11];                   // a_sp[0]
+                    //NOP                               // 1-port s1c gap
+                    s1c[45] = gr[11];                   // b_sp[0]
+                    gr[11] = n_new;
+                    //NOP
+                    s1c[44] = gr[11];                   // a_sp[4]
+                    gr[11] = intv_n;
+                    //NOP
+                    s1c[49] = gr[11];                   // b_sp[4]
+                    // Compute a_sp[p+1]/b_sp[p+1] for p=0,1,2 via
+                    // gr[3]=a_sp candidate, gr[4]=b_sp candidate,
+                    // gr[5]=prior a_sp[p]/b_sp[p] stage. (Note gr[4]
+                    // is used as scratch HERE but reset to out_buf
+                    // at line ~2876 before m37 exits; m33/m35 read
+                    // gr[4] only after m37 exit per BL-20260421.)
                     for (int p = 0; p < 3; p++) {
-                        gr[11] = s1c[0 + p]; //NOP
-                        gr[3]  = gr[11];             // stash bs_lo
-                        gr[11] = s1c[6 + p]; //NOP
-                        a_sp[p+1] = gr[3];
-                        b_sp[p+1] = gr[11] - gr[3];
-                        if (a_sp[p+1] < a_sp[p]) {
-                            a_sp[p+1] = a_sp[p];
-                            b_sp[p+1] = gr[11] - a_sp[p+1];
+                        gr[11] = s1c[0 + p]; //NOP      // bs_lo[p]
+                        gr[3]  = gr[11];                 // a_sp candidate
+                        gr[11] = s1c[6 + p]; //NOP      // bs_target[p]
+                        gr[4]  = gr[11] - gr[3];         // b_sp candidate
+                        gr[5]  = s1c[40 + p]; //NOP     // prior a_sp[p]
+                        if (gr[3] < gr[5]) {
+                            gr[3] = gr[5];
+                            //NOP                         // RAW barrier gr[3]
+                            gr[4] = gr[11] - gr[3];
                         }
-                        if (b_sp[p+1] < b_sp[p]) {
-                            b_sp[p+1] = b_sp[p];
-                            a_sp[p+1] = gr[11] - b_sp[p+1];
+                        gr[5]  = s1c[45 + p]; //NOP     // prior b_sp[p]
+                        if (gr[4] < gr[5]) {
+                            gr[4] = gr[5];
+                            //NOP                         // RAW barrier gr[4]
+                            gr[3] = gr[11] - gr[4];
                         }
+                        s1c[41 + p] = gr[3];             // a_sp[p+1]
+                        //NOP                             // 1-port s1c gap
+                        s1c[46 + p] = gr[4];             // b_sp[p+1]
                     }
                     // R9 fix: replace scalar per-PE MM->SPM tile loads
                     // with chunk-outer / PE-inner mvdq_copy (same pattern
                     // as m28 A_BUF0/A_BUF1/B_BUF0/B_BUF1 round-robin).
+                    // AC-5 Stage B: tile arrays a0s/a1s/b0s/b1s +
+                    // a_srcs/b_srcs migrated to s1c[50..73].
                     int max_pt = 0;
-                    int a0s[4], a1s[4], b0s[4], b1s[4];
-                    int a_srcs[4], b_srcs[4];
                     for (int pe = 0; pe < 4; pe++) {
-                        int pa_s = a_sp[pe], pa_n = a_sp[pe+1] - pa_s;
-                        int pb_s = b_sp[pe], pb_n = b_sp[pe+1] - pb_s;
+                        gr[11] = s1c[40 + pe]; //NOP     // a_sp[pe]
+                        int pa_s = gr[11];
+                        gr[11] = s1c[41 + pe]; //NOP     // a_sp[pe+1]
+                        int pa_n = gr[11] - pa_s;
+                        gr[11] = s1c[45 + pe]; //NOP     // b_sp[pe]
+                        int pb_s = gr[11];
+                        gr[11] = s1c[46 + pe]; //NOP     // b_sp[pe+1]
+                        int pb_n = gr[11] - pb_s;
                         if (pa_n < 0) pa_n = 0; if (pb_n < 0) pb_n = 0;
                         int pt = pa_n + pb_n;
                         if (pt > max_pt) max_pt = pt;
@@ -2836,9 +2872,30 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         s1c[12+pe] = (pa_n-a0-a1 > 0) ? pa_n-a0-a1 : 0;
                         s1c[16+pe] = bbase + (pb_s+b0+b1)*2;
                         s1c[20+pe] = (pb_n-b0-b1 > 0) ? pb_n-b0-b1 : 0;
-                        a0s[pe]=a0; a1s[pe]=a1; b0s[pe]=b0; b1s[pe]=b1;
-                        a_srcs[pe] = abase + pa_s*2;
-                        b_srcs[pe] = bbase + pb_s*2;
+                        // AC-5: tile sizes/sources → s1c scratch
+                        gr[11] = a0;
+                        //NOP
+                        s1c[50+pe] = gr[11];
+                        //NOP                              // 1-port s1c gap
+                        gr[11] = a1;
+                        //NOP
+                        s1c[54+pe] = gr[11];
+                        //NOP
+                        gr[11] = b0;
+                        //NOP
+                        s1c[58+pe] = gr[11];
+                        //NOP
+                        gr[11] = b1;
+                        //NOP
+                        s1c[62+pe] = gr[11];
+                        //NOP
+                        gr[11] = abase + pa_s*2;
+                        //NOP
+                        s1c[66+pe] = gr[11];
+                        //NOP
+                        gr[11] = bbase + pb_s*2;
+                        //NOP
+                        s1c[70+pe] = gr[11];
                         int *spm2 = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
                         spm2[MERGE_META+0]=0; spm2[MERGE_META+1]=0; spm2[MERGE_META+4]=0;
                         spm2[MERGE_META+5]=(pa_n<=a0+a1)?1:0;
@@ -2847,30 +2904,81 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         spm2[MERGE_META+9]=a0; spm2[MERGE_META+10]=a1;
                         spm2[MERGE_META+11]=b0; spm2[MERGE_META+12]=b1;
                     }
-                    // Chunk-outer / PE-inner mvdq for 4 tiles
+                    // Chunk-outer / PE-inner mvdq for 4 tiles (AC-5 updated:
+                    // tile sizes/sources re-read from s1c via gr[11]).
                     int *spm_all = SPM_unit->buffer;
-                    #define M37_MVDQ(buf_off, sizes, srcs, extra) do { \
-                        int mw = 0; \
-                        for (int pe = 0; pe < 4; pe++) { \
-                            int w = sizes[pe]*2; if (w > mw) mw = w; } \
-                        for (int j = 0; j < mw; j += 8) \
-                            for (int pe = 0; pe < 4; pe++) { \
-                                int w = sizes[pe]*2; \
-                                if (j >= w) continue; \
-                                int cnt = w-j; if (cnt > 8) cnt = 8; \
-                                mvdq_copy(&spm_all[pe*SPM_BANK_GROUP_SIZE+buf_off+j], \
-                                          &mm[srcs[pe]+extra+j], cnt); \
-                            } \
-                    } while(0)
-                    M37_MVDQ(MERGE_A_BUF0, a0s, a_srcs, 0);
-                    { int a1_srcs[4]; \
-                      for (int pe=0; pe<4; pe++) a1_srcs[pe] = a_srcs[pe] + a0s[pe]*2; \
-                      M37_MVDQ(MERGE_A_BUF1, a1s, a1_srcs, 0); }
-                    M37_MVDQ(MERGE_B_BUF0, b0s, b_srcs, 0);
-                    { int b1_srcs[4]; \
-                      for (int pe=0; pe<4; pe++) b1_srcs[pe] = b_srcs[pe] + b0s[pe]*2; \
-                      M37_MVDQ(MERGE_B_BUF1, b1s, b1_srcs, 0); }
-                    #undef M37_MVDQ
+                    // A_BUF0
+                    { int mw = 0;
+                      for (int pe=0; pe<4; pe++) {
+                          gr[11] = s1c[50+pe]; //NOP
+                          int w = gr[11]*2; if (w > mw) mw = w;
+                      }
+                      for (int j = 0; j < mw; j += 8)
+                          for (int pe = 0; pe < 4; pe++) {
+                              gr[11] = s1c[50+pe]; //NOP
+                              int w = gr[11]*2;
+                              if (j >= w) continue;
+                              int cnt = w-j; if (cnt > 8) cnt = 8;
+                              gr[11] = s1c[66+pe]; //NOP
+                              mvdq_copy(&spm_all[pe*SPM_BANK_GROUP_SIZE+MERGE_A_BUF0+j],
+                                        &mm[gr[11]+j], cnt);
+                          }
+                    }
+                    // A_BUF1 (src + a0*2 offset)
+                    { int mw = 0;
+                      for (int pe=0; pe<4; pe++) {
+                          gr[11] = s1c[54+pe]; //NOP
+                          int w = gr[11]*2; if (w > mw) mw = w;
+                      }
+                      for (int j = 0; j < mw; j += 8)
+                          for (int pe = 0; pe < 4; pe++) {
+                              gr[11] = s1c[54+pe]; //NOP
+                              int w = gr[11]*2;
+                              if (j >= w) continue;
+                              int cnt = w-j; if (cnt > 8) cnt = 8;
+                              gr[11] = s1c[50+pe]; //NOP    // a0
+                              int a0_scaled = gr[11]*2;
+                              gr[11] = s1c[66+pe]; //NOP    // a_src
+                              mvdq_copy(&spm_all[pe*SPM_BANK_GROUP_SIZE+MERGE_A_BUF1+j],
+                                        &mm[gr[11]+a0_scaled+j], cnt);
+                          }
+                    }
+                    // B_BUF0
+                    { int mw = 0;
+                      for (int pe=0; pe<4; pe++) {
+                          gr[11] = s1c[58+pe]; //NOP
+                          int w = gr[11]*2; if (w > mw) mw = w;
+                      }
+                      for (int j = 0; j < mw; j += 8)
+                          for (int pe = 0; pe < 4; pe++) {
+                              gr[11] = s1c[58+pe]; //NOP
+                              int w = gr[11]*2;
+                              if (j >= w) continue;
+                              int cnt = w-j; if (cnt > 8) cnt = 8;
+                              gr[11] = s1c[70+pe]; //NOP
+                              mvdq_copy(&spm_all[pe*SPM_BANK_GROUP_SIZE+MERGE_B_BUF0+j],
+                                        &mm[gr[11]+j], cnt);
+                          }
+                    }
+                    // B_BUF1 (src + b0*2 offset)
+                    { int mw = 0;
+                      for (int pe=0; pe<4; pe++) {
+                          gr[11] = s1c[62+pe]; //NOP
+                          int w = gr[11]*2; if (w > mw) mw = w;
+                      }
+                      for (int j = 0; j < mw; j += 8)
+                          for (int pe = 0; pe < 4; pe++) {
+                              gr[11] = s1c[62+pe]; //NOP
+                              int w = gr[11]*2;
+                              if (j >= w) continue;
+                              int cnt = w-j; if (cnt > 8) cnt = 8;
+                              gr[11] = s1c[58+pe]; //NOP    // b0
+                              int b0_scaled = gr[11]*2;
+                              gr[11] = s1c[70+pe]; //NOP    // b_src
+                              mvdq_copy(&spm_all[pe*SPM_BANK_GROUP_SIZE+MERGE_B_BUF1+j],
+                                        &mm[gr[11]+b0_scaled+j], cnt);
+                          }
+                    }
                     int niter = ((max_pt+MERGE_STEP-1)/MERGE_STEP)*MERGE_STEP;
                     gr[6] = (niter == 0) ? 0 : niter;
                     gr[4] = out_buf;
