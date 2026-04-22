@@ -2942,12 +2942,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //NOP                                    // s1c 1-cycle gap
                 int ib = mgr[11];
                 if (!merge_skipped) {
-                    // Collect per-PE absolute boundary positions via min.
-                    // R6 fix: stage each spm[976+b] / spm[979+b] load
-                    // through mgr[11] with 3-NOP SPM settle before the
-                    // hp/lp consumer.
+                    // AC-5 (R3): eliminate best_hi/best_lo/hp/lp C++
+                    // locals. best_hi/best_lo live in mgr[3]/mgr[4]
+                    // architectural for the merge-path only (m38 ends
+                    // at closing brace; gr[3]/gr[4] are dead at exit).
+                    // hp/lp folded into direct mgr[11] compares.
+                    // intv_n re-read from s1c[149] per b-iteration.
                     for (int b = 0; b < 3; b++) {
-                        int best_hi = intv_n, best_lo = intv_n;
+                        mgr[11] = s1c[149];                  // intv_n
+                        //NOP                                  // s1c gap
+                        mgr[3] = mgr[11];                    // best_hi
+                        mgr[4] = mgr[11];                    // best_lo
                         for (int pe = 0; pe < 4; pe++) {
                             int *spm = &SPM_unit->buffer[
                                 pe * SPM_BANK_GROUP_SIZE];
@@ -2955,17 +2960,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             //NOP                              // SPM 1/3
                             //NOP                              // SPM 2/3
                             //NOP                              // SPM 3/3
-                            int hp = mgr[11];
+                            if (mgr[11] >= 0 && mgr[11] < mgr[3])
+                                mgr[3] = mgr[11];
                             mgr[11] = spm[979+b];            // SPM lp
                             //NOP                              // SPM 1/3
                             //NOP                              // SPM 2/3
                             //NOP                              // SPM 3/3
-                            int lp = mgr[11];
-                            if (hp >= 0 && hp < best_hi) best_hi = hp;
-                            if (lp >= 0 && lp < best_lo) best_lo = lp;
+                            if (mgr[11] >= 0 && mgr[11] < mgr[4])
+                                mgr[4] = mgr[11];
                         }
-                        s1c[163+b] = best_hi; // intv_lo[pe+1]
-                        s1c[166+b] = best_lo; // intv_hi[pe]
+                        s1c[163+b] = mgr[3]; // intv_lo[pe+1]
+                        s1c[166+b] = mgr[4]; // intv_hi[pe]
                     }
                 } else {
                     // No merge: compute boundaries via fused binary
