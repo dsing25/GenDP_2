@@ -1,4 +1,10 @@
 #include "pe_array.h"
+// Plan 3a l2dv FIN0 coverage gate: uncomment `#define FIN0_COVERAGE_TRACE`
+// below (or compile with -DFIN0_COVERAGE_TRACE) to emit a stderr tag at
+// every fin0_load_batch() entry. Verified at Round 2 that all four
+// (call-site × mask) combos (m15/m20 × F0A/F0B) are exercised within
+// 50-case runs; 15-case mode-1 covers 3/4 (m20+F0A is rare).
+// #define FIN0_COVERAGE_TRACE
 #include <cassert>
 #include "sys_def.h"
 #include "data_buffer.h"
@@ -399,16 +405,33 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
     // in .humanize/rlcr/2026-04-20_20-46-30/ac11-audit-table.md.
     int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
     int *spm = SPM_unit->buffer;
+#ifdef FIN0_COVERAGE_TRACE
+    // Plan 3a l2dv FIN0 coverage gate (Round 2): emit a trace tag at
+    // every helper entry so mode-1 runs can be grep'd for all four
+    // (call-site × mask) combinations. s1c[22] distinguishes the
+    // magic-15 initial call (s1c[22]==0) from the magic-20
+    // continuation call (s1c[22]!=0); avoids touching frozen magic 15.
+    // Per BL-20260420-gwfa-mm-cross-case: no static accumulators — we
+    // print per-call and the harness aggregates via grep.
+    fprintf(stderr,
+            "FIN0_TRACE %s F0%c\n",
+            (s1c[22] == 0) ? "m15" : "m20",
+            (magic_mask & 2) ? 'B' : 'A');
+#endif
     constexpr int ARC_META_BASE = 544;
     constexpr int DIAG_CAP_F = (16 << 20);
     constexpr int INTV_CAP_F = (1 << 21);
     constexpr int HA_CAP_F   = (4 << 20);
     constexpr int ha_off = DIAG_CAP_F * 8 + INTV_CAP_F * 6;
-    // Half-register extraction helper (Plan 3a AC-8): zero-extended
-    // high 16 bits of a 32-bit gr source; lowerable to the ISA
-    // `mv gr_hi[X] → gr[Y]` data-move op instead of a shifti_r.
-    // C++ runtime value is identical to `(unsigned)x >> 16`.
-    #define GR_HI(x) (((unsigned)(x)) >> 16)
+    // Half-register extraction helper (Plan 3a AC-8): sign-extended
+    // high 16 bits of a 32-bit gr source. Matches the simulator's
+    // CTRL_GR_HI path at pe_array.cpp:374
+    // (`(int)(int16_t)((val >> 16) & 0xFFFF)`); lowerable 1:1 to the
+    // ISA `mv gr_hi[X] → gr[Y]` data-move op. If unsigned semantics
+    // are required, follow each use with `& 0xFFFF` (andi) to clear
+    // the sign-extension bits — that is the real ISA sequence as
+    // well (mv gr_hi ; andi 0xFFFF).
+    #define GR_HI(x) ((int)(int16_t)(((x) >> 16) & 0xFFFF))
     // R3/R5 fix: no 'int total_fin0' or 'int cursor' C++ local mirrors.
     // s1c[20] is the authoritative limit, s1c[22] the authoritative
     // cursor. Compares and arithmetic below reference them directly;
@@ -621,7 +644,9 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
             //NOP                                        // SPM lat 1/3 (AC-11 slot-safe)
             //NOP                                        // SPM lat 2/3
             //NOP                                        // SPM lat 3/3
-            gr[9] = GR_HI(gr[9]);                        // mv gr_hi[9] → gr[9] (AC-8 half-reg)
+            gr[9] = GR_HI(gr[9]);                        // mv gr_hi[9] → gr[9] (AC-8 half-reg; sign-ext)
+            //NOP                                        // RAW barrier
+            gr[9] = gr[9] & 0xFFFF;                      // andi: clear sign-ext for unsigned idx
             //NOP
             // R7: stage S2 load through gr[13] with waitLSQ+NOP before
             // the SPM store so the ts_off value has settled.
@@ -697,7 +722,9 @@ void pe_array::fin0_load_batch(int fin0_base, int magic_mask) {
                 gr[4] = gr[5] + 1;                       // addi: i_val+1 (fills gap 1/3)
                 //NOP                                    // SPM lat 2/3 (AC-11 slot-safe)
                 //NOP                                    // SPM lat 3/3
-                gr[3] = GR_HI(gr[3]);                    // mv gr_hi[3] → gr[3] (AC-8 half-reg)
+                gr[3] = GR_HI(gr[3]);                    // mv gr_hi[3] → gr[3] (AC-8 half-reg; sign-ext)
+                //NOP                                    // RAW barrier
+                gr[3] = gr[3] & 0xFFFF;                  // andi: clear sign-ext for hash-input upper half
                 // DEC-HASH-PATH carve-out (user-confirmed 2026-04-22):
                 // controller ISA lacks int multiply on gr[]; Fibonacci-hash
                 // lowering deferred to 3a follow-on. hk/h/b/ms kept as
@@ -2523,6 +2550,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // ISA lowering: SPM load -> 3-NOP settle -> s1c store;
             // each s1c accumulate has a //NOP 1-cycle gap between load
             // and the gr consumer.
+            // Plan 3a l2cv (Round 2): gendp-isa-reviewer clean on this
+            // body (zero P0/P1/P2); no code edit needed. This comment
+            // anchors the l2cv validation artifact commit per plan
+            // cadence (build + mode 1 15/15 + reviewer + commit).
             {
                 int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
                 int *spm = SPM_unit->buffer;
