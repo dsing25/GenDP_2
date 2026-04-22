@@ -2269,7 +2269,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 for (int pe = 0; pe < 4; pe++) {
                     gr[10] = s1c[pe];                     // mv: n_A[pe]
                     //NOP
-                    if (gr[11] >= gr[10]) continue;        // bge: skip
+                    if (gr[11] >= gr[10]) goto m18_a_skip; // bge: skip
                     gr[7] = s1c[16 + pe];                 // mv: src
                     //NOP
                     gr[9] = spm[gr[7]];                   // mv: vd
@@ -2285,6 +2285,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[27] = gr[27] + 1;                  // addi: A_count++
                     gr[7] = gr[7] + 2;                    // addi: src+=2
                     s1c[16 + pe] = gr[7];                 // mv: update src
+                m18_a_skip:
+                    (void)0;
                 }
                 gr[11] = gr[11] + 1;                      // addi
                 goto m18_a_outer;
@@ -2314,7 +2316,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 for (int pe = 0; pe < 4; pe++) {
                     gr[10] = s1c[4 + pe];                 // mv: n_B[pe]
                     //NOP
-                    if (gr[11] >= gr[10]) continue;        // bge: skip
+                    if (gr[11] >= gr[10]) goto m18_b_skip; // bge: skip
                     gr[7] = s1c[16 + pe];                 // mv: src
                     //NOP
                     gr[9] = spm[gr[7]];                   // mv: vd
@@ -2327,6 +2329,8 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[24] = gr[24] + 1;                  // addi: B_n++
                     gr[7] = gr[7] - 2;                    // subi: backward
                     s1c[16 + pe] = gr[7];                 // mv: update src
+                m18_b_skip:
+                    (void)0;
                 }
                 gr[11] = gr[11] + 1;                      // addi
                 goto m18_b_outer;
@@ -2349,13 +2353,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 for (int pe = 0; pe < 4; pe++) {
                     gr[10] = s1c[8 + pe];                 // mv: n_HA[pe]
                     //NOP
-                    if (gr[11] >= gr[10]) continue;        // bge: skip
+                    if (gr[11] >= gr[10]) goto m18_ha_skip;// bge: skip
                     gr[7] = s1c[12 + pe];                 // mv: pe_spm
                     gr[8] = gr[11] + gr[11];              // add: 2*i
                     //NOP
                     gr[9] = spm[gr[7] + FIN0_OUT_HA + gr[8]];     // mv: arc_idx
                     gr[1] = spm[gr[7] + FIN0_OUT_HA + gr[8] + 1]; // mv: b_raw
-                    //NOP
+                    //NOP                                  // SPM lat 1/3
+                    //NOP                                  // SPM lat 2/3
+                    //NOP                                  // SPM lat 3/3
                     gr[3] = gr[1] & 0xFFFFF;              // andi: bucket idx
                     gr[4] = gr[1] & (1 << 20);            // andi: new_bucket
                     // HA SPM addr: pe_spm + FIN0_HA + 4*arc_idx
@@ -2373,9 +2379,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     mm[gr[9]+1] = spm[gr[8]+1];
                     mm[gr[9]+2] = spm[gr[8]+2];
                     mm[gr[9]+3] = spm[gr[8]+3];
-                    if (gr[4] == 0) continue;              // beq: skip dirty
+                    if (gr[4] == 0) goto m18_ha_skip;      // beq: skip dirty
                     mm[ha_dirty_off + gr[31]] = gr[3];    // mv: record bucket
                     gr[31] = gr[31] + 1;                  // addi: dirty_n++
+                m18_ha_skip:
+                    (void)0;
                 }
                 gr[11] = gr[11] + 1;                      // addi
                 goto m18_ha_outer;
@@ -2393,8 +2401,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
 
             // Counter sync
+            // seam-helper-waived (DEC-4)
             gwfa_sync_counters(gr[24], (uint32_t)gr[25],
                 (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
+            // seam-helper-waived (DEC-4)
             gwfa_set_ha_n_dirty((uint32_t)gr[31]);
         } else if (magic_id == 16) {
             // Sync counters, save state, setup DIAG sort (DIAG-first order).
