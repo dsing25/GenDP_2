@@ -222,9 +222,16 @@ CPC_MAIN_BODY    = 19  # S1 (PC19)->S2->S3->S4->S5->TAIL (PC24), halt at PC25
 # reduction into gr[13].lo/.hi. set_PC CPC_F_SHIFT fires both F_SHIFT
 # and LAZYF_CMP in sequence (contiguous PCs); set_PC CPC_LAZYF_CMP
 # alone fires just the cmp (used on normal iter tails).
-CPC_LAZYF_BODY   = 26  # S1 (PC26)..S5 (PC30), halt tail at PC31
-CPC_F_SHIFT      = 32  # reg[10:11] = SLLI_64(reg[10:11], 8), then CMP at PC33
-CPC_LAZYF_CMP    = 33  # gr[13].lo/.hi = cmpgt_any OR reduction
+# Lazy-F body runs 5 compute steps (S1..S5) + 3 PADs so that when set_PC
+# CPC_LAZYF_BODY fires, compute walks 26->...->30->PAD1->PAD2->PAD3->CMP
+# automatically. Three PADs are needed because CMP consumes TWO SPM
+# loads (hPong[j+2] fired by ctrl at C6, pvF[j+2] at C7); the later of
+# the two finishes at C9 = C7+2, so CMP must fire >= C9. F_SHIFT is in
+# its own region at PC 36 used by the prologue + WRAP; halt at PC 37
+# prevents compute auto-advancing from F_SHIFT into unrelated PCs.
+CPC_LAZYF_BODY   = 26  # S1..S5 (26..30), PAD1..3 (31..33), CMP (34)
+CPC_LAZYF_CMP    = 34  # entry point for "CMP-only" firings (WRAP, prologue)
+CPC_F_SHIFT      = 36  # reg[10:11] = SLLI_64(reg[10:11], 8); halts at 37
 
 
 # --- Subregister-offset encoding helpers for SPM addressing -----------------
@@ -296,10 +303,13 @@ def gssw_compute_instructions():
       PC 28: CPC_LAZYF_BODY.S3  reg[12:13] = max(e, subs(new_vH, vGapO))
       PC 29: CPC_LAZYF_BODY.S4  reg[18:19] = max(vTemp, vF)
       PC 30: CPC_LAZYF_BODY.S5  reg[10:11] = subs(vF, vGapE)
-      PC 31: halt tail (CPC_LAZYF_BODY exit)
-      PC 32: CPC_F_SHIFT        reg[10:11] = SLLI_64(reg[10:11], 8)
-      PC 33: CPC_LAZYF_CMP      gr[13].lo/.hi = cmpgt_any OR-reduction
-      PC 34: halt tail (CPC_LAZYF_CMP exit)
+      PC 31: PAD1               reg[0]=reg[0], reg[1]=reg[1] (no-op advance)
+      PC 32: PAD2               (same)
+      PC 33: PAD3               (same)
+      PC 34: CPC_LAZYF_CMP      gr[13].lo/.hi = cmpgt_any OR-reduction
+      PC 35: halt tail (CPC_LAZYF_CMP exit)
+      PC 36: CPC_F_SHIFT        reg[10:11] = SLLI_64(reg[10:11], 8)
+      PC 37: halt tail (CPC_F_SHIFT exit)
     """
     f = InstructionWriter("instructions/gssw/compute_instruction.txt")
     # PC 0 — idle.
@@ -408,14 +418,14 @@ def gssw_compute_instructions():
     # PC 30 — LAZYF.S5: reg[10:11] = subs(vF, vGapE).
     f.write(compute_instruction(SUBS_EPU8, INVALID, COPY, 10, 4, 0, 0, 0, 0, 10))
     f.write(compute_instruction(SUBS_EPU8, INVALID, COPY, 11, 5, 0, 0, 0, 0, 11))
-    # PC 31 — halt tail for CPC_LAZYF_BODY.
-    for ins in _chalt(): f.write(ins)
-    # PC 32 — CPC_F_SHIFT: reg[10:11] = SLLI_64(reg[10:11], 8).
-    # SLLI_64 takes input_addr[0] as immediate shift amount; in_1/in_2 are
-    # the register pair lo/hi.
-    f.write(compute_instruction(SLLI_64, HALT, HALT, 8, 10, 11, 0, 0, 0, 10))
-    f.write(compute_instruction(SLLI_64, HALT, HALT, 8, 10, 11, 0, 0, 0, 11))
-    # PC 33 — CPC_LAZYF_CMP: gr[13].lo = cmpgt_any(vF_lo, vH_lo) | cmpgt_any(vF_hi, vH_hi).
+    # PC 31-33 — PAD1..3: COPY reg[i] to reg[i] (no-op advance).
+    # Non-HALT so compute PC advances; source == destination so no
+    # observable register change. Needed to stage CMP >= 2 cycles after
+    # the hPong[j+2] and pvF[j+2] SPM loads complete.
+    for _ in range(3):
+        f.write(compute_instruction(COPY, INVALID, COPY, 0, 0, 0, 0, 0, 0, 0))
+        f.write(compute_instruction(COPY, INVALID, COPY, 1, 0, 0, 0, 0, 0, 1))
+    # PC 34 — CPC_LAZYF_CMP: gr[13].lo = cmpgt_any(vF_lo, vH_lo) | cmpgt_any(vF_hi, vH_hi).
     #          gr[13].hi = cmpgt_any(vF_lo, vTemp_lo) | cmpgt_any(vF_hi, vTemp_hi).
     # op_0 = COMP_GT (4-input SIMD any-lane gt -> 0/1 byte).
     # op_1 = COMP_GT (8-bit SIMD any-lane gt on in_4/in_5).
@@ -423,7 +433,14 @@ def gssw_compute_instructions():
     # Output: slot 0 writes gr[13].lo (48+13=61), slot 1 writes gr[13].hi (64+13=77).
     f.write(compute_instruction(COMP_GT, COMP_GT, BWISE_OR, 10, 8, 0, 0, 11, 9, COMP_GR_LO + 13))
     f.write(compute_instruction(COMP_GT, COMP_GT, BWISE_OR, 10, 18, 0, 0, 11, 19, COMP_GR_HI + 13))
-    # PC 34 — halt tail for CPC_LAZYF_CMP.
+    # PC 35 — halt tail for CPC_LAZYF_CMP.
+    for ins in _chalt(): f.write(ins)
+    # PC 36 — CPC_F_SHIFT: reg[10:11] = SLLI_64(reg[10:11], 8).
+    # SLLI_64 takes input_addr[0] as immediate shift amount; in_1/in_2 are
+    # the register pair lo/hi.
+    f.write(compute_instruction(SLLI_64, HALT, HALT, 8, 10, 11, 0, 0, 0, 10))
+    f.write(compute_instruction(SLLI_64, HALT, HALT, 8, 10, 11, 0, 0, 0, 11))
+    # PC 37 — halt tail for CPC_F_SHIFT (prevents auto-advance into CMP).
     for ins in _chalt(): f.write(ins)
     f.close()
 
@@ -840,210 +857,155 @@ def pe_0_instruction(f):
     f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_BODY, 0, 0, 0, 0, 0, set_PC))
 
     # === Lazy-F prologue (stage 3g ISA lowering) ===========================
-    # Sets up lazy-F state (gr[3].lo=0, reg[8:9]=hPong[0:1],
+    # Sets up lazy-F state (gr_lo[3]=0, reg[8:9]=hPong[0:1],
     # reg[18:19]=pvF[0:1], reg[10:11] shifted left by 1 byte, gr[13] =
-    # initial cmpgt_any OR reduction). The lazy-F loop body follows in
-    # ISA (no magic) — replacing the former magic(111)/(112) dispatch.
+    # initial cmpgt_any OR reduction, compute armed at CPC_LAZYF_BODY).
+    # Uses pipelined SPM loads (back-to-back at P2/P3).
     #
     # State at entry: reg[10:11]=vF (post-S5 iter 19), reg[12:13]=e_next,
-    # reg[14:15]=vMaxColumn. reg[8:9] is corrupted by the post-main-loop
-    # extra S1 but gets reloaded below. gr[3].lo=38, gr[5]=hPing,
-    # gr[6]=hPong.
+    # reg[14:15]=vMaxColumn. reg[8:9] corrupted by the post-main-loop
+    # extra S1; reloaded at P2. gr_lo[3]=38, gr[5]=hPing, gr[6]=hPong.
     #
     # Cycle schedule (slot 0 | slot 1):
     #   P1: set_PC 0 (halt compute)    | si gr_lo[3] = 0
-    #   P2: NOP                        | mvd reg[8:9] = SPM[gr[6] + 0]
-    #   P3: NOP pair    (SPM load spacing, single outstanding_req/PE)
-    #   P4: NOP                        | mvd reg[18:19] = SPM[F_WOFF + 0]
-    #   P5: NOP pair    (SPM drain before F_SHIFT reads reg[10:11])
-    #   P6: set_PC CPC_F_SHIFT         | NOP
-    #   P7: NOP pair                                          [F_SHIFT fires]
-    #   P8: NOP pair                                          [LAZYF_CMP fires]
-    #   P9: NOP pair    (commit gr[13] before lazy-F head beq reads it)
-    # Timing: hPong load @ P2 ready P4; pvF load @ P4 ready P6. F_SHIFT
-    # at P7 reads reg[10:11] pre-shift, writes post-shift at end of P7.
-    # LAZYF_CMP at P8 reads reg[8:9]=hPong, reg[18:19]=pvF, reg[10:11]=
-    # post-shift. All valid.
+    #   P2: NOP                        | mvd reg[8:9]   = SPM[gr[6] + 0]
+    #   P3: NOP                        | mvd reg[18:19] = SPM[F_WOFF + 0]
+    #   P4: set_PC CPC_F_SHIFT         | NOP
+    #   P5: set_PC CPC_LAZYF_CMP       | NOP  [F_SHIFT fires at PC 36]
+    #   P6: set_PC CPC_LAZYF_BODY      | NOP  [CMP fires; compute armed for iter 0]
+    # Timing: hPong load @ P2 ready P4; pvF load @ P3 ready P5. F_SHIFT
+    # at P5 writes reg[10:11] at end of P5. CMP at P6 reads reg[8:9]=
+    # hPong, reg[18:19]=pvF, reg[10:11]=post-shift. The trailing set_PC
+    # at P6 overrides compute's post-CMP auto-advance, arming comp_PC=26
+    # for the first iter's C1.
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, set_PC))
     f.write(data_movement_instruction(gr_lo, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))
     f.write(NOP)
     f.write(data_movement_instruction(reg, SPM, 0, 0, 8, 0, 0, 0, 0, 6, mvd))
-    f.write(NOP); f.write(NOP)
     f.write(NOP)
     f.write(data_movement_instruction(reg, SPM, 0, 0, 18, 0, 0, 0, GSSW_F_WOFF, 0, mvd))
-    f.write(NOP); f.write(NOP)
     f.write(data_movement_instruction(0, 0, 0, 0, CPC_F_SHIFT, 0, 0, 0, 0, 0, set_PC))
     f.write(NOP)
-    f.write(NOP); f.write(NOP)
-    f.write(NOP); f.write(NOP)
-    f.write(NOP); f.write(NOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_LAZYF_CMP, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_LAZYF_BODY, 0, 0, 0, 0, 0, set_PC))
+    f.write(NOP)
 
-    # === Lazy-F loop head + body + tail (stage 3g.2 ISA lowering) ==========
-    # Loop entry checks gr[13]; if zero, fall through to lazy-F done.
-    # Otherwise, one iter body:
-    #   - 5 compute steps (CPC_LAZYF_BODY, contiguous PCs 26..30).
-    #   - 5 ctrl mvds interleaved with gr_lo[3] addi/subi to match the
-    #     magic-101 reference j-dance: store hPong[j], load hPong[j+2],
-    #     store pvF[j], load pvF[j+2].
-    #   - L6: load pvF[j+2] for the next cmp.
-    #   - Branch on gr_lo[3] >= SEG_LEN*VEC_WORDS (== 38): wrap or normal.
-    # Both tails store pvE[j] and compute LAZYF_CMP -> gr[13] for the
-    # head check. WRAP also resets j, shifts vF, reloads reg[8:9]/reg[18:19]
-    # from the start of hPong/pvF.
+    # === Lazy-F loop (stage 3g ISA, optimized) ============================
+    # Head check + iter body folded into 9 cycles (NORMAL path). Compute
+    # runs CPC_LAZYF_BODY automatically S1->S5->PAD1->PAD2->PAD3->CMP
+    # over 9 cycles via the single set_PC armed by the prologue or the
+    # prev iter's jump cycle (C9 slot 1). Each iter's first ctrl cycle
+    # (C1) combines the head beq with the mvd load-e — compute fires
+    # an "early" S1 at C1 even on the exit-branch iter, but the only
+    # reg it touches (reg[8:9]) is not read by section F, so it's harmless.
     #
-    # SPM loads are spaced >= 2 cycles apart to respect the single
-    # outstanding_req per PE. Compute/ctrl interleaving uses the
-    # post-compute-write-visible-to-ctrl simulator ordering; stores that
-    # need a post-SK reg value fire in the SAME cycle that Sk writes.
+    # Cycle schedule (slot 0 | slot 1):
+    #   C1: beq gr[13]==0, done  | mvd reg[12:13] = SPM[E_WOFF + j]   [S1]
+    #   C2: NOP                  | mvd reg[18:19] = SPM[F_WOFF + j]   [S2]
+    #   C3: NOP                  | mvd SPM[gr[6] + j] = reg[8:9]      [S3]
+    #   C4: NOP                  | mvd SPM[E_WOFF + j] = reg[12:13]   [S4]
+    #   C5: NOP                  | mvd SPM[F_WOFF + j] = reg[18:19]   [S5]
+    #                              WITH auto_incr (gr[3] += 2 → j+2)
+    #   C6: NOP                  | mvd reg[8:9]   = SPM[gr[6] + j+2]  [PAD1]
+    #   C7: beq j+2 == 38, wrap  | mvd reg[18:19] = SPM[F_WOFF + j+2] [PAD2]
+    #   C8: NOP pair                                                  [PAD3]
+    #   C9: jump lazyf_head      | set_PC CPC_LAZYF_BODY              [CMP fires]
+    #
+    # Key timings:
+    # * auto_incr at C5 (mvd opcode) increments gr[3] by 2; gr_lo[3].hi is
+    #   0 in section E/lazy-F so full-width write preserves hi == 0.
+    # * C7 beq reads gr_lo[3] = j+2 (post-C5 auto_incr). Branches exactly
+    #   on iter 18 (j=36 → j+2=38).
+    # * CMP at C9 reads reg[8:9] (C6 load ready C8), reg[10:11] (post-S5),
+    #   reg[18:19] (C7 load ready C9), gr[13] (written at end of C9).
+    # * C9 slot-1 set_PC re-arms comp_PC=26 for next iter's C1 S1.
+    # * pvE store moved to C4 via imm_0 = E_WOFF (not E_WOFF-2): since
+    #   gr_lo[3]=j at C4, dest_addr = E_WOFF + j. Matches reference's
+    #   E_WOFF-2+(j+2) = E_WOFF+j semantics.
     lazyf_head_pc = f.pc
-    # H1: beq gr[13] == 0, lazyf_done_fwd | NOP  [compute halt]
+    # C1: beq gr[13] == 0, done | mvd load e
     lazyf_done_wi = f.write_count
     lazyf_done_pc = f.pc
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 13, beq))
-    f.write(NOP)
-
-    # C1: set_PC CPC_LAZYF_BODY (slot 0) | mvd reg[12:13] = SPM[E_WOFF+gr[3].lo] (slot 1)
-    f.write(data_movement_instruction(0, 0, 0, 0, CPC_LAZYF_BODY, 0, 0, 0, 0, 0, set_PC))
     f.write(data_movement_instruction(reg, SPM, 0, 0, 12, 0, 0, 0, GSSW_E_WOFF, spm_lo(3), mvd))
-
-    # C2: NOP pair. [compute S1 at PC 26: reg[8:9] = max(vH, vF)]
-    f.write(NOP); f.write(NOP)
-
-    # C3: NOP (slot 0) | mvd reg[18:19] = SPM[F_WOFF+gr[3].lo] (slot 1)
-    #     [compute S2 at PC 27: reg[14:15] = max(vMC, new_vH)]
+    # C2: NOP | mvd load pvF
     f.write(NOP)
     f.write(data_movement_instruction(reg, SPM, 0, 0, 18, 0, 0, 0, GSSW_F_WOFF, spm_lo(3), mvd))
-
-    # C4: NOP pair. [compute S3 at PC 28: reg[12:13] = max(e, subs(new_vH, vGapO))]
-    #     reg[12:13] at C4 start = pvE[j:j+1] (C1 load ready at C3).
-    f.write(NOP); f.write(NOP)
-
-    # C5: addi gr_lo[3] += 2 (slot 0) | mvd SPM[gr[6]+gr[3].lo] = reg[8:9] (slot 1)
-    #     [compute S4 at PC 29: reg[18:19] = max(vTemp, vF)]
-    # Slot 1 reads OLD gr_lo[3] = j; reg[8:9] = post-S1 new_vH (S2/S3/S4
-    # don't write reg[8:9]). Stores hPong[j:j+1] = new_vH.
-    # Slot 0 addi writes gr_lo[3] = j+2.
-    f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 3, 0, 0, 0, 2, 3, addi))
+    # C3: NOP | mvd store hPong[j] = reg[8:9]
+    f.write(NOP)
     f.write(data_movement_instruction(SPM, reg, 1, 0, 6, spm_lo(3), 0, 0, 8, 0, mvd))
-
-    # C6: subi gr_lo[3] -= 2 (slot 0) | mvd reg[8:9] = SPM[gr[6]+gr[3].lo] (slot 1)
-    #     [compute S5 at PC 30: reg[10:11] = subs(vF, vGapE)]
-    # Slot 1 reads OLD gr_lo[3] = j+2; loads hPong[j+2:j+3] -> reg[8:9]
-    # (speculative preload of NEXT iter's vH). Data ready at C8.
-    # Slot 0 subi writes gr_lo[3] = j.
-    # Prev LOAD was at C3 (pvF); outstanding_req cleared by C5. This load is safe.
-    f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 3, 0, 0, 0, 2, 3, subi))
-    f.write(data_movement_instruction(reg, SPM, 0, 0, 8, 0, 1, 0, 6, spm_lo(3), mvd))
-
-    # C7: addi gr_lo[3] += 2 (slot 0) | mvd SPM[F_WOFF+gr[3].lo] = reg[18:19] (slot 1)
-    #     [compute halt at PC 31]
-    # Slot 1 reads OLD gr_lo[3] = j; reg[18:19] = post-S4 new_vTemp.
-    # Stores pvF[j:j+1] = new_vTemp. Slot 0 addi writes gr_lo[3] = j+2.
-    f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 3, 0, 0, 0, 2, 3, addi))
-    f.write(data_movement_instruction(SPM, reg, 0, 0, GSSW_F_WOFF, spm_lo(3), 0, 0, 18, 0, mvd))
-
-    # C8: NOP | mvd reg[18:19] = SPM[F_WOFF+gr[3].lo]  [compute halt]
-    # gr_lo[3] = j+2; loads pvF[j+2:j+3] -> reg[18:19] (for next cmp).
-    # Outstanding_req from C6 hPong load clears at C8 (C6+2), so this load is safe.
+    # C4: NOP | mvd store pvE[E_WOFF+j] = reg[12:13]
     f.write(NOP)
-    f.write(data_movement_instruction(reg, SPM, 0, 0, 18, 0, 0, 0, GSSW_F_WOFF, spm_lo(3), mvd))
-
-    # C9: NOP pair (SPM drain: pvF load at C8 ready at C10).
-    f.write(NOP); f.write(NOP)
-
-    # C10: beq gr_lo[3] == 38, wrap_fwd | NOP. gr_lo[3] is j+2 here;
-    # the only way j+2 reaches 38 is iter 18 (j=36), so beq triggers
-    # exactly on the wraparound iter. reg_immBar_1 = 0 makes imm_1 the
-    # literal 38; reg_1 = spm_lo(3) selects gr[3].lo.
+    f.write(data_movement_instruction(SPM, reg, 0, 0, GSSW_E_WOFF, spm_lo(3), 0, 0, 12, 0, mvd))
+    # C5: NOP | mvd store pvF[j]=reg[18:19] WITH auto_incr (reg_0 = spm_lo(3))
+    # reg_auto_increase_0 = 1 increments gr[3] by +2 (mvd opcode semantics).
+    f.write(NOP)
+    f.write(data_movement_instruction(SPM, reg, 0, 1, GSSW_F_WOFF, spm_lo(3), 0, 0, 18, 0, mvd))
+    # C6: NOP | mvd load hPong[j+2] → reg[8:9] (gr_lo[3] = j+2 post-auto_incr)
+    f.write(NOP)
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 8, 0, 1, 0, 6, spm_lo(3), mvd))
+    # C7: beq gr_lo[3] == 38, wrap_fwd | mvd load pvF[j+2] → reg[18:19]
     lazyf_wrap_wi = f.write_count
     lazyf_wrap_pc = f.pc
     f.write(data_movement_instruction(0, gr, 0, 0, 0, 0, 0, 0,
                                        GSSW_SEG_LEN * GSSW_VEC_WORDS,
                                        spm_lo(3), beq))
-    f.write(NOP)
-
-    # --- NORMAL tail ---
-    # N1: NOP | mvd SPM[E_WOFF-2+gr[3].lo] = reg[12:13]
-    # gr_lo[3] = j+2 so offset = E_WOFF + j. Stores pvE[j:j+1] = new_e.
-    f.write(NOP)
-    f.write(data_movement_instruction(SPM, reg, 0, 0, GSSW_E_WOFF - 2, spm_lo(3), 0, 0, 12, 0, mvd))
-
-    # N2: set_PC CPC_LAZYF_CMP | NOP  [compute halt, comp_PC = 33 at end]
-    f.write(data_movement_instruction(0, 0, 0, 0, CPC_LAZYF_CMP, 0, 0, 0, 0, 0, set_PC))
-    f.write(NOP)
-
-    # N3: NOP pair. [compute CMP at PC 33 fires: gr[13] = cmpgt_any OR reduction]
-    # reg[8:9] at C10 already = hPong[j+2:j+3] (C6 load ready C8); reg[10:11] =
-    # post-S5 (from C6); reg[18:19] = pvF[j+2:j+3] (C8 load ready C10).
+    f.write(data_movement_instruction(reg, SPM, 0, 0, 18, 0, 0, 0, GSSW_F_WOFF, spm_lo(3), mvd))
+    # C8: NOP pair (compute PAD3)
     f.write(NOP); f.write(NOP)
-
-    # N4: jump lazyf_head_pc | NOP  [compute halt at PC 34]
+    # C9: jump lazyf_head_pc | set_PC CPC_LAZYF_BODY (re-arm for next iter)
     back_pc = f.pc
     f.write(data_movement_instruction(0, 0, 0, 0, lazyf_head_pc - back_pc, 0, 0, 0, 0, 0, jump))
-    f.write(NOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_LAZYF_BODY, 0, 0, 0, 0, 0, set_PC))
 
-    # --- WRAP tail ---
+    # --- WRAP tail (branched from C7) ---
+    # State at WRAP entry: gr_lo[3]=38 (just reached wrap threshold),
+    # reg[10:11] = post-S5 new_vF, reg[12:13] = new_e (pvE store at C4
+    # already committed with offset E_WOFF+j), reg[8:9]/reg[18:19] are
+    # in-flight loads from C6/C7 (harmless; will be overwritten below).
+    # Compute at C7 fired PAD2; comp_PC auto-advances to 33 (PAD3) at
+    # end of C7. At W1 compute will fire PAD3 (harmless) and advance to
+    # 34 (CMP) — W1's set_PC CPC_F_SHIFT overrides that to PC 36.
+    #
+    # Cycle schedule (slot 0 | slot 1):
+    #   W1: set_PC CPC_F_SHIFT | si gr_lo[3] = 0                  [PAD3]
+    #   W2: NOP                | mvd reg[8:9]   = SPM[gr[6] + 0]  [F_SHIFT fires]
+    #   W3: NOP                | mvd reg[18:19] = SPM[F_WOFF + 0] [halt]
+    #   W4: set_PC CPC_LAZYF_CMP | NOP                            [halt]
+    #   W5: NOP pair                                              [CMP fires]
+    #   W6: jump lazyf_head    | set_PC CPC_LAZYF_BODY            [halt]
+    # Timing: F_SHIFT at W2 writes reg[10:11]. hPong load at W2 ready W4;
+    # pvF load at W3 ready W5. CMP at W5 reads reg[8:9]=hPong, reg[18:19]=
+    # pvF, reg[10:11]=post-F_SHIFT — all valid.
     lazyf_wrap_target_pc = f.pc
     f.patch_imm0(lazyf_wrap_wi, lazyf_wrap_target_pc - lazyf_wrap_pc)
-
-    # W1: NOP | mvd SPM[E_WOFF-2+gr[3].lo] = reg[12:13] (same as N1)
-    f.write(NOP)
-    f.write(data_movement_instruction(SPM, reg, 0, 0, GSSW_E_WOFF - 2, spm_lo(3), 0, 0, 12, 0, mvd))
-
-    # W2: si gr_lo[3] = 0 | NOP
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_F_SHIFT, 0, 0, 0, 0, 0, set_PC))
     f.write(data_movement_instruction(gr_lo, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))
     f.write(NOP)
-
-    # W3: set_PC CPC_F_SHIFT | NOP  [comp_PC = 32 at end of W3]
-    f.write(data_movement_instruction(0, 0, 0, 0, CPC_F_SHIFT, 0, 0, 0, 0, 0, set_PC))
-    f.write(NOP)
-
-    # W4: set_PC 0 (halt) | NOP  [compute F_SHIFT fires at W4 reading
-    # reg[10:11] pre-shift and writing post-shift at end of W4; the
-    # ctrl set_PC(0) then overrides compute's auto-advance so W5
-    # compute will fetch PC 0 (halt) rather than PC 33 (CMP).
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, set_PC))
-    f.write(NOP)
-
-    # W5: NOP | mvd reg[8:9] = SPM[gr[6] + 0]  (hPong[0:1] reload)
-    f.write(NOP)
     f.write(data_movement_instruction(reg, SPM, 0, 0, 8, 0, 0, 0, 0, 6, mvd))
-
-    # W6: NOP pair (SPM latency).
-    f.write(NOP); f.write(NOP)
-
-    # W7: NOP | mvd reg[18:19] = SPM[F_WOFF + 0]  (pvF[0:1] reload)
     f.write(NOP)
     f.write(data_movement_instruction(reg, SPM, 0, 0, 18, 0, 0, 0, GSSW_F_WOFF, 0, mvd))
-
-    # W8: set_PC CPC_LAZYF_CMP | NOP  [comp_PC = 33 at end]
     f.write(data_movement_instruction(0, 0, 0, 0, CPC_LAZYF_CMP, 0, 0, 0, 0, 0, set_PC))
     f.write(NOP)
-
-    # W9: NOP pair (SPM latency for pvF; compute halt).
     f.write(NOP); f.write(NOP)
-
-    # W10: NOP pair [compute CMP fires at W10 reading reg[8:9], reg[10:11],
-    # reg[18:19] — all committed by W10. gr[13] written at end of W10.]
-    f.write(NOP); f.write(NOP)
-
-    # W11: jump lazyf_head_pc | NOP
     w_back_pc = f.pc
     f.write(data_movement_instruction(0, 0, 0, 0, lazyf_head_pc - w_back_pc, 0, 0, 0, 0, 0, jump))
-    f.write(NOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_LAZYF_BODY, 0, 0, 0, 0, 0, set_PC))
 
     # --- lazyf done: patch beq target ---
     lazyf_done_target_pc = f.pc
     f.patch_imm0(lazyf_done_wi, lazyf_done_target_pc - lazyf_done_pc)
 
-    # Stabilize compute before section F. set_PC 0 already fired inside WRAP
-    # path or hasn't been fired in NORMAL path; ensure compute is halted
-    # before the next region (CPC_MAXCOL in section F).
+    # Halt compute before section F. The lazyf_head-arming set_PC (from
+    # prev iter's jump slot-1) leaves comp_PC=26, so falling through to
+    # done runs one extra S1 at C1 (corrupts reg[8:9]; harmless for F).
+    # set_PC(0) here forces compute to halt before section F's CPC_MAXCOL.
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, set_PC))
     f.write(NOP)
     f.write(NOP); f.write(NOP)
 
-    # Kept for downstream compatibility; gr[10] is used as the sync flag.
+    # gr[10] = 0: deliberate; gr[10]=1 is set at end-of-kernel (line ~1151).
     f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))
     f.write(NOP)
 
