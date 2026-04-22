@@ -2291,15 +2291,24 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             constexpr int ha_dirty_off = ha_off + HA_CAP_18;
             int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
             int *spm = SPM_unit->buffer;
-            int fin0_base = (magic_mask & 2)
-                ? GWFA_FIN0B_BASE : GWFA_FIN0_BASE;
+            // ISA lowering: mask select into gr[6] (FIN0 base) via
+            // goto+label, no cross-line C++ local. gr[6] is preserved
+            // across magic 18 (not in the forbidden temp set per the
+            // l1 liveness appendix) and is read in phase 1 only.
+            if ((magic_mask & 2) == 0) goto m18_f0a_base;    // beq
+            gr[6] = GWFA_FIN0B_BASE;                          // si
+            goto m18_base_done;
+        m18_f0a_base:
+            gr[6] = GWFA_FIN0_BASE;                           // si
+        m18_base_done:
+            (void)0;
 
             // --- Phase 1: Read metadata from all 4 PEs ---
             // ISA lowering: each SPM meta read stages through gr[11]
             // with 3 //NOPs before the s1c store (AC-7 rule 6:
             // SPM 2-cycle = 4 ISA lines between load and consumer).
             for (int pe = 0; pe < 4; pe++) {
-                gr[7] = pe * SPM_BANK_GROUP_SIZE + fin0_base; // si
+                gr[7] = pe * SPM_BANK_GROUP_SIZE + gr[6];    // addi: base = pe*bank + FIN0 base
                 s1c[12 + pe] = gr[7];                    // mv: pe_spm_base
                 //NOP; //NOP
                 gr[11] = spm[gr[7] + FIN0_META + 2];    // SPM load n_A
