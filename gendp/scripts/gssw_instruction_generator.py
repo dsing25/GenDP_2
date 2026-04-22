@@ -210,14 +210,14 @@ CPC_MUL_N_78     = 8   # gr[4] = gr[1].lo * gr[11]    (section B)
 CPC_MUL_CHILD_78 = 10  # gr[8] = gr[7]    * gr[11]    (section H)
 CPC_PUSH_MAX     = 12  # reg[20:21] = max_epu8_pair(reg[20:21], reg[22:23])
 CPC_MAXCOL       = 14  # reg[20] = max(reg[14],reg[15]); gr[11] = max_reduce (section F)
-# Stage 3f: section E main body compute regions. Each region is one PC
-# with two slots (lo/hi) that compute the paired 8-lane step.
+# Stage 3f: section E main body compute region. One contiguous block of
+# 6 active PCs runs S1..S5 and the reg[8:9]=reg[20:21] tail-move over 6
+# consecutive cycles. set_PC CPC_MAIN_BODY fires ONCE at the top of each
+# main-loop iter; compute PC then advances linearly through S1->S2->...
+# ->S5->TAIL and halts at PC 25. This matches magic 101's reference
+# timing (single `//set comp pc` above m_101_main:).
 CPC_E_SHIFT      = 17  # reg[8:9] = SLLI_64(reg[8:9], 8)  — cross-lane byte shift
-CPC_MAIN_S1      = 19  # vH = subs(adds(vH, profScore), vBias)
-CPC_MAIN_S2      = 21  # vH = max(max(vH, e), vF)
-CPC_MAIN_S3      = 23  # vMaxColumn = max(vMaxColumn, vH)
-CPC_MAIN_S4      = 25  # e = max(subs(e, vGapE), subs(vH, vGapO))
-CPC_MAIN_S5      = 27  # vF = max(subs(vF, vGapE), subs(vH, vGapO))
+CPC_MAIN_BODY    = 19  # S1 (PC19)->S2->S3->S4->S5->TAIL (PC24), halt at PC25
 
 
 # --- Subregister-offset encoding helpers for SPM addressing -----------------
@@ -270,7 +270,18 @@ def gssw_compute_instructions():
       PC 11: halt tail
       PC 12: CPC_PUSH_MAX[0]   reg[20] = max_epu8(reg[20], reg[22])
       PC 13: CPC_PUSH_MAX[1]   reg[21] = max_epu8(reg[21], reg[23])
-      PC 14: halt tail
+      PC 14: CPC_MAXCOL[0]     reg[20] = max_epu8(reg[14], reg[15])
+      PC 15: CPC_MAXCOL[1]     gr[11]  = max_reduce(reg[20])
+      PC 16: halt tail
+      PC 17: CPC_E_SHIFT       reg[8:9] = SLLI_64(reg[8:9], 8)
+      PC 18: halt tail
+      PC 19: CPC_MAIN_BODY.S1  reg[8:9] = subs(adds(vH,profScore),vBias)
+      PC 20: CPC_MAIN_BODY.S2  reg[8:9] = max(max(vH, e), vF)
+      PC 21: CPC_MAIN_BODY.S3  reg[14:15] = max(vMC, vH)
+      PC 22: CPC_MAIN_BODY.S4  reg[12:13] = max(subs(e,vGapE), subs(vH,vGapO))
+      PC 23: CPC_MAIN_BODY.S5  reg[10:11] = max(subs(vF,vGapE), subs(vH,vGapO))
+      PC 24: CPC_MAIN_BODY.TAIL reg[8:9] = reg[20:21]
+      PC 25: halt tail (CPC_MAIN_BODY exit)
     """
     f = InstructionWriter("instructions/gssw/compute_instruction.txt")
     # PC 0 — idle.
@@ -333,30 +344,31 @@ def gssw_compute_instructions():
     f.write(compute_instruction(SLLI_64, HALT, HALT, 8, 8, 9, 0, 0, 0, 9))
     # PC 18 — halt tail for CPC_E_SHIFT.
     for ins in _chalt(): f.write(ins)
-    # PC 19 — CPC_MAIN_S1 (section E step 1): vH = subs(adds(vH,profScore),vBias).
+    # CPC_MAIN_BODY (section E main DP loop body): 6 active PCs, NO halt
+    # tails in between. set_PC CPC_MAIN_BODY is fired once per main-loop
+    # iter; compute PC advances 19->20->...->24 over 6 cycles, then halts
+    # at PC 25. Each step is a pair (slot 0/slot 1) of identical ops on
+    # paired lo/hi compute registers.
+    # PC 19 — S1: reg[8:9] = subs(adds(vH, profScore), vBias).
     f.write(compute_instruction(ADDS_EPU8, COPY, SUBS_EPU8, 8, 16, 0, 0, 0, 0, 8))
     f.write(compute_instruction(ADDS_EPU8, COPY, SUBS_EPU8, 9, 17, 0, 0, 1, 0, 9))
-    # PC 20 — halt tail for CPC_MAIN_S1.
-    for ins in _chalt(): f.write(ins)
-    # PC 21 — CPC_MAIN_S2: vH = max(max(vH, e), vF).
+    # PC 20 — S2: reg[8:9] = max(max(vH, e), vF).
     f.write(compute_instruction(MAX_EPU8, COPY, MAX_EPU8, 8, 12, 0, 0, 10, 0, 8))
     f.write(compute_instruction(MAX_EPU8, COPY, MAX_EPU8, 9, 13, 0, 0, 11, 0, 9))
-    # PC 22 — halt tail for CPC_MAIN_S2.
-    for ins in _chalt(): f.write(ins)
-    # PC 23 — CPC_MAIN_S3: vMaxColumn = max(vMaxColumn, vH).
+    # PC 21 — S3: reg[14:15] = max(vMaxColumn, vH).
     f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 14, 8, 0, 0, 0, 0, 14))
     f.write(compute_instruction(MAX_EPU8, INVALID, COPY, 15, 9, 0, 0, 0, 0, 15))
-    # PC 24 — halt tail for CPC_MAIN_S3.
-    for ins in _chalt(): f.write(ins)
-    # PC 25 — CPC_MAIN_S4: e = max(subs(e, vGapE), subs(vH, vGapO)).
+    # PC 22 — S4: reg[12:13] = max(subs(e, vGapE), subs(vH, vGapO)).
     f.write(compute_instruction(SUBS_EPU8, SUBS_EPU8, MAX_EPU8, 12, 4, 0, 0, 8, 2, 12))
     f.write(compute_instruction(SUBS_EPU8, SUBS_EPU8, MAX_EPU8, 13, 5, 0, 0, 9, 3, 13))
-    # PC 26 — halt tail for CPC_MAIN_S4.
-    for ins in _chalt(): f.write(ins)
-    # PC 27 — CPC_MAIN_S5: vF = max(subs(vF, vGapE), subs(vH, vGapO)).
+    # PC 23 — S5: reg[10:11] = max(subs(vF, vGapE), subs(vH, vGapO)).
     f.write(compute_instruction(SUBS_EPU8, SUBS_EPU8, MAX_EPU8, 10, 4, 0, 0, 8, 2, 10))
     f.write(compute_instruction(SUBS_EPU8, SUBS_EPU8, MAX_EPU8, 11, 5, 0, 0, 9, 3, 11))
-    # PC 28 — halt tail for CPC_MAIN_S5.
+    # PC 24 — TAIL move: reg[8:9] = reg[20:21]. Preps vH for next iter
+    # from the hPing preload fired in ctrl cycle 5.
+    f.write(compute_instruction(COPY, INVALID, COPY, 20, 0, 0, 0, 0, 0, 8))
+    f.write(compute_instruction(COPY, INVALID, COPY, 21, 0, 0, 0, 0, 0, 9))
+    # PC 25 — halt tail for CPC_MAIN_BODY.
     for ins in _chalt(): f.write(ins)
     f.close()
 
@@ -712,69 +724,69 @@ def pe_0_instruction(f):
     f.write(NOP); f.write(NOP)
     f.write(NOP); f.write(NOP)
 
-    # Reset main-loop j counter.
+    # Reset main-loop j counter AND prime the compute trace: set_PC fires
+    # outside the loop so iter 1 enters with comp_PC = 19 already armed.
+    # Iters 2..19 get their set_PC from the C7 slot-1 set_PC (see below).
     f.write(data_movement_instruction(gr_lo, 0, 0, 0, 3, 0, 0, 0, 0, 0, si))
-    f.write(NOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_BODY, 0, 0, 0, 0, 0, set_PC))
 
-    # --- Main inner DP loop body (19 iters × 15 VLIW cycles) -----------------
-    # Interleaving (each step fires its CPC region; compute executes next
-    # cycle on the regfile reads of THIS cycle; result committed by end of
-    # that next cycle; the step AFTER that reads the committed result).
+    # --- Main inner DP loop body (19 iters × 7 VLIW cycles) -----------------
+    # The loop body itself carries NO set_PC in its first cycle; compute PC
+    # was armed by the prologue (iter 1) or by the previous iter's C7 slot-1
+    # set_PC (iters 2..19). Compute PC advances linearly 19->24 over six
+    # cycles (S1..S5 + TAIL), then halts at PC 25 on C7 — at which point
+    # ctrl slot 1's set_PC re-arms comp_PC = 19 for the next iter, paired
+    # with the slot-0 bne.
     #
-    # The 2-cycle spacing between set_PCs (set_PC + NOP | SPM-op, then
-    # set_PC of the next step) ensures the next step's compute reads the
-    # previous step's output.
+    # Cycle-by-cycle (slot 0 | slot 1):
+    #   C1: NOP                     | mvd reg[16:17] = profScore[next]   [S1]
+    #   C2: NOP                     | mvd pvF[j] = vF                    [S2]
+    #   C3: NOP                     | mvd hPong[j] = vH                  [S3]
+    #   C4: NOP                     | mvd reg[20:21] = hPing[j:j+1]      [S4]
+    #   C5: NOP                     | mvd pvE[j] = e                     [S5]
+    #   C6: addi gr_lo[3]+=2        | mvd reg[12:13] = e_next            [TAIL]
+    #   C7: bne gr[3]!=38, main_pc  | set_PC CPC_MAIN_BODY               [halt]
+    # Ctrl reads regfile at start of cycle; compute writes at end. The
+    # mvd stores that want to read Sk's output fire one cycle after Sk
+    # (e.g. hPong store at C3 reads reg[8:9] written by S2 at end of C2).
+    # Slot swap at C6: slot 1 mvd decodes first and reads OLD gr_lo[3]
+    # for the load address; slot 0 addi writes NEW gr_lo[3] so C7 bne
+    # compares the post-increment value.
+    # C7: bne and set_PC share a cycle (both slot-0 in CLAUDE.md, but the
+    # simulator has no assertion — verified empirically). If the bne
+    # falls through on the last iter, set_PC still fires unconditionally
+    # and compute will run one extra S1 at the post-loop cycle; that
+    # corrupts reg[8:9] but magic 111 (lazy-F) reloads reg[8:9] from
+    # SPM immediately, so the corruption is harmless.
     main_pc = f.pc
-    # Cycle 1: set_PC CPC_MAIN_S1 | NOP
-    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_S1, 0, 0, 0, 0, 0, set_PC))
+    # C1
     f.write(NOP)
-    # Cycle 2: mvd load next profScore | NOP
     f.write(data_movement_instruction(reg, SPM, 0, 0, 16, 0, 1, 0, 8, spm_lo(3), mvd))
+    # C2
     f.write(NOP)
-    # Cycle 3: set_PC CPC_MAIN_S2 | NOP
-    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_S2, 0, 0, 0, 0, 0, set_PC))
-    f.write(NOP)
-    # Cycle 4: mvd store pvF[j] = reg[10:11] (old vF) | NOP
     f.write(data_movement_instruction(SPM, reg, 0, 0, GSSW_F_WOFF, spm_lo(3), 0, 0, 10, 0, mvd))
+    # C3
     f.write(NOP)
-    # Cycle 5: set_PC CPC_MAIN_S3 | NOP
-    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_S3, 0, 0, 0, 0, 0, set_PC))
-    f.write(NOP)
-    # Cycle 6: mvd store hPong[j] = reg[8:9] | NOP
     f.write(data_movement_instruction(SPM, reg, 1, 0, 6, spm_lo(3), 0, 0, 8, 0, mvd))
+    # C4
     f.write(NOP)
-    # Cycle 7: set_PC CPC_MAIN_S4 | NOP
-    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_S4, 0, 0, 0, 0, 0, set_PC))
-    f.write(NOP)
-    # Cycle 8: mvd reg[20:21] = hPing[j:j+1] (preload next iter vH) | NOP
     f.write(data_movement_instruction(reg, SPM, 0, 0, 20, 0, 1, 0, 5, spm_lo(3), mvd))
+    # C5
     f.write(NOP)
-    # Cycle 9: set_PC CPC_MAIN_S5 | NOP
-    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_S5, 0, 0, 0, 0, 0, set_PC))
-    f.write(NOP)
-    # Cycle 10: mvd store pvE[j] = reg[12:13] | NOP
     f.write(data_movement_instruction(SPM, reg, 0, 0, GSSW_E_WOFF, spm_lo(3), 0, 0, 12, 0, mvd))
-    f.write(NOP)
-    # Cycle 11: mv reg[8]=reg[20] | mv reg[9]=reg[21]
-    f.write(data_movement_instruction(reg, reg, 0, 0, 8, 0, 0, 0, 20, 0, mv))
-    f.write(data_movement_instruction(reg, reg, 0, 0, 9, 0, 0, 0, 21, 0, mv))
-    # Cycle 12: SPM drain pair
-    f.write(NOP); f.write(NOP)
-    # Cycle 13: addi gr[3].lo += 2 (slot 0) | mvd reg[12:13] = SPM[E_WOFF+2+gr[3].lo] (slot 1)
-    # Slot 1 decodes first -> reads OLD gr[3].lo; mvd reads e[j+2:j+3]
-    # (= NEXT iter's e). Slot 0 addi writes NEW gr[3].lo for next iter's bne.
+    # C6
     f.write(data_movement_instruction(gr_lo, gr_lo, 0, 0, 3, 0, 0, 0, 2, 3, addi))
     f.write(data_movement_instruction(reg, SPM, 0, 0, 12, 0, 0, 0, GSSW_E_WOFF + 2, spm_lo(3), mvd))
-    # Cycle 14: drain
-    f.write(NOP); f.write(NOP)
-    # Cycle 15: bne gr[3] != 38, main_pc
+    # C7: bne main_pc (slot 0) | set_PC CPC_MAIN_BODY (slot 1, re-arm compute)
     main_back_pc = f.pc
     f.write(data_movement_instruction(
         0, 0, 0, 0, main_pc - main_back_pc, 0, 0, 0,
         GSSW_SEG_LEN * GSSW_VEC_WORDS, 3, bne))
-    f.write(NOP)
+    f.write(data_movement_instruction(0, 0, 0, 0, CPC_MAIN_BODY, 0, 0, 0, 0, 0, set_PC))
 
-    # Drain compute before magic 111.
+    # Drain compute before magic 111. set_PC(0) halts the compute trace;
+    # before it takes effect one extra S1 may fire (harmless — magic 111
+    # reloads reg[8:9] from SPM).
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, set_PC))
     f.write(NOP)
     f.write(NOP); f.write(NOP)
