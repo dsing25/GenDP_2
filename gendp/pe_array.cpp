@@ -5900,215 +5900,307 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // PE" case fires exactly once across repeated magic-31
             // calls. Last is updated on every nonzero tile.
             {
+                // Plan 3b l4f per DEC-M31-STAGED-ARRAYS: the C++ local
+                // arrays nds[4]/d_curs[4]/nis[4]/i_curs[4] are REMOVED
+                // entirely; the diag and intv writeback mvdq loops read
+                // s1c[196..211] directly via gr[11] staging. max_d and
+                // max_i hoisted to arch slots s1c[212]/s1c[213].
+                //
+                // Per-PE state (cross-call persistent via s1c):
+                //   s1c[196+pe] = nds[pe]       per-call diag count
+                //   s1c[200+pe] = nis[pe]       per-call intv count
+                //   s1c[204+pe] = d_cur[pe]     monotonic MM diag cursor
+                //   s1c[208+pe] = i_cur[pe]     monotonic MM intv cursor
+                // Magic-local (this invocation only):
+                //   s1c[212]    = max_d  (chunk-outer diag loop bound)
+                //   s1c[213]    = max_i  (chunk-outer intv loop bound)
+                // Seam (m31 -> m32):
+                //   s1c[176+pe] first-intv lo (first-write-once gate)
+                //   s1c[180+pe] first-intv hi (same gate)
+                //   s1c[184+pe] last-intv  lo (every nonzero tile)
+                //   s1c[188+pe] last-intv  hi (every nonzero tile)
+                // First-write gate samples s1c[28+pe] BEFORE the per-call
+                // cumulative cursor is advanced at the end of the magic.
+                //
+                // UNCONDITIONAL debug traces (per DEC-3B-CORRECTNESS-BAR
+                // higher-risk tier):
+                //   [M31_TRACE_FIRST_SEAM pe=X] on first-write-once arm
+                //   [M31_TRACE_LAST_SEAM  pe=X] on every nonzero tile
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
                 int *spm = SPM_unit->buffer;
-                int d_off = (magic_mask & 1)
-                    ? DEDUP_DIAG_OUT1 : DEDUP_DIAG_OUT0;
+                // Diag OUT bases are inlined via D_OUT_OFF_0/D_OUT_OFF_1
+                // constexpr arrays in Pass 3; only i_off is needed here
+                // (for the seam-write first-intv source address).
                 int i_off = (magic_mask & 1)
                     ? DEDUP_INTV_OUT1 : DEDUP_INTV_OUT0;
-                // Pre-compute per-PE counts and MM cursors into s1c.
-                // Every SPM→s1c path is routed through gr[11] per the
-                // CLAUDE.md SPM destination rule; every s1c arithmetic
-                // store is routed through gr[11] per the controller
-                // arithmetic-destination rule. The 3-NOP gap after
-                // each SPM load makes the consumer slot-safe under
-                // AC-7. max_d / max_i remain C++ loop-ephemeral
-                // scalars (non-ISA accepted).
-                int max_d = 0, max_i = 0;
+                // --- Pass 1: compute per-PE nds / nis / d_cur / i_cur
+                //     into s1c[196..211]; accumulate max_d/max_i in
+                //     gr[5]/gr[3] (both caller-dead after m29 exit).
+                gr[5] = 0;                                   // max_d acc
+                //NOP
+                gr[3] = 0;                                   // max_i acc
+                //NOP
                 for (int pe = 0; pe < 4; pe++) {
-                    int pe_spm = pe * SPM_BANK_GROUP_SIZE;
-                    gr[11] = spm[pe_spm + DEDUP_META + 2];   // mv: SPM→gr nds
-                    //NOP                                     // SPM lat 1/3 slot-safe
-                    //NOP                                     // SPM lat 2/3
-                    //NOP                                     // SPM lat 3/3
-                    s1c[196+pe] = gr[11];                    // mv: gr→s1c nds
-                    gr[11] = spm[pe_spm + DEDUP_META + 3];   // mv: SPM→gr nis
-                    //NOP                                     // SPM lat 1/3 slot-safe
-                    //NOP                                     // SPM lat 2/3
-                    //NOP                                     // SPM lat 3/3
-                    s1c[200+pe] = gr[11];                    // mv: gr→s1c nis
-                    // ISA lowering (AC-7 R8/R2 close): split
-                    // 'gr[11] = s1c[A] + s1c[B]' into per-load
-                    // gr[11]→gr[1] stash→gr[11] form with 1-NOP
-                    // s1c gaps and //NOP barriers before each
-                    // dependent gr[11] arithmetic (prevents
-                    // paired-slot RAW). gr[1] is caller-dead on
-                    // magic-29→31 entry (m29 sets gr[4,6,7],
-                    // not gr[1]); gr[11] remains the CLAUDE-safe
-                    // SPM scratch per BL-20260417-ctrl-sync-gr.
-                    gr[11] = s1c[16+pe];                     // s1c diag_base
-                    //NOP                                     // s1c 1-cycle gap
-                    gr[1]  = gr[11];                         // stash diag_base
-                    gr[11] = s1c[20+pe];                     // s1c diag_cur
-                    //NOP                                     // s1c 1-cycle gap
-                    gr[11] = gr[11] + gr[1];                 // diag_base+cur
-                    //NOP                                     // RAW barrier
-                    gr[11] = gr[11] + gr[11];                // *2
-                    //NOP                                     // RAW barrier
-                    gr[11] = gr[11] + gr[4];                 // + diag_base MM
-                    //NOP                                     // RAW barrier
-                    s1c[204+pe] = gr[11];                    // mv: gr→s1c
-                    gr[11] = s1c[24+pe];                     // s1c intv_base
-                    //NOP                                     // s1c 1-cycle gap
-                    gr[1]  = gr[11];                         // stash intv_base
-                    gr[11] = s1c[28+pe];                     // s1c intv_cur
-                    //NOP                                     // s1c 1-cycle gap
-                    gr[11] = gr[11] + gr[1];                 // intv_base+cur
-                    //NOP                                     // RAW barrier
-                    gr[11] = gr[11] + gr[11];                // *2
-                    //NOP                                     // RAW barrier
-                    gr[11] = gr[11] + gr[7];                 // + intv_base MM
-                    //NOP                                     // RAW barrier
-                    s1c[208+pe] = gr[11];                    // mv: gr→s1c
-                    gr[11] = s1c[196+pe];                    // s1c nds
-                    //NOP                                     // s1c 1-cycle gap
-                    gr[11] = gr[11] + gr[11];                // nds*2
-                    //NOP                                     // RAW barrier
-                    if (gr[11] > max_d) max_d = gr[11];      // max
-                    gr[11] = s1c[200+pe];                    // s1c nis
-                    //NOP                                     // s1c 1-cycle gap
-                    gr[11] = gr[11] + gr[11];                // nis*2
-                    //NOP                                     // RAW barrier
-                    if (gr[11] > max_i) max_i = gr[11];      // max
-                }
-                // Seam metadata: first-write-once, last-update-each.
-                // Each SPM load lands in gr (controller SPM dest
-                // rule — CLAUDE.md §SPM), then waits two non-SPM
-                // cycles, then migrates to s1c. Loads are serialized
-                // through gr[11] (single-register ping-pong) so only
-                // one SPM request is in flight at a time. gr[11] is
-                // the only live-safe scratch slot we can clobber
-                // here: gr[12] is the GWFA wavefront-distance
-                // counter (magic 3/5/7 live state), gr[13] is the
-                // PE-sync AND (pe_array::tick line 4713), and
-                // gr[7..10] is the AC-7 protected band.
-                // s1c[28+pe] is the pre-increment cumulative intv
-                // cursor; == 0 iff magic 31 has never produced intv
-                // output for this PE, so this is the first nonzero
-                // tile for that PE.
-                //
-                // Magic-31 seam-metadata SPM chains (4 per PE: first
-                // lo, first hi under the s1c[28+pe]==0 gate, plus
-                // last lo and last hi unconditionally). Each chain
-                // is gr[11] = spm[...]; 3 x //NOP; s1c[X] = gr[11];
-                // The 3-NOP gap makes the consumer slot-safe — it
-                // lands in cycle N+2 regardless of load slot, so
-                // every chain is LEGAL under AC-7. The serial-
-                // through-gr[11] discipline keeps BL-20260417-ctrl-
-                // sync-gr intact (gr[12]/gr[13]/gr[7..10] reserved).
-                // Enumeration in .humanize/rlcr/2026-04-20_20-46-30/
-                // ac11-audit-table.md.
-                for (int pe = 0; pe < 4; pe++) {
-                    gr[11] = s1c[200+pe];                   // s1c nis
-                    //NOP                                    // s1c 1-cycle gap
-                    int nis = gr[11];
-                    if (nis == 0) continue;
-                    int pe_spm = pe * SPM_BANK_GROUP_SIZE;
-                    int first_src = pe_spm + i_off;
-                    int last_src  = first_src + (nis - 1) * 2;
-                    gr[11] = s1c[28+pe];                    // s1c cum
-                    //NOP                                    // s1c 1-cycle gap
-                    int cum = gr[11];
-                    if (cum == 0) {
-                        gr[11] = spm[first_src];            // mv: SPM->gr
-                        //NOP                                // SPM lat 1/3 (AC-11 slot-safe)
-                        //NOP                                // SPM lat 2/3
-                        //NOP                                // SPM lat 3/3
-                        s1c[176+pe] = gr[11];               // mv: gr->s1c
-                        gr[11] = spm[first_src + 1];        // mv: SPM->gr
-                        //NOP                                // SPM lat 1/3 (AC-11 slot-safe)
-                        //NOP                                // SPM lat 2/3
-                        //NOP                                // SPM lat 3/3
-                        s1c[180+pe] = gr[11];               // mv: gr->s1c
-                    }
-                    gr[11] = spm[last_src];                 // mv: SPM->gr
-                    //NOP                                    // SPM lat 1/3 (AC-11 slot-safe)
-                    //NOP                                    // SPM lat 2/3
-                    //NOP                                    // SPM lat 3/3
-                    s1c[184+pe] = gr[11];                   // mv: gr->s1c
-                    gr[11] = spm[last_src + 1];             // mv: SPM->gr
-                    //NOP                                    // SPM lat 1/3 (AC-11 slot-safe)
-                    //NOP                                    // SPM lat 2/3
-                    //NOP                                    // SPM lat 3/3
-                    s1c[188+pe] = gr[11];                   // mv: gr->s1c
-                }
-                // R8 fix: pre-compute per-PE nds / d_curs / nis /
-                // i_curs via gr[11] + 1-NOP staging so the chunk-
-                // outer mvdq loops below read from C++-local arrays
-                // (register-allocated in real ISA) instead of
-                // same-cycle s1c loads.
-                int nds[4], d_curs[4], nis[4], i_curs[4];
-                for (int pe = 0; pe < 4; pe++) {
-                    gr[11] = s1c[196+pe];
-                    //NOP                                    // s1c gap
-                    nds[pe] = gr[11];
-                    gr[11] = s1c[204+pe];
-                    //NOP                                    // s1c gap
-                    d_curs[pe] = gr[11];
-                    gr[11] = s1c[200+pe];
-                    //NOP                                    // s1c gap
-                    nis[pe] = gr[11];
-                    gr[11] = s1c[208+pe];
-                    //NOP                                    // s1c gap
-                    i_curs[pe] = gr[11];
-                }
-                // Diag writeback: chunk outer, PE inner, monotonic
-                // per-PE MM cursor advances after each mvdq_copy.
-                for (int j = 0; j < max_d; j += 8) {
-                    for (int pe = 0; pe < 4; pe++) {
-                        int w = nds[pe] * 2;
-                        if (j >= w) continue;
-                        int cnt = w - j;
-                        if (cnt > 8) cnt = 8;
-                        int pe_spm = pe * SPM_BANK_GROUP_SIZE;
-                        mvdq_copy(&mm[d_curs[pe]],
-                                  &spm[pe_spm + d_off + j], cnt);
-                        d_curs[pe] += cnt;
-                    }
-                }
-                // Intv writeback: same pattern, monotonic cursor.
-                for (int j = 0; j < max_i; j += 8) {
-                    for (int pe = 0; pe < 4; pe++) {
-                        int w = nis[pe] * 2;
-                        if (j >= w) continue;
-                        int cnt = w - j;
-                        if (cnt > 8) cnt = 8;
-                        int pe_spm = pe * SPM_BANK_GROUP_SIZE;
-                        mvdq_copy(&mm[i_curs[pe]],
-                                  &spm[pe_spm + i_off + j], cnt);
-                        i_curs[pe] += cnt;
-                    }
-                }
-                // Write back advanced cursors to s1c.
-                for (int pe = 0; pe < 4; pe++) {
-                    s1c[204+pe] = d_curs[pe];
-                    s1c[208+pe] = i_curs[pe];
-                }
-                // Advance persistent per-PE cumulative counts AFTER
-                // the seam-write gate has sampled s1c[28+pe].
-                // ISA lowering: each s1c += s1c stages through
-                // gr[11] load + gr[1] stash + second gr[11] load +
-                // add + RAW barrier + store.
-                for (int pe = 0; pe < 4; pe++) {
-                    gr[11] = s1c[196+pe];
-                    //NOP                                    // s1c gap
+                    int pe_spm = pe * SPM_BANK_GROUP_SIZE;   // compile-time
+                    // nds[pe] = spm[pe_spm + DEDUP_META + 2]
+                    gr[11] = spm[pe_spm + DEDUP_META + 2];
+                    //NOP                                     // SPM 1/3
+                    //NOP                                     // SPM 2/3
+                    //NOP                                     // SPM 3/3
+                    s1c[196 + pe] = gr[11];                  // nds
+                    //NOP                                     // 1-port s1c gap
+                    // max_d reduce: if (nds*2 > max_d) max_d = nds*2
+                    gr[8] = gr[11] + gr[11];                 // nds * 2
+                    //NOP                                     // RAW break
+                    if (gr[8] <= gr[5]) goto m31_max_d_skip; // bge
+                    //NOP                                     // slot 1 of bge
+                    gr[5] = gr[8];
+                    //NOP                                     // slot 1 reserve
+                m31_max_d_skip:
+                    // nis[pe] = spm[pe_spm + DEDUP_META + 3]
+                    gr[11] = spm[pe_spm + DEDUP_META + 3];
+                    //NOP                                     // SPM 1/3
+                    //NOP                                     // SPM 2/3
+                    //NOP                                     // SPM 3/3
+                    s1c[200 + pe] = gr[11];                  // nis
+                    //NOP                                     // 1-port s1c gap
+                    // max_i reduce
+                    gr[8] = gr[11] + gr[11];                 // nis * 2
+                    //NOP                                     // RAW break
+                    if (gr[8] <= gr[3]) goto m31_max_i_skip; // bge
+                    //NOP                                     // slot 1 of bge
+                    gr[3] = gr[8];
+                    //NOP                                     // slot 1 reserve
+                m31_max_i_skip:
+                    // d_cur[pe] = gr[4] + (s1c[16+pe] + s1c[20+pe]) * 2
+                    gr[11] = s1c[16 + pe]; //NOP             // diag_base_sc
+                    gr[1]  = gr[11];                         // stash
+                    //NOP                                     // RAW break
+                    gr[11] = s1c[20 + pe]; //NOP             // diag_cur_sc
+                    gr[11] = gr[11] + gr[1];                 // base + cur
+                    //NOP                                     // RAW break
+                    gr[11] = gr[11] << 1;                    // * 2
+                    //NOP                                     // RAW break
+                    gr[11] = gr[11] + gr[4];                 // + MM diag base
+                    //NOP                                     // RAW break
+                    s1c[204 + pe] = gr[11];                  // d_cur
+                    //NOP                                     // 1-port s1c gap
+                    // i_cur[pe] = gr[7] + (s1c[24+pe] + s1c[28+pe]) * 2
+                    gr[11] = s1c[24 + pe]; //NOP             // intv_base_sc
                     gr[1]  = gr[11];
-                    gr[11] = s1c[20+pe];
-                    //NOP                                    // s1c gap
+                    //NOP
+                    gr[11] = s1c[28 + pe]; //NOP             // intv_cur_sc
                     gr[11] = gr[11] + gr[1];
-                    //NOP                                    // RAW barrier
-                    s1c[20+pe] = gr[11];
-                    gr[11] = s1c[200+pe];
-                    //NOP                                    // s1c gap
-                    gr[1]  = gr[11];
-                    gr[11] = s1c[28+pe];
-                    //NOP                                    // s1c gap
-                    gr[11] = gr[11] + gr[1];
-                    //NOP                                    // RAW barrier
-                    s1c[28+pe] = gr[11];
+                    //NOP
+                    gr[11] = gr[11] << 1;
+                    //NOP
+                    gr[11] = gr[11] + gr[7];                 // + MM intv base
+                    //NOP
+                    s1c[208 + pe] = gr[11];                  // i_cur
+                    //NOP                                     // 1-port s1c gap
                 }
-                gr[2] += DEDUP_TILE;
+                // Stash max_d / max_i to arch slots
+                s1c[212] = gr[5];                            // max_d
+                //NOP                                         // 1-port s1c gap
+                s1c[213] = gr[3];                            // max_i
+                //NOP                                         // 1-port s1c gap
+                // --- Pass 2: seam metadata writes (first-write-once +
+                //     last-update-each). Samples s1c[28+pe] BEFORE any
+                //     cumulative cursor advance. For each PE:
+                //       if (nis == 0) goto skip
+                //       fprintf M31_TRACE_LAST_SEAM (fires every nonzero tile)
+                //       if (cum != 0) goto skip_first
+                //         fprintf M31_TRACE_FIRST_SEAM
+                //         write s1c[176+pe] / s1c[180+pe] (first lo/hi)
+                //       skip_first:
+                //       write s1c[184+pe] / s1c[188+pe] (last lo/hi)
+                //     skip:
+                for (int pe = 0; pe < 4; pe++) {
+                    int pe_spm = pe * SPM_BANK_GROUP_SIZE;   // compile-time
+                    gr[11] = s1c[200 + pe]; //NOP            // nis
+                    if (gr[11] == 0) goto m31_seam_skip;     // beq
+                    //NOP                                     // slot 1 of beq
+                    fprintf(stderr, "[M31_TRACE_LAST_SEAM] pe=%d\n", pe);
+                    //NOP                                     // slot 1 reserve
+                    // last_src = pe_spm + i_off + (nis - 1) * 2
+                    gr[1] = gr[11];                          // stash nis
+                    //NOP                                     // RAW break
+                    gr[1] = gr[1] - 1;                       // nis - 1
+                    //NOP                                     // RAW break
+                    gr[1] = gr[1] << 1;                      // * 2
+                    //NOP                                     // RAW break
+                    gr[1] = gr[1] + (pe_spm + i_off);        // + base
+                    //NOP                                     // RAW break
+                    // Sample s1c[28+pe] BEFORE cumulative advance
+                    gr[11] = s1c[28 + pe]; //NOP             // cum
+                    if (gr[11] != 0) goto m31_seam_last;     // bne
+                    //NOP                                     // slot 1 of bne
+                    fprintf(stderr, "[M31_TRACE_FIRST_SEAM] pe=%d\n", pe);
+                    //NOP                                     // slot 1 reserve
+                    // first_src = pe_spm + i_off (lo). Use gr[9] for
+                    // first_src base (= pe_spm + i_off, compile-time per pe).
+                    // Write s1c[176+pe] = spm[first_src] (lo)
+                    gr[11] = spm[pe_spm + i_off];
+                    //NOP                                     // SPM 1/3
+                    //NOP                                     // SPM 2/3
+                    //NOP                                     // SPM 3/3
+                    s1c[176 + pe] = gr[11];
+                    //NOP                                     // 1-port s1c gap
+                    // Write s1c[180+pe] = spm[first_src + 1] (hi)
+                    gr[11] = spm[pe_spm + i_off + 1];
+                    //NOP                                     // SPM 1/3
+                    //NOP                                     // SPM 2/3
+                    //NOP                                     // SPM 3/3
+                    s1c[180 + pe] = gr[11];
+                    //NOP                                     // 1-port s1c gap
+                m31_seam_last:
+                    // Last-intv writes. last_src is in gr[1]; last_src+1
+                    // is gr[1]+1. Use gr[11] for the SPM-load staging.
+                    gr[11] = spm[gr[1]];                     // last lo
+                    //NOP                                     // SPM 1/3
+                    //NOP                                     // SPM 2/3
+                    //NOP                                     // SPM 3/3
+                    s1c[184 + pe] = gr[11];
+                    //NOP                                     // 1-port s1c gap
+                    gr[11] = spm[gr[1] + 1];                 // last hi
+                    //NOP                                     // SPM 1/3
+                    //NOP                                     // SPM 2/3
+                    //NOP                                     // SPM 3/3
+                    s1c[188 + pe] = gr[11];
+                    //NOP                                     // 1-port s1c gap
+                m31_seam_skip:
+                    (void)0;
+                }
+                // --- Pass 3: DIAG writeback. Chunk outer, PE inner.
+                //     s1c[196+pe] (nds) and s1c[204+pe] (d_cur) read
+                //     DIRECTLY each iteration via gr[11] 1-NOP staging
+                //     per DEC-M31-STAGED-ARRAYS. Cursor update lands
+                //     on s1c[204+pe] IMMEDIATELY after each mvdq.
+                gr[10] = 0;                                  // j
+                //NOP
+            m31_diag_top:
+                gr[11] = s1c[212]; //NOP                     // max_d
+                if (gr[10] >= gr[11]) goto m31_diag_done;    // bge
+                //NOP                                         // slot 1 of bge
+                for (int pe = 0; pe < 4; pe++) {
+                    constexpr int D_OUT_OFF_0[4] = {
+                        0 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT0,
+                        1 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT0,
+                        2 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT0,
+                        3 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT0 };
+                    constexpr int D_OUT_OFF_1[4] = {
+                        0 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT1,
+                        1 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT1,
+                        2 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT1,
+                        3 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT1 };
+                    int pe_spm_src_base = ((magic_mask & 1)
+                        ? D_OUT_OFF_1[pe] : D_OUT_OFF_0[pe]);
+                    // w = nds[pe] * 2 (read s1c[196+pe] directly)
+                    gr[11] = s1c[196 + pe]; //NOP            // nds
+                    gr[9]  = gr[11] + gr[11];                // w = nds*2
+                    //NOP                                     // RAW break
+                    if (gr[10] >= gr[9]) goto m31_diag_pe_skip; // bge
+                    //NOP                                     // slot 1 of bge
+                    // cnt = min(w - j, 8) -> gr[11]
+                    gr[11] = gr[9] - gr[10];                 // w - j
+                    //NOP                                     // RAW break
+                    if (gr[11] <= 8) goto m31_diag_cnt_ok;   // bge
+                    //NOP                                     // slot 1 of bge
+                    gr[11] = 8;
+                    //NOP                                     // slot 1 reserve
+                m31_diag_cnt_ok:
+                    // src = pe_spm_src_base + j -> gr[8]
+                    gr[8] = gr[10] + pe_spm_src_base;        // addi
+                    //NOP                                     // RAW break
+                    // dst = d_cur (read s1c[204+pe] directly via gr[1])
+                    gr[1] = s1c[204 + pe]; //NOP             // d_cur
+                    mvdq_copy(&mm[gr[1]], &spm[gr[8]], gr[11]);
+                    // Immediately advance s1c[204+pe] += cnt
+                    gr[1] = gr[1] + gr[11];                  // new d_cur
+                    //NOP                                     // RAW break
+                    s1c[204 + pe] = gr[1];                   // mv -> s1c
+                    //NOP                                     // 1-port s1c gap
+                m31_diag_pe_skip:
+                    (void)0;
+                }
+                gr[10] = gr[10] + 8;                         // j += 8
+                //NOP                                         // RAW break
+                goto m31_diag_top;
+                //NOP                                         // slot 1 of goto
+            m31_diag_done:
+                // --- Pass 4: INTV writeback. Same discipline.
+                gr[10] = 0;                                  // j
+                //NOP
+            m31_intv_top:
+                gr[11] = s1c[213]; //NOP                     // max_i
+                if (gr[10] >= gr[11]) goto m31_intv_done;    // bge
+                //NOP                                         // slot 1 of bge
+                for (int pe = 0; pe < 4; pe++) {
+                    constexpr int I_OUT_OFF_0[4] = {
+                        0 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT0,
+                        1 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT0,
+                        2 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT0,
+                        3 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT0 };
+                    constexpr int I_OUT_OFF_1[4] = {
+                        0 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT1,
+                        1 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT1,
+                        2 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT1,
+                        3 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT1 };
+                    int pe_spm_src_base = ((magic_mask & 1)
+                        ? I_OUT_OFF_1[pe] : I_OUT_OFF_0[pe]);
+                    gr[11] = s1c[200 + pe]; //NOP            // nis
+                    gr[9]  = gr[11] + gr[11];                // w
+                    //NOP                                     // RAW break
+                    if (gr[10] >= gr[9]) goto m31_intv_pe_skip; // bge
+                    //NOP                                     // slot 1 of bge
+                    gr[11] = gr[9] - gr[10];                 // w - j
+                    //NOP                                     // RAW break
+                    if (gr[11] <= 8) goto m31_intv_cnt_ok;   // bge
+                    //NOP                                     // slot 1 of bge
+                    gr[11] = 8;
+                    //NOP                                     // slot 1 reserve
+                m31_intv_cnt_ok:
+                    gr[8] = gr[10] + pe_spm_src_base;        // src
+                    //NOP                                     // RAW break
+                    gr[1] = s1c[208 + pe]; //NOP             // i_cur
+                    mvdq_copy(&mm[gr[1]], &spm[gr[8]], gr[11]);
+                    gr[1] = gr[1] + gr[11];
+                    //NOP                                     // RAW break
+                    s1c[208 + pe] = gr[1];                   // new i_cur
+                    //NOP                                     // 1-port s1c gap
+                m31_intv_pe_skip:
+                    (void)0;
+                }
+                gr[10] = gr[10] + 8;
+                //NOP                                         // RAW break
+                goto m31_intv_top;
+                //NOP                                         // slot 1 of goto
+            m31_intv_done:
+                // --- Pass 5: advance cumulative counters
+                //     s1c[20+pe] += nds[pe] and s1c[28+pe] += nis[pe].
+                //     This runs AFTER the seam gate has sampled
+                //     s1c[28+pe], preserving first-write-once correctness.
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[11] = s1c[196 + pe]; //NOP            // nds
+                    gr[1]  = gr[11];
+                    //NOP                                     // RAW break
+                    gr[11] = s1c[20 + pe]; //NOP             // diag cum
+                    gr[11] = gr[11] + gr[1];
+                    //NOP                                     // RAW break
+                    s1c[20 + pe] = gr[11];
+                    //NOP                                     // 1-port s1c gap
+                    gr[11] = s1c[200 + pe]; //NOP            // nis
+                    gr[1]  = gr[11];
+                    //NOP                                     // RAW break
+                    gr[11] = s1c[28 + pe]; //NOP             // intv cum
+                    gr[11] = gr[11] + gr[1];
+                    //NOP                                     // RAW break
+                    s1c[28 + pe] = gr[11];
+                    //NOP                                     // 1-port s1c gap
+                }
+                gr[2] = gr[2] + DEDUP_TILE;                  // addi
+                //NOP                                         // RAW break
             }
         } else if (magic_id == 32) {
             // Dedup finalize: gather diag+intv outputs from MM to
