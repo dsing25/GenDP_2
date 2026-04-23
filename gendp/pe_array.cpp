@@ -2961,8 +2961,18 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[2] = gr[2] + SORT_TILE;                     // addi
             }
         } else if (magic_id == 25) {
-            // Sort scatter writeback: SPM BIN_REGIONS → MM dst.
-            // Chunk outer, PE inner: true round-robin streaming.
+            // Sort scatter writeback: SPM BIN_REGIONS -> MM dst.
+            // ISA-lowered (Plan 3b l4b). Chunk-outer / PE-inner mvdq.
+            //
+            // Arch state slots (magic-local, sort-phase unused except
+            // the s1c[80..143] running-offset band which is read + updated
+            // producer-side here):
+            //   s1c[169+pe] = ns[pe]       per-PE element count this bin
+            //   s1c[173]    = max_words    pass-1 reduction, pass-2 bound
+            //   s1c[174+pe] = mm_dsts[pe]  per-PE MM output cursor this bin
+            // Scratch: gr[5] (max acc / j-counter src), gr[7..11] (temps).
+            // gr[4] LIVE-IN (diag base); gr[1..3]/gr[6]/gr[24] THROUGH.
+            // Per-branch //NOP barriers follow the m28/m24 gold-standard.
             {
                 int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
                 int *mm = gwfa_get_mm();
@@ -2970,53 +2980,102 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 int bin_spm_off = (magic_mask & 1)
                     ? SORT_BIN_SPM1 : SORT_BIN_SPM0;
                 for (int b = 0; b < SORT_RADIX_BINS; b++) {
-                    // Pre-compute per-PE metadata for this bin.
-                    // ISA lowering: SPM meta loads stage through gr[11]
-                    // with 3 //NOPs; each s1c load stages with a 1-cycle
-                    // gap so the S1c consumer is separated by >= 2 ISA
-                    // lines (BL-20260417-ctrl-sync-gr).
-                    int ns[4], mm_dsts[4], spm_srcs[4];
-                    int max_words = 0;
+                    constexpr int BRS2 = SORT_BIN_REGION_SIZE * 2;
+                    int bin_region_base = b * BRS2;          // compile-time
+                    // --- Pass 1: per-PE ns / mm_dst compute + max reduce
+                    gr[5] = 0;                                // max_words acc
+                    //NOP
                     for (int pe = 0; pe < 4; pe++) {
-                        int pe_spm = pe * SPM_BANK_GROUP_SIZE;
+                        int pe_spm = pe * SPM_BANK_GROUP_SIZE;  // compile-time
+                        // ns[pe] = spm[pe_spm + SORT_META + 16 + b]
                         gr[11] = spm[pe_spm + SORT_META + 16 + b];  // SPM
                         //NOP                                        // SPM 1/3
                         //NOP                                        // SPM 2/3
                         //NOP                                        // SPM 3/3
-                        ns[pe] = gr[11];
-                        spm_srcs[pe] = pe_spm + bin_spm_off
-                            + b * SORT_BIN_REGION_SIZE * 2;
-                        gr[11] = s1c[b];                             // s1c
+                        s1c[169 + pe] = gr[11];                     // mv (ns)
+                        // diag_off = s1c[b] + s1c[16+pe*16+b] + s1c[80+pe*16+b]
+                        // accumulated in gr[7].
+                        gr[7] = s1c[b];                             // s1c
                         //NOP                                        // s1c gap
-                        int diag_off = gr[11];
-                        gr[11] = s1c[16 + pe * SORT_RADIX_BINS + b]; // s1c
+                        gr[8] = s1c[16 + pe * SORT_RADIX_BINS + b]; // s1c
                         //NOP                                        // s1c gap
-                        diag_off += gr[11];
-                        gr[11] = s1c[80 + pe * SORT_RADIX_BINS + b]; // s1c
+                        gr[7] = gr[7] + gr[8];                      // + prefix
+                        //NOP                                        // RAW break
+                        gr[8] = s1c[80 + pe * SORT_RADIX_BINS + b]; // s1c
                         //NOP                                        // s1c gap
-                        diag_off += gr[11];
-                        mm_dsts[pe] = gr[4] + diag_off * 2;
-                        int w = ns[pe] * 2;
-                        if (w > max_words) max_words = w;
+                        gr[7] = gr[7] + gr[8];                      // + run_off
+                        //NOP                                        // RAW break
+                        gr[7] = gr[7] << 1;                         // diag*2
+                        //NOP                                        // RAW break
+                        gr[7] = gr[7] + gr[4];                      // + MM base
+                        //NOP                                        // RAW break
+                        s1c[174 + pe] = gr[7];                      // mm_dst
+                        // words = ns[pe] * 2. gr[11] still holds ns[pe]
+                        // (not overwritten since the SPM load above).
+                        gr[9] = gr[11] + gr[11];                    // * 2
+                        //NOP                                        // RAW break
+                        if (gr[9] <= gr[5]) goto m25_max_skip;      // bge
+                        //NOP                                        // slot 1
+                        gr[5] = gr[9];                              // mv
+                        //NOP                                        // slot 1
+                    m25_max_skip:
+                        (void)0;
                     }
-                    // Interleaved mvdq: chunk outer, PE inner
-                    for (int j = 0; j < max_words; j += 8) {
-                        for (int pe = 0; pe < 4; pe++) {
-                            int words = ns[pe] * 2;
-                            if (j >= words) continue;
-                            int cnt = words - j;
-                            if (cnt > 8) cnt = 8;
-                            mvdq_copy(&mm[mm_dsts[pe] + j],
-                                      &spm[spm_srcs[pe] + j], cnt);
-                        }
-                    }
-                    // Running-offset update: s1c += ns with explicit
-                    // gr[11]-staged read-modify-write (s1c gap).
+                    // Stash max_words -> s1c[173]
+                    s1c[173] = gr[5];                               // mv
+                    //NOP
+                    // --- Pass 2: chunk-outer PE-inner mvdq (bound gr[5])
+                    gr[8] = 0;                                      // j init
+                    //NOP
+                m25_mvdq_top:
+                    if (gr[8] >= gr[5]) goto m25_mvdq_done;         // bge
+                    //NOP                                            // slot 1
                     for (int pe = 0; pe < 4; pe++) {
-                        gr[11] = s1c[80 + pe * SORT_RADIX_BINS + b];
+                        int pe_spm = pe * SPM_BANK_GROUP_SIZE;      // CT
+                        int spm_src_const = pe_spm + bin_spm_off
+                                          + bin_region_base;
+                        // spm_src in gr[9]: addi of j + const
+                        gr[9] = gr[8] + spm_src_const;              // addi
+                        //NOP                                        // RAW break
+                        // words = ns[pe] * 2 in gr[10]
+                        gr[11] = s1c[169 + pe];                     // ns[pe]
                         //NOP                                        // s1c gap
-                        gr[11] = gr[11] + ns[pe];
-                        s1c[80 + pe * SORT_RADIX_BINS + b] = gr[11];
+                        gr[10] = gr[11] + gr[11];                   // * 2
+                        //NOP                                        // RAW break
+                        if (gr[8] >= gr[10]) goto m25_pe_skip;      // bge end
+                        //NOP                                        // slot 1
+                        // cnt = min(words - j, 8) in gr[11]
+                        gr[11] = gr[10] - gr[8];                    // words-j
+                        //NOP                                        // RAW break
+                        if (gr[11] <= 8) goto m25_cnt_ok;           // bge
+                        //NOP                                        // slot 1
+                        gr[11] = 8;                                 // si
+                        //NOP                                        // slot 1
+                    m25_cnt_ok:
+                        // mm_dst = s1c[174+pe] + j in gr[7]
+                        gr[7] = s1c[174 + pe];                      // mm_dst
+                        //NOP                                        // s1c gap
+                        gr[7] = gr[7] + gr[8];                      // + j
+                        //NOP                                        // RAW break
+                        mvdq_copy(&mm[gr[7]], &spm[gr[9]], gr[11]);
+                    m25_pe_skip:
+                        (void)0;
+                    }
+                    gr[8] = gr[8] + 8;                              // j += 8
+                    //NOP                                            // RAW break
+                    goto m25_mvdq_top;
+                    //NOP                                            // slot 1
+                m25_mvdq_done:
+                    // --- Pass 3: running-offset RMW
+                    //   s1c[80 + pe*16 + b] += ns[pe]
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[11] = s1c[80 + pe * SORT_RADIX_BINS + b]; // cur
+                        //NOP                                        // s1c gap
+                        gr[7] = s1c[169 + pe];                       // ns[pe]
+                        //NOP                                        // s1c gap
+                        gr[11] = gr[11] + gr[7];                     // add
+                        //NOP                                        // RAW
+                        s1c[80 + pe * SORT_RADIX_BINS + b] = gr[11]; // store
                     }
                 }
             }
