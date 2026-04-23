@@ -5460,89 +5460,428 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // (cross-PE skip deps), NOT this reload (per-PE SPM
             // banks, no cross-PE state).
             {
+                // Plan 3b l4e: full lowering per AC-2/3/4/5/7/8.
+                // C++ arrays removed; reload params / tiles / srcs live
+                // in s1c arch slots (dedup-phase scratch; disjoint from
+                // sort/merge/dedup cross-magic contract):
+                //   s1c[32..35] = d_tile[0][pe]   diag BUF0 tile
+                //   s1c[36..39] = d_tile[1][pe]   diag BUF1 tile
+                //   s1c[40..43] = d_src[0][pe]    diag BUF0 src
+                //   s1c[44..47] = d_src[1][pe]    diag BUF1 src
+                //   s1c[48..51] = i_tile[0][pe]   intv BUF0 tile
+                //   s1c[52..55] = i_tile[1][pe]   intv BUF1 tile
+                //   s1c[56..59] = i_src[0][pe]    intv BUF0 src
+                //   s1c[60..63] = i_src[1][pe]    intv BUF1 src
+                // gr[1] = caller-dead per l4abi (secondary stash);
+                // gr[4]/gr[6]/gr[7]/gr[24]/gr[28] THROUGH.
+                // Compound refill gate (`flag==0 && rem>0`) decomposed
+                // into two nested label+goto checks per
+                // BL-20260421-spm-meta-gate-stage.
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
                 int *spm = SPM_unit->buffer;
-                int d_tile[2][4] = {};
-                int d_src[2][4]  = {};
-                int i_tile[2][4] = {};
-                int i_src[2][4]  = {};
-                // Pass 1: reload-param gather through gr[11]/gr[1]
-                for (int pe = 0; pe < 4; pe++) {
-                    int *s = &spm[pe * SPM_BANK_GROUP_SIZE];
-                    gr[11] = s1c[4+pe];                   // s1c rem_d
-                    //NOP                                  // s1c gap
-                    int rem_d = gr[11];
-                    gr[1]  = s1c[pe];                     // s1c src_d
-                    //NOP                                  // s1c gap
-                    int src_d = gr[1];
-                    for (int buf = 0; buf < 2; buf++) {
-                        gr[11] = s[DEDUP_META+10+buf];    // SPM flag_d
-                        //NOP                              // SPM 1/3
-                        //NOP                              // SPM 2/3
-                        //NOP                              // SPM 3/3
-                        if (gr[11] == 0 && rem_d > 0) {
-                            int tile = rem_d;
-                            if (tile > DEDUP_TILE) tile = DEDUP_TILE;
-                            d_tile[buf][pe] = tile;
-                            d_src[buf][pe]  = src_d;
-                            src_d += tile * 2;
-                            rem_d -= tile;
-                        }
-                    }
-                    s1c[pe]   = src_d;
-                    s1c[4+pe] = rem_d;
-                    gr[11] = s1c[12+pe];                  // s1c rem_i
-                    //NOP                                  // s1c gap
-                    int rem_i = gr[11];
-                    gr[1]  = s1c[8+pe];                   // s1c src_i
-                    //NOP                                  // s1c gap
-                    int src_i = gr[1];
-                    for (int buf = 0; buf < 2; buf++) {
-                        gr[11] = s[DEDUP_META+12+buf];    // SPM flag_i
-                        //NOP                              // SPM 1/3
-                        //NOP                              // SPM 2/3
-                        //NOP                              // SPM 3/3
-                        if (gr[11] == 0 && rem_i > 0) {
-                            int tile = rem_i;
-                            if (tile > DEDUP_TILE) tile = DEDUP_TILE;
-                            i_tile[buf][pe] = tile;
-                            i_src[buf][pe]  = src_i;
-                            src_i += tile * 2;
-                            rem_i -= tile;
-                        }
-                    }
-                    s1c[8+pe]  = src_i;
-                    s1c[12+pe] = rem_i;
+                // Init all 8 tile slots to 0 (diag + intv). Stored up
+                // front so pass 3 can skip any (pe, buf) whose tile is
+                // still 0 via bge without relying on uninit memory.
+                gr[11] = 0;
+                //NOP
+                for (int i = 0; i < 4; i++) {
+                    s1c[32 + i] = gr[11];     // d_tile[0][pe] = 0
+                    //NOP
+                    s1c[36 + i] = gr[11];     // d_tile[1][pe] = 0
+                    //NOP
+                    s1c[48 + i] = gr[11];     // i_tile[0][pe] = 0
+                    //NOP
+                    s1c[52 + i] = gr[11];     // i_tile[1][pe] = 0
+                    //NOP
                 }
-                // Pass 2: chunk-outer round-robin mvdq
-                #define M30_MVDQ(buf_off, tile_arr, src_arr) do { \
-                    int mw = 0; \
-                    for (int pe = 0; pe < 4; pe++) { \
-                        int w = tile_arr[pe]*2; if (w > mw) mw = w; } \
-                    for (int j = 0; j < mw; j += 8) \
-                        for (int pe = 0; pe < 4; pe++) { \
-                            int w = tile_arr[pe]*2; \
-                            if (j >= w) continue; \
-                            int cnt = w-j; if (cnt>8) cnt=8; \
-                            mvdq_copy(&spm[pe*SPM_BANK_GROUP_SIZE+buf_off+j], \
-                                      &mm[src_arr[pe]+j], cnt); \
-                        } \
-                } while(0)
-                M30_MVDQ(DEDUP_DIAG_BUF0, d_tile[0], d_src[0]);
-                M30_MVDQ(DEDUP_DIAG_BUF1, d_tile[1], d_src[1]);
-                M30_MVDQ(DEDUP_INTV_BUF0, i_tile[0], i_src[0]);
-                M30_MVDQ(DEDUP_INTV_BUF1, i_tile[1], i_src[1]);
-                #undef M30_MVDQ
-                // Pass 3: update SPM meta tile counts
+                // --- Pass 1: reload-param gather per PE per buf.
+                //     rem_d in gr[1]; src_d in gr[9] (both cross-buf
+                //     within a PE iter); SPM flag via gr[11] with
+                //     3-NOP settle; tile clamp via label+goto.
                 for (int pe = 0; pe < 4; pe++) {
-                    int *s = &spm[pe * SPM_BANK_GROUP_SIZE];
-                    for (int buf = 0; buf < 2; buf++) {
-                        if (d_tile[buf][pe] > 0)
-                            s[DEDUP_META+10+buf] = d_tile[buf][pe];
-                        if (i_tile[buf][pe] > 0)
-                            s[DEDUP_META+12+buf] = i_tile[buf][pe];
-                    }
+                    int pe_spm = pe * SPM_BANK_GROUP_SIZE;    // compile-time
+                    int *s = &spm[pe_spm];
+                    // rem_d = s1c[4+pe] -> gr[1]
+                    gr[11] = s1c[4 + pe]; //NOP               // rem_d
+                    gr[1]  = gr[11];
+                    //NOP                                      // RAW break
+                    // src_d = s1c[pe] -> gr[9]
+                    gr[11] = s1c[pe]; //NOP                   // src_d
+                    gr[9]  = gr[11];
+                    //NOP                                      // RAW break
+                    // buf = 0
+                    gr[11] = s[DEDUP_META + 10];              // SPM flag_d buf0
+                    //NOP                                       // SPM 1/3
+                    //NOP                                       // SPM 2/3
+                    //NOP                                       // SPM 3/3
+                    if (gr[11] != 0) goto m30_d_buf0_skip;     // bne (flag set)
+                    //NOP                                       // slot 1 of bne
+                    if (gr[1] <= 0) goto m30_d_buf0_skip;      // bge (rem exh)
+                    //NOP                                       // slot 1 of bge
+                    // tile = min(rem_d, DEDUP_TILE) -> gr[10]
+                    gr[10] = gr[1];                            // tile = rem_d
+                    //NOP                                       // RAW break
+                    if (gr[10] <= DEDUP_TILE) goto m30_d_buf0_tileok; // bge
+                    //NOP                                       // slot 1 of bge
+                    gr[10] = DEDUP_TILE;                       // si
+                    //NOP                                       // slot 1 reserve
+                m30_d_buf0_tileok:
+                    // s1c[32+pe] = tile (d_tile[0][pe])
+                    s1c[32 + pe] = gr[10];
+                    //NOP                                       // 1-port s1c gap
+                    // s1c[40+pe] = src_d  (d_src[0][pe])
+                    s1c[40 + pe] = gr[9];
+                    //NOP                                       // 1-port s1c gap
+                    // src_d += tile * 2 ; rem_d -= tile
+                    gr[11] = gr[10] << 1;                      // tile * 2
+                    //NOP                                       // RAW break
+                    gr[9]  = gr[9] + gr[11];                   // src_d += 2*tile
+                    //NOP                                       // RAW break
+                    gr[1]  = gr[1] - gr[10];                   // rem_d -= tile
+                    //NOP                                       // RAW break
+                m30_d_buf0_skip:
+                    // buf = 1
+                    gr[11] = s[DEDUP_META + 11];              // SPM flag_d buf1
+                    //NOP
+                    //NOP
+                    //NOP
+                    if (gr[11] != 0) goto m30_d_buf1_skip;
+                    //NOP
+                    if (gr[1] <= 0) goto m30_d_buf1_skip;
+                    //NOP
+                    gr[10] = gr[1];
+                    //NOP
+                    if (gr[10] <= DEDUP_TILE) goto m30_d_buf1_tileok;
+                    //NOP
+                    gr[10] = DEDUP_TILE;
+                    //NOP
+                m30_d_buf1_tileok:
+                    s1c[36 + pe] = gr[10];                    // d_tile[1][pe]
+                    //NOP                                       // 1-port s1c gap
+                    s1c[44 + pe] = gr[9];                     // d_src[1][pe]
+                    //NOP                                       // 1-port s1c gap
+                    gr[11] = gr[10] << 1;
+                    //NOP
+                    gr[9]  = gr[9] + gr[11];
+                    //NOP
+                    gr[1]  = gr[1] - gr[10];
+                    //NOP
+                m30_d_buf1_skip:
+                    // Flush rem_d / src_d back to s1c[pe] / s1c[4+pe]
+                    s1c[pe]     = gr[9];
+                    //NOP                                       // 1-port s1c gap
+                    s1c[4 + pe] = gr[1];
+                    //NOP                                       // 1-port s1c gap
+                    // ---- INTV: mirror of the diag section above
+                    // rem_i = s1c[12+pe] -> gr[1]
+                    gr[11] = s1c[12 + pe]; //NOP              // rem_i
+                    gr[1]  = gr[11];
+                    //NOP
+                    // src_i = s1c[8+pe] -> gr[9]
+                    gr[11] = s1c[8 + pe]; //NOP               // src_i
+                    gr[9]  = gr[11];
+                    //NOP
+                    // intv buf0
+                    gr[11] = s[DEDUP_META + 12];
+                    //NOP
+                    //NOP
+                    //NOP
+                    if (gr[11] != 0) goto m30_i_buf0_skip;
+                    //NOP
+                    if (gr[1] <= 0) goto m30_i_buf0_skip;
+                    //NOP
+                    gr[10] = gr[1];
+                    //NOP
+                    if (gr[10] <= DEDUP_TILE) goto m30_i_buf0_tileok;
+                    //NOP
+                    gr[10] = DEDUP_TILE;
+                    //NOP
+                m30_i_buf0_tileok:
+                    s1c[48 + pe] = gr[10];                    // i_tile[0][pe]
+                    //NOP
+                    s1c[56 + pe] = gr[9];                     // i_src[0][pe]
+                    //NOP
+                    gr[11] = gr[10] << 1;
+                    //NOP
+                    gr[9]  = gr[9] + gr[11];
+                    //NOP
+                    gr[1]  = gr[1] - gr[10];
+                    //NOP
+                m30_i_buf0_skip:
+                    // intv buf1
+                    gr[11] = s[DEDUP_META + 13];
+                    //NOP
+                    //NOP
+                    //NOP
+                    if (gr[11] != 0) goto m30_i_buf1_skip;
+                    //NOP
+                    if (gr[1] <= 0) goto m30_i_buf1_skip;
+                    //NOP
+                    gr[10] = gr[1];
+                    //NOP
+                    if (gr[10] <= DEDUP_TILE) goto m30_i_buf1_tileok;
+                    //NOP
+                    gr[10] = DEDUP_TILE;
+                    //NOP
+                m30_i_buf1_tileok:
+                    s1c[52 + pe] = gr[10];                    // i_tile[1][pe]
+                    //NOP
+                    s1c[60 + pe] = gr[9];                     // i_src[1][pe]
+                    //NOP
+                    gr[11] = gr[10] << 1;
+                    //NOP
+                    gr[9]  = gr[9] + gr[11];
+                    //NOP
+                    gr[1]  = gr[1] - gr[10];
+                    //NOP
+                m30_i_buf1_skip:
+                    s1c[8 + pe]  = gr[9];
+                    //NOP
+                    s1c[12 + pe] = gr[1];
+                    //NOP
+                }
+                // --- Pass 2: 4 chunk-outer round-robin mvdq sections.
+                //     tile / src reads go through gr[11] with 1-NOP s1c
+                //     gap. continue->goto; cnt>8 clamp->label+bge.
+                // ====== DIAG_BUF0 (d_tile[0], d_src[0])
+                gr[8] = 0;
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[11] = s1c[32 + pe]; //NOP
+                    gr[9]  = gr[11] + gr[11];
+                    //NOP
+                    if (gr[9] <= gr[8]) goto m30_mw_d0_skip;
+                    //NOP
+                    gr[8] = gr[9];
+                    //NOP
+                m30_mw_d0_skip:
+                    (void)0;
+                }
+                gr[10] = 0;
+                //NOP
+            m30_mvdq_d0_top:
+                if (gr[10] >= gr[8]) goto m30_mvdq_d0_done;
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    constexpr int D0_OFF[4] = {
+                        0 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF0,
+                        1 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF0,
+                        2 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF0,
+                        3 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF0 };
+                    int pe_dst_base = D0_OFF[pe];
+                    gr[11] = s1c[32 + pe]; //NOP
+                    gr[9]  = gr[11] + gr[11];
+                    //NOP
+                    if (gr[10] >= gr[9]) goto m30_d0_pe_skip;
+                    //NOP
+                    gr[11] = gr[9] - gr[10];
+                    //NOP
+                    if (gr[11] <= 8) goto m30_d0_cnt_ok;
+                    //NOP
+                    gr[11] = 8;
+                    //NOP
+                m30_d0_cnt_ok:
+                    gr[9] = gr[10] + pe_dst_base;             // spm dst
+                    //NOP
+                    gr[5] = s1c[40 + pe]; //NOP               // d_src[0]
+                    gr[5] = gr[5] + gr[10];                   // + j
+                    //NOP
+                    mvdq_copy(&spm[gr[9]], &mm[gr[5]], gr[11]);
+                m30_d0_pe_skip:
+                    (void)0;
+                }
+                gr[10] = gr[10] + 8;
+                //NOP
+                goto m30_mvdq_d0_top;
+                //NOP
+            m30_mvdq_d0_done:
+                // ====== DIAG_BUF1
+                gr[8] = 0;
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[11] = s1c[36 + pe]; //NOP
+                    gr[9]  = gr[11] + gr[11];
+                    //NOP
+                    if (gr[9] <= gr[8]) goto m30_mw_d1_skip;
+                    //NOP
+                    gr[8] = gr[9];
+                    //NOP
+                m30_mw_d1_skip:
+                    (void)0;
+                }
+                gr[10] = 0;
+                //NOP
+            m30_mvdq_d1_top:
+                if (gr[10] >= gr[8]) goto m30_mvdq_d1_done;
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    constexpr int D1_OFF[4] = {
+                        0 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF1,
+                        1 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF1,
+                        2 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF1,
+                        3 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF1 };
+                    int pe_dst_base = D1_OFF[pe];
+                    gr[11] = s1c[36 + pe]; //NOP
+                    gr[9]  = gr[11] + gr[11];
+                    //NOP
+                    if (gr[10] >= gr[9]) goto m30_d1_pe_skip;
+                    //NOP
+                    gr[11] = gr[9] - gr[10];
+                    //NOP
+                    if (gr[11] <= 8) goto m30_d1_cnt_ok;
+                    //NOP
+                    gr[11] = 8;
+                    //NOP
+                m30_d1_cnt_ok:
+                    gr[9] = gr[10] + pe_dst_base;
+                    //NOP
+                    gr[5] = s1c[44 + pe]; //NOP               // d_src[1]
+                    gr[5] = gr[5] + gr[10];
+                    //NOP
+                    mvdq_copy(&spm[gr[9]], &mm[gr[5]], gr[11]);
+                m30_d1_pe_skip:
+                    (void)0;
+                }
+                gr[10] = gr[10] + 8;
+                //NOP
+                goto m30_mvdq_d1_top;
+                //NOP
+            m30_mvdq_d1_done:
+                // ====== INTV_BUF0
+                gr[8] = 0;
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[11] = s1c[48 + pe]; //NOP
+                    gr[9]  = gr[11] + gr[11];
+                    //NOP
+                    if (gr[9] <= gr[8]) goto m30_mw_i0_skip;
+                    //NOP
+                    gr[8] = gr[9];
+                    //NOP
+                m30_mw_i0_skip:
+                    (void)0;
+                }
+                gr[10] = 0;
+                //NOP
+            m30_mvdq_i0_top:
+                if (gr[10] >= gr[8]) goto m30_mvdq_i0_done;
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    constexpr int I0_OFF[4] = {
+                        0 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF0,
+                        1 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF0,
+                        2 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF0,
+                        3 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF0 };
+                    int pe_dst_base = I0_OFF[pe];
+                    gr[11] = s1c[48 + pe]; //NOP
+                    gr[9]  = gr[11] + gr[11];
+                    //NOP
+                    if (gr[10] >= gr[9]) goto m30_i0_pe_skip;
+                    //NOP
+                    gr[11] = gr[9] - gr[10];
+                    //NOP
+                    if (gr[11] <= 8) goto m30_i0_cnt_ok;
+                    //NOP
+                    gr[11] = 8;
+                    //NOP
+                m30_i0_cnt_ok:
+                    gr[9] = gr[10] + pe_dst_base;
+                    //NOP
+                    gr[5] = s1c[56 + pe]; //NOP               // i_src[0]
+                    gr[5] = gr[5] + gr[10];
+                    //NOP
+                    mvdq_copy(&spm[gr[9]], &mm[gr[5]], gr[11]);
+                m30_i0_pe_skip:
+                    (void)0;
+                }
+                gr[10] = gr[10] + 8;
+                //NOP
+                goto m30_mvdq_i0_top;
+                //NOP
+            m30_mvdq_i0_done:
+                // ====== INTV_BUF1
+                gr[8] = 0;
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[11] = s1c[52 + pe]; //NOP
+                    gr[9]  = gr[11] + gr[11];
+                    //NOP
+                    if (gr[9] <= gr[8]) goto m30_mw_i1_skip;
+                    //NOP
+                    gr[8] = gr[9];
+                    //NOP
+                m30_mw_i1_skip:
+                    (void)0;
+                }
+                gr[10] = 0;
+                //NOP
+            m30_mvdq_i1_top:
+                if (gr[10] >= gr[8]) goto m30_mvdq_i1_done;
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    constexpr int I1_OFF[4] = {
+                        0 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF1,
+                        1 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF1,
+                        2 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF1,
+                        3 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF1 };
+                    int pe_dst_base = I1_OFF[pe];
+                    gr[11] = s1c[52 + pe]; //NOP
+                    gr[9]  = gr[11] + gr[11];
+                    //NOP
+                    if (gr[10] >= gr[9]) goto m30_i1_pe_skip;
+                    //NOP
+                    gr[11] = gr[9] - gr[10];
+                    //NOP
+                    if (gr[11] <= 8) goto m30_i1_cnt_ok;
+                    //NOP
+                    gr[11] = 8;
+                    //NOP
+                m30_i1_cnt_ok:
+                    gr[9] = gr[10] + pe_dst_base;
+                    //NOP
+                    gr[5] = s1c[60 + pe]; //NOP               // i_src[1]
+                    gr[5] = gr[5] + gr[10];
+                    //NOP
+                    mvdq_copy(&spm[gr[9]], &mm[gr[5]], gr[11]);
+                m30_i1_pe_skip:
+                    (void)0;
+                }
+                gr[10] = gr[10] + 8;
+                //NOP
+                goto m30_mvdq_i1_top;
+                //NOP
+            m30_mvdq_i1_done:
+                // --- Pass 3: update SPM meta tile counts for (pe, buf)
+                //     pairs that were actually refilled (tile > 0).
+                for (int pe = 0; pe < 4; pe++) {
+                    int pe_spm = pe * SPM_BANK_GROUP_SIZE;     // compile-time
+                    int *s = &spm[pe_spm];
+                    gr[11] = s1c[32 + pe]; //NOP               // d_tile[0]
+                    if (gr[11] <= 0) goto m30_pass3_d0_skip;   // bge
+                    //NOP
+                    s[DEDUP_META + 10] = gr[11];
+                    //NOP                                       // 1-port SPM gap
+                m30_pass3_d0_skip:
+                    gr[11] = s1c[36 + pe]; //NOP               // d_tile[1]
+                    if (gr[11] <= 0) goto m30_pass3_d1_skip;
+                    //NOP
+                    s[DEDUP_META + 11] = gr[11];
+                    //NOP
+                m30_pass3_d1_skip:
+                    gr[11] = s1c[48 + pe]; //NOP               // i_tile[0]
+                    if (gr[11] <= 0) goto m30_pass3_i0_skip;
+                    //NOP
+                    s[DEDUP_META + 12] = gr[11];
+                    //NOP
+                m30_pass3_i0_skip:
+                    gr[11] = s1c[52 + pe]; //NOP               // i_tile[1]
+                    if (gr[11] <= 0) goto m30_pass3_i1_skip;
+                    //NOP
+                    s[DEDUP_META + 13] = gr[11];
+                    //NOP
+                m30_pass3_i1_skip:
+                    (void)0;
                 }
             }
         } else if (magic_id == 31) {
