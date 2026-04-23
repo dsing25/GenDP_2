@@ -3754,65 +3754,157 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // Diag merge split + tile load.
             // Interleaved binary search across PEs for split points,
             // then load initial tiles. Inlined from merge_split_and_load.
+            //
+            // Plan 3b l4c: cross-BS/cross-ISA-line architectural state
+            // hoisted to s1c arch slots (unused outside m28 during merge
+            // phase; phase-disjoint from sort and dedup):
+            //   s1c[74] = n_phase1 (clamped)
+            //   s1c[75] = n_a
+            //   s1c[76] = intv_n
+            //   s1c[77] = diag_base (== abase)
+            //   s1c[78] = n_tail
+            //   s1c[79] = bbase  (= diag_base + n_phase1 * 2)
+            // BS scratch stays at s1c[0..8]; post-BS per-PE metadata at
+            // s1c[0..23]; a_sp/b_sp at s1c[40..49]; tile sizes / source
+            // bases at s1c[50..73]. The skip-merge arm and all clamps
+            // are label+goto; the 4 mvdq tile-load `j >= w` / `cnt > 8`
+            // clamps are label+goto; inside BS body the C++ refs to
+            // n_phase1 / abase / bbase are replaced with explicit
+            // gr-staged s1c[74/77/79] loads on demand.
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
                 constexpr int DIAG_CAP_V  = (16 << 20);
                 constexpr int INTV_CAP_V  = (1 << 21);
                 constexpr int MM_SORT_BUF = DIAG_CAP_V * 6 + INTV_CAP_V * 6;
-                // R8 fix: stage each s1c head load through gr[11] + 1-NOP.
-                gr[11] = s1c[147];
-                //NOP                                    // s1c 1-cycle gap
-                int n_phase1 = gr[11];
-                gr[11] = s1c[148];
-                //NOP                                    // s1c 1-cycle gap
-                int n_a = gr[11];
-                gr[11] = s1c[146];
-                //NOP                                    // s1c 1-cycle gap
-                int intv_n = gr[11];
-                gr[11] = s1c[153];
-                //NOP                                    // s1c 1-cycle gap
-                int diag_base = gr[11];
-                if (n_phase1 < 0) n_phase1 = 0;
-                if (n_phase1 > n_a) n_phase1 = n_a;
-                int n_tail = n_a - n_phase1;
-                int abase = diag_base;
-                int bbase = diag_base + n_phase1 * 2;
-                if (n_phase1 <= 0 || n_tail <= 0) {
-                    gr[6] = 0; // skip merge
-                } else {
-                    int n_total = n_phase1 + n_tail;
-                    int nape = (n_total + 3) / 4;
-                    // AC-5 Stage B (Round 16): a_sp[0..4] → s1c[40..44],
-                    // b_sp[0..4] → s1c[45..49]. Scratch range chosen to
-                    // avoid overlap with per-PE metadata writes at
-                    // s1c[0..23] and the cross-magic intv_base/cursor
-                    // at s1c[24..31]. Lifetime: post-bs → per-PE compute.
-                    // AC-5/AC-9 architectural state migration (Round 12):
-                    // bs_lo → s1c[0..2], bs_hi → s1c[3..5],
-                    // bs_target → s1c[6..8]. These s1c slots are
-                    // overwritten at end of m28 by per-PE tile metadata
-                    // writes (s1c[pe]=pt, s1c[4+pe]=0, s1c[8+pe]=src_a).
-                    // Scratch use during bs is safe because consumer of
-                    // pt/na/src_a happens AFTER the per-PE writes.
-                    // Pivot operands compare via gr[3] (b_val stash) vs
-                    // gr[11] (a_val live). mid in gr[5]; bi2 in gr[4].
+                // Stage s1c head loads -> s1c[74..77] arch slots.
+                gr[11] = s1c[147];                        // n_phase1 raw
+                //NOP                                      // s1c 1-cycle gap
+                s1c[74] = gr[11];                         // n_phase1
+                //NOP                                      // 1-port s1c gap
+                gr[11] = s1c[148];                        // n_a
+                //NOP                                      // s1c 1-cycle gap
+                s1c[75] = gr[11];                         // n_a
+                //NOP
+                gr[11] = s1c[146];                        // intv_n
+                //NOP                                      // s1c 1-cycle gap
+                s1c[76] = gr[11];                         // intv_n
+                //NOP
+                gr[11] = s1c[153];                        // diag_base
+                //NOP                                      // s1c 1-cycle gap
+                s1c[77] = gr[11];                         // diag_base = abase
+                //NOP
+                // Clamp n_phase1: if (n_phase1 < 0) n_phase1 = 0
+                gr[11] = s1c[74];                         // n_phase1
+                //NOP                                      // s1c gap
+                if (gr[11] >= 0) goto m28_pre_low_ok;     // bge
+                //NOP                                      // slot 1 of bge
+                gr[11] = 0;                               // si
+                //NOP                                      // slot 1 reserve
+            m28_pre_low_ok:
+                // Clamp n_phase1 high: if (n_phase1 > n_a) n_phase1 = n_a
+                gr[7] = s1c[75];                          // n_a
+                //NOP                                      // s1c gap
+                if (gr[11] <= gr[7]) goto m28_pre_hi_ok;  // bge
+                //NOP                                      // slot 1 of bge
+                gr[11] = gr[7];                           // mv clamp
+                //NOP                                      // slot 1 reserve
+            m28_pre_hi_ok:
+                s1c[74] = gr[11];                         // clamped n_phase1
+                //NOP                                      // s1c gap
+                // n_tail = n_a - n_phase1 -> s1c[78]
+                gr[8] = gr[7] - gr[11];                   // sub
+                //NOP                                      // RAW break
+                s1c[78] = gr[8];                          // n_tail
+                //NOP
+                // bbase = diag_base + n_phase1 * 2 -> s1c[79]
+                gr[9] = gr[11] << 1;                      // n_phase1 * 2
+                //NOP                                      // RAW break
+                gr[10] = s1c[77];                         // diag_base
+                //NOP                                      // s1c gap
+                gr[9] = gr[9] + gr[10];                   // + diag_base
+                //NOP                                      // RAW break
+                s1c[79] = gr[9];                          // bbase
+                //NOP
+                // Skip-merge check: if (n_phase1 <= 0 || n_tail <= 0)
+                //                     { gr[6] = 0; goto m28_skip_merge; }
+                if (gr[11] > 0) goto m28_skip_check_tail; // bgt
+                //NOP                                      // slot 1 of bgt
+                gr[6] = 0;                                // si
+                //NOP
+                goto m28_skip_merge;
+                //NOP                                      // slot 1 of goto
+            m28_skip_check_tail:
+                if (gr[8] > 0) goto m28_merge_body;       // bgt
+                //NOP                                      // slot 1 of bgt
+                gr[6] = 0;                                // si
+                //NOP
+                goto m28_skip_merge;
+                //NOP                                      // slot 1 of goto
+            m28_merge_body:
+                {
+                    // Prelude arch-state: keep n_phase1 in gr[3],
+                    // n_tail in gr[4], n_total in gr[5], nape in gr[7]
+                    // for the duration of the bs_target/lo/hi compute
+                    // (3-iter p loop). gr[3..5]/gr[7] are caller-dead at
+                    // m28 prologue exit; BS body overwrites gr[3..5]/
+                    // gr[11] AFTER the prelude, so this gr staging is
+                    // magic-local.
+                    gr[11] = s1c[74];                      // n_phase1
+                    //NOP                                   // s1c gap
+                    gr[3] = gr[11];                        // mv
+                    //NOP
+                    gr[11] = s1c[78];                      // n_tail
+                    //NOP                                   // s1c gap
+                    gr[4] = gr[11];                        // mv
+                    //NOP
+                    gr[5] = gr[3] + gr[4];                 // n_total
+                    //NOP                                   // RAW break
+                    // nape = (n_total + 3) >> 2 -> gr[7]
+                    gr[7] = gr[5] + 3;                     // addi
+                    //NOP                                   // RAW break
+                    gr[7] = gr[7] >> 2;                    // shifti_r
+                    //NOP                                   // RAW break
                     for (int p = 0; p < 3; p++) {
-                        int tgt = (p+1) * nape;
-                        if (tgt > n_total) tgt = n_total;
-                        int lo_ = tgt - n_tail;
-                        if (lo_ < 0) lo_ = 0;
-                        int hi_ = tgt;
-                        if (hi_ > n_phase1) hi_ = n_phase1;
-                        gr[4] = tgt;
-                        //NOP                                     // gr[4] settle
-                        s1c[6 + p] = gr[4];                      // bs_target[p]
-                        gr[4] = lo_;
-                        //NOP                                     // gr[4] settle
-                        s1c[0 + p] = gr[4];                      // bs_lo[p]
-                        gr[4] = hi_;
-                        //NOP                                     // gr[4] settle
-                        s1c[3 + p] = gr[4];                      // bs_hi[p]
+                        // tgt = (p+1) * nape -> gr[8]
+                        if (p == 0) {
+                            gr[8] = gr[7];                 // tgt = nape
+                            //NOP
+                        } else if (p == 1) {
+                            gr[8] = gr[7] << 1;            // 2*nape
+                            //NOP
+                        } else { // p == 2
+                            gr[8] = gr[7] << 1;            // 2*nape
+                            //NOP                           // RAW break
+                            gr[8] = gr[8] + gr[7];         // + nape = 3*nape
+                            //NOP                           // RAW break
+                        }
+                        // Clamp tgt: if (tgt > n_total) tgt = n_total
+                        if (gr[8] <= gr[5]) goto m28_tgt_ok; // bge
+                        //NOP                                 // slot 1 of bge
+                        gr[8] = gr[5];                       // mv
+                        //NOP                                 // slot 1 reserve
+                    m28_tgt_ok:
+                        s1c[6 + p] = gr[8];                  // bs_target[p]
+                        //NOP                                 // 1-port s1c gap
+                        // lo_ = tgt - n_tail -> gr[9]; clamp 0
+                        gr[9] = gr[8] - gr[4];               // sub
+                        //NOP                                 // RAW break
+                        if (gr[9] >= 0) goto m28_lo_ok;      // bge
+                        //NOP                                 // slot 1 of bge
+                        gr[9] = 0;                           // si
+                        //NOP                                 // slot 1 reserve
+                    m28_lo_ok:
+                        s1c[0 + p] = gr[9];                  // bs_lo[p]
+                        //NOP                                 // 1-port s1c gap
+                        // hi_ = min(tgt, n_phase1). tgt in gr[8], n_p1 in gr[3]
+                        if (gr[8] <= gr[3]) goto m28_hi_ok;  // bge
+                        //NOP                                 // slot 1 of bge
+                        gr[8] = gr[3];                       // mv clamp
+                        //NOP                                 // slot 1 reserve
+                    m28_hi_ok:
+                        s1c[3 + p] = gr[8];                  // bs_hi[p]
+                        //NOP                                 // 1-port s1c gap
                     }
                 m28_bs_top:
                     // Convergence check: if all lo >= hi, done.
@@ -3827,7 +3919,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     if (gr[11] < gr[4]) goto m28_bs_step_any;
                     goto m28_bs_done;
                 m28_bs_step_any:
-                    // p = 0 step: load lo, hi; if converged skip
+                    // p = 0 step: load lo, hi; if converged skip.
+                    // n_phase1 / abase / bbase read from s1c[74/77/79]
+                    // into gr[8] / gr[9] / gr[7] on demand (Plan 3b l4c).
                     gr[11] = s1c[0]; //NOP  // bs_lo[0]
                     gr[4]  = s1c[3]; //NOP  // bs_hi[0]
                     if (gr[11] >= gr[4]) goto m28_bs_step1;
@@ -3835,17 +3929,20 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[5] = gr[5] / 2;                           // mid in gr[5]
                     gr[11] = s1c[6]; //NOP   // bs_target[0]
                     gr[4]  = gr[11] - gr[5];                    // bi2 in gr[4]
-                    gr[11] = (gr[4] > 0) ? mm[bbase + (gr[4]-1)*2] : 0;
+                    gr[7] = s1c[79]; //NOP                       // bbase
+                    gr[11] = (gr[4] > 0) ? mm[gr[7] + (gr[4]-1)*2] : 0;
                     // waitLSQ
                     //NOP                                        // LSQ settle
                     gr[3] = gr[11];                              // stash b_val
-                    gr[11] = (gr[5] < n_phase1)
-                        ? mm[abase + gr[5]*2] : (int)0xFFFFFFFF;
+                    gr[8] = s1c[74]; //NOP                       // n_phase1
+                    gr[9] = s1c[77]; //NOP                       // abase
+                    gr[11] = (gr[5] < gr[8])
+                        ? mm[gr[9] + gr[5]*2] : (int)0xFFFFFFFF;
                     // waitLSQ
                     //NOP                                        // LSQ settle
                     // Decide update: lo = mid+1 iff bi2>0 && mid<n_phase1 && b_val > a_val
                     if (gr[4] <= 0) goto m28_bs_p0_hi;
-                    if (gr[5] >= n_phase1) goto m28_bs_p0_hi;
+                    if (gr[5] >= gr[8]) goto m28_bs_p0_hi;
                     if ((uint32_t)gr[3] <= (uint32_t)gr[11]) goto m28_bs_p0_hi;
                     // bs_lo[0] = mid + 1
                     gr[4] = gr[5] + 1; //NOP
@@ -3862,16 +3959,19 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[5] = gr[5] / 2;
                     gr[11] = s1c[7]; //NOP
                     gr[4]  = gr[11] - gr[5];
-                    gr[11] = (gr[4] > 0) ? mm[bbase + (gr[4]-1)*2] : 0;
+                    gr[7] = s1c[79]; //NOP                       // bbase
+                    gr[11] = (gr[4] > 0) ? mm[gr[7] + (gr[4]-1)*2] : 0;
                     // waitLSQ
                     //NOP
                     gr[3] = gr[11];
-                    gr[11] = (gr[5] < n_phase1)
-                        ? mm[abase + gr[5]*2] : (int)0xFFFFFFFF;
+                    gr[8] = s1c[74]; //NOP                       // n_phase1
+                    gr[9] = s1c[77]; //NOP                       // abase
+                    gr[11] = (gr[5] < gr[8])
+                        ? mm[gr[9] + gr[5]*2] : (int)0xFFFFFFFF;
                     // waitLSQ
                     //NOP
                     if (gr[4] <= 0) goto m28_bs_p1_hi;
-                    if (gr[5] >= n_phase1) goto m28_bs_p1_hi;
+                    if (gr[5] >= gr[8]) goto m28_bs_p1_hi;
                     if ((uint32_t)gr[3] <= (uint32_t)gr[11]) goto m28_bs_p1_hi;
                     gr[4] = gr[5] + 1; //NOP
                     s1c[1] = gr[4];
@@ -3887,16 +3987,19 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[5] = gr[5] / 2;
                     gr[11] = s1c[8]; //NOP
                     gr[4]  = gr[11] - gr[5];
-                    gr[11] = (gr[4] > 0) ? mm[bbase + (gr[4]-1)*2] : 0;
+                    gr[7] = s1c[79]; //NOP                       // bbase
+                    gr[11] = (gr[4] > 0) ? mm[gr[7] + (gr[4]-1)*2] : 0;
                     // waitLSQ
                     //NOP
                     gr[3] = gr[11];
-                    gr[11] = (gr[5] < n_phase1)
-                        ? mm[abase + gr[5]*2] : (int)0xFFFFFFFF;
+                    gr[8] = s1c[74]; //NOP                       // n_phase1
+                    gr[9] = s1c[77]; //NOP                       // abase
+                    gr[11] = (gr[5] < gr[8])
+                        ? mm[gr[9] + gr[5]*2] : (int)0xFFFFFFFF;
                     // waitLSQ
                     //NOP
                     if (gr[4] <= 0) goto m28_bs_p2_hi;
-                    if (gr[5] >= n_phase1) goto m28_bs_p2_hi;
+                    if (gr[5] >= gr[8]) goto m28_bs_p2_hi;
                     if ((uint32_t)gr[3] <= (uint32_t)gr[11]) goto m28_bs_p2_hi;
                     gr[4] = gr[5] + 1; //NOP
                     s1c[2] = gr[4];
@@ -3906,207 +4009,548 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 m28_bs_step_end:
                     goto m28_bs_top;
                 m28_bs_done:
-                    // AC-5 Stage B: compute a_sp/b_sp into s1c[40..49].
-                    // Initialize a_sp[0]=b_sp[0]=0, a_sp[4]=n_phase1,
-                    // b_sp[4]=n_tail.
+                    // a_sp/b_sp init: s1c[40]=s1c[45]=0, s1c[44]=n_phase1,
+                    // s1c[49]=n_tail. n_phase1/n_tail from s1c[74]/s1c[78].
                     gr[11] = 0;
-                    //NOP                               // gr settle
-                    s1c[40] = gr[11];                   // a_sp[0]
-                    //NOP                               // 1-port s1c gap
-                    s1c[45] = gr[11];                   // b_sp[0]
-                    gr[11] = n_phase1;
                     //NOP
+                    s1c[40] = gr[11];                   // a_sp[0] = 0
+                    //NOP                                // 1-port s1c gap
+                    s1c[45] = gr[11];                   // b_sp[0] = 0
+                    //NOP
+                    gr[11] = s1c[74];                   // n_phase1
+                    //NOP                                // s1c gap
                     s1c[44] = gr[11];                   // a_sp[4]
-                    gr[11] = n_tail;
                     //NOP
+                    gr[11] = s1c[78];                   // n_tail
+                    //NOP                                // s1c gap
                     s1c[49] = gr[11];                   // b_sp[4]
+                    //NOP
                     // Compute a_sp[p+1], b_sp[p+1] for p=0,1,2.
                     // Candidate a_sp in gr[3], candidate b_sp in gr[4].
                     // Prior a_sp[p]/b_sp[p] staged through gr[5] for
-                    // the fixup compares.
+                    // the fixup compares. gr[11] holds bs_target[p] for
+                    // the whole p iteration (reused in fixups).
                     for (int p = 0; p < 3; p++) {
                         gr[11] = s1c[0 + p]; //NOP     // bs_lo[p]
                         gr[3]  = gr[11];                // a_sp candidate
+                        //NOP                            // RAW break
                         gr[11] = s1c[6 + p]; //NOP     // bs_target[p]
                         gr[4]  = gr[11] - gr[3];        // b_sp candidate
-                        // Fixup 1: if a_sp candidate < a_sp[p], use a_sp[p]
+                        //NOP                            // RAW break
+                        // Fixup 1: if (a_sp_cand < a_sp[p]) use prior
                         gr[5]  = s1c[40 + p]; //NOP    // prior a_sp[p]
-                        if (gr[3] < gr[5]) {
-                            gr[3] = gr[5];              // a_sp[p+1] = a_sp[p]
-                            //NOP                        // RAW barrier for gr[3]
-                            gr[4] = gr[11] - gr[3];    // recompute b_sp
-                        }
-                        // Fixup 2: if b_sp candidate < b_sp[p], use b_sp[p]
+                        if (gr[3] >= gr[5]) goto m28_asp_keep; // bge
+                        //NOP                            // slot 1 of bge
+                        gr[3] = gr[5];                  // a_sp_cand = prior
+                        //NOP                            // RAW break
+                        gr[4] = gr[11] - gr[3];         // recompute b_sp
+                        //NOP                            // RAW break
+                    m28_asp_keep:
+                        // Fixup 2: if (b_sp_cand < b_sp[p]) use prior
                         gr[5]  = s1c[45 + p]; //NOP    // prior b_sp[p]
-                        if (gr[4] < gr[5]) {
-                            gr[4] = gr[5];              // b_sp[p+1] = b_sp[p]
-                            //NOP                        // RAW barrier for gr[4]
-                            gr[3] = gr[11] - gr[4];    // recompute a_sp
-                        }
+                        if (gr[4] >= gr[5]) goto m28_bsp_keep; // bge
+                        //NOP                            // slot 1 of bge
+                        gr[4] = gr[5];                  // b_sp_cand = prior
+                        //NOP                            // RAW break
+                        gr[3] = gr[11] - gr[4];         // recompute a_sp
+                        //NOP                            // RAW break
+                    m28_bsp_keep:
                         s1c[41 + p] = gr[3];            // a_sp[p+1]
                         //NOP                            // 1-port s1c gap
                         s1c[46 + p] = gr[4];            // b_sp[p+1]
+                        //NOP
                     }
-                    // Pre-compute tile sizes for mvdq interleaved load.
-                    // AC-5 Stage B: a0s/a1s/b0s/b1s/a_srcs/b_srcs C++
-                    // arrays eliminated; values live in s1c[50..73] and
-                    // are re-read in the 4 mvdq sections below.
-                    int max_pt = 0;
+                    // --- Per-PE post-BS compute + metadata store ---
+                    // All scalars held in gr slots with //NOP barriers;
+                    // no C++ locals cross ISA lines. max_pt accumulated
+                    // in gr[5] (BS scratch; dead at this point).
+                    //
+                    // Per-PE gr allocation during this block:
+                    //   gr[5]  = max_pt accumulator
+                    //   gr[7]  = pa_s        (reloaded per pe)
+                    //   gr[8]  = pa_n        (clamped)
+                    //   gr[9]  = pb_s
+                    //   gr[10] = pb_n        (clamped)
+                    //   gr[3]  = a0 then b0  (reused across a/b)
+                    //   gr[4]  = a1 then b1
+                    //   gr[11] = staging / intermediate
+                    gr[5] = 0;                          // max_pt = 0
+                    //NOP
                     for (int pe = 0; pe < 4; pe++) {
-                        // AC-5 Stage B: read a_sp[pe]/a_sp[pe+1] and
-                        // b_sp[pe]/b_sp[pe+1] from s1c[40..49] via gr[11]
-                        // staged loads. pa_s/pb_s/pa_n/pb_n are scalar
-                        // per-iter locals used in this block only.
-                        gr[11] = s1c[40 + pe]; //NOP     // a_sp[pe]
-                        int pa_s = gr[11];
-                        gr[11] = s1c[41 + pe]; //NOP     // a_sp[pe+1]
-                        int pa_n = gr[11] - pa_s;
-                        if (pa_n < 0) pa_n = 0;
-                        gr[11] = s1c[45 + pe]; //NOP     // b_sp[pe]
-                        int pb_s = gr[11];
-                        gr[11] = s1c[46 + pe]; //NOP     // b_sp[pe+1]
-                        int pb_n = gr[11] - pb_s;
-                        if (pb_n < 0) pb_n = 0;
-                        int pt = pa_n + pb_n;
-                        if (pt > max_pt) max_pt = pt;
-                        s1c[pe]     = pt;
-                        s1c[4+pe]   = 0;
-                        int a0 = pa_n; if (a0 > MERGE_TILE) a0 = MERGE_TILE;
-                        int a1r = pa_n - a0; if (a1r < 0) a1r = 0;
-                        int a1 = a1r; if (a1 > MERGE_TILE) a1 = MERGE_TILE;
-                        int b0 = pb_n; if (b0 > MERGE_TILE) b0 = MERGE_TILE;
-                        int b1r = pb_n - b0; if (b1r < 0) b1r = 0;
-                        int b1 = b1r; if (b1 > MERGE_TILE) b1 = MERGE_TILE;
-                        s1c[8+pe]  = abase + (pa_s + a0 + a1) * 2;
-                        int rem_a = pa_n - a0 - a1; if (rem_a < 0) rem_a = 0;
-                        s1c[12+pe] = rem_a;
-                        s1c[16+pe] = bbase + (pb_s + b0 + b1) * 2;
-                        int rem_b = pb_n - b0 - b1; if (rem_b < 0) rem_b = 0;
-                        s1c[20+pe] = rem_b;
-                        int pe_spm = pe * SPM_BANK_GROUP_SIZE;
+                        int pe_spm = pe * SPM_BANK_GROUP_SIZE;   // compile-time
                         int *spm2 = &SPM_unit->buffer[pe_spm];
-                        // AC-5 Stage B: tile sizes + source bases into
-                        // s1c scratch for the mvdq sections below:
-                        //   s1c[50..53] = a0s, s1c[54..57] = a1s,
-                        //   s1c[58..61] = b0s, s1c[62..65] = b1s,
-                        //   s1c[66..69] = a_srcs, s1c[70..73] = b_srcs.
-                        gr[11] = a0;
-                        //NOP
-                        s1c[50+pe] = gr[11];
+                        // pa_s = s1c[40+pe] -> gr[7]
+                        gr[11] = s1c[40 + pe]; //NOP        // a_sp[pe]
+                        gr[7]  = gr[11];
+                        //NOP                                 // RAW break
+                        // pa_n_raw = s1c[41+pe] - pa_s -> gr[8]
+                        gr[11] = s1c[41 + pe]; //NOP        // a_sp[pe+1]
+                        gr[8]  = gr[11] - gr[7];
+                        //NOP                                 // RAW break
+                        // Clamp pa_n >= 0
+                        if (gr[8] >= 0) goto m28_pa_n_ok;    // bge
+                        //NOP                                 // slot 1 of bge
+                        gr[8] = 0;                           // si
+                        //NOP                                 // slot 1 reserve
+                    m28_pa_n_ok:
+                        // pb_s = s1c[45+pe] -> gr[9]
+                        gr[11] = s1c[45 + pe]; //NOP        // b_sp[pe]
+                        gr[9]  = gr[11];
+                        //NOP                                 // RAW break
+                        // pb_n_raw = s1c[46+pe] - pb_s -> gr[10]
+                        gr[11] = s1c[46 + pe]; //NOP        // b_sp[pe+1]
+                        gr[10] = gr[11] - gr[9];
+                        //NOP                                 // RAW break
+                        // Clamp pb_n >= 0
+                        if (gr[10] >= 0) goto m28_pb_n_ok;   // bge
+                        //NOP                                 // slot 1 of bge
+                        gr[10] = 0;                          // si
+                        //NOP                                 // slot 1 reserve
+                    m28_pb_n_ok:
+                        // pt = pa_n + pb_n -> gr[11]; s1c[pe] = pt
+                        gr[11] = gr[8] + gr[10];             // add
+                        //NOP                                 // RAW break
+                        s1c[pe] = gr[11];                    // pt
                         //NOP                                 // 1-port s1c gap
-                        gr[11] = a1;
+                        s1c[4 + pe] = 0;                     // cum cursor
                         //NOP
-                        s1c[54+pe] = gr[11];
-                        //NOP
-                        gr[11] = b0;
-                        //NOP
-                        s1c[58+pe] = gr[11];
-                        //NOP
-                        gr[11] = b1;
-                        //NOP
-                        s1c[62+pe] = gr[11];
-                        //NOP
-                        gr[11] = abase + pa_s * 2;
-                        //NOP
-                        s1c[66+pe] = gr[11];
-                        //NOP
-                        gr[11] = bbase + pb_s * 2;
-                        //NOP
-                        s1c[70+pe] = gr[11];
+                        // Update max_pt: if pt > gr[5], gr[5] = pt
+                        if (gr[11] <= gr[5]) goto m28_pt_skip; // bge
+                        //NOP                                   // slot 1 of bge
+                        gr[5] = gr[11];                        // mv
+                        //NOP                                   // slot 1 reserve
+                    m28_pt_skip:
+                        // --- a0 = min(pa_n, MERGE_TILE) -> gr[3]
+                        gr[3] = gr[8];                       // a0 = pa_n
+                        //NOP                                 // RAW break
+                        if (gr[3] <= MERGE_TILE) goto m28_a0_ok; // bge
+                        //NOP                                 // slot 1 of bge
+                        gr[3] = MERGE_TILE;                  // si
+                        //NOP                                 // slot 1 reserve
+                    m28_a0_ok:
+                        s1c[50 + pe] = gr[3];                // a0
+                        //NOP                                 // 1-port s1c gap
+                        // a1r = pa_n - a0, clamp 0 -> gr[11]
+                        gr[11] = gr[8] - gr[3];              // pa_n - a0
+                        //NOP                                 // RAW break
+                        if (gr[11] >= 0) goto m28_a1r_ok;    // bge
+                        //NOP                                 // slot 1 of bge
+                        gr[11] = 0;                          // si
+                        //NOP                                 // slot 1 reserve
+                    m28_a1r_ok:
+                        // a1 = min(a1r, MERGE_TILE) -> gr[4]
+                        gr[4] = gr[11];                      // a1 = a1r
+                        //NOP                                 // RAW break
+                        if (gr[4] <= MERGE_TILE) goto m28_a1_ok; // bge
+                        //NOP                                 // slot 1 of bge
+                        gr[4] = MERGE_TILE;                  // si
+                        //NOP                                 // slot 1 reserve
+                    m28_a1_ok:
+                        s1c[54 + pe] = gr[4];                // a1
+                        //NOP                                 // 1-port s1c gap
+                        // --- a0+a1 sum -> gr[11] (re-used below)
+                        gr[11] = gr[3] + gr[4];              // a0+a1
+                        //NOP                                 // RAW break
+                        // src_a = abase + (pa_s + a0 + a1) * 2 -> s1c[8+pe]
+                        //   ta = pa_s + (a0+a1)       -> gr[7] dest
+                        // But gr[7] holds pa_s; clobbering pa_s is safe
+                        // (last use of pa_s was at gr[8] compute above).
+                        gr[7] = gr[7] + gr[11];              // pa_s += a0+a1
+                        //NOP                                 // RAW break
+                        gr[7] = gr[7] << 1;                  // * 2
+                        //NOP                                 // RAW break
+                        // Reload abase from s1c[77] into a temp (reuse
+                        // gr[11] since a0+a1 was consumed).
+                        gr[11] = s1c[77]; //NOP              // abase
+                        gr[7] = gr[7] + gr[11];              // + abase
+                        //NOP                                 // RAW break
+                        s1c[8 + pe] = gr[7];                 // src_a
+                        //NOP                                 // 1-port s1c gap
+                        // rem_a = pa_n - a0 - a1 -> gr[11]; clamp 0
+                        gr[11] = gr[3] + gr[4];              // a0+a1
+                        //NOP                                 // RAW break
+                        gr[11] = gr[8] - gr[11];             // pa_n - (a0+a1)
+                        //NOP                                 // RAW break
+                        if (gr[11] >= 0) goto m28_rem_a_ok;  // bge
+                        //NOP                                 // slot 1 of bge
+                        gr[11] = 0;                          // si
+                        //NOP                                 // slot 1 reserve
+                    m28_rem_a_ok:
+                        s1c[12 + pe] = gr[11];               // rem_a
+                        //NOP                                 // 1-port s1c gap
+                        // drain_a flag: pa_n <= a0+a1 ? 1 : 0
+                        // = 1 iff rem_a (gr[11]) == 0 AND pa_n was
+                        // not larger than a0+a1 originally. rem_a
+                        // already captures this: rem_a==0 iff
+                        // pa_n <= a0+a1. Use gr[11] for compare.
+                        spm2[MERGE_META+9] = gr[3];          // a0 spm
+                        //NOP                                  // 1-port SPM gap
+                        spm2[MERGE_META+10] = gr[4];         // a1 spm
+                        //NOP                                  // 1-port SPM gap
+                        // drain flag via label+goto
+                        if (gr[11] > 0) goto m28_drain_a_off; // bgt
+                        //NOP                                  // slot 1 of bgt
+                        spm2[MERGE_META+5] = 1;               // pa_n <= a0+a1
+                        //NOP                                  // slot 1 reserve
+                        goto m28_drain_a_done;
+                        //NOP                                  // slot 1 of goto
+                    m28_drain_a_off:
+                        spm2[MERGE_META+5] = 0;
+                        //NOP                                  // slot 1 reserve
+                    m28_drain_a_done:
                         spm2[MERGE_META+0] = 0;
+                        //NOP                                  // 1-port SPM gap
                         spm2[MERGE_META+1] = 0;
+                        //NOP                                  // 1-port SPM gap
                         spm2[MERGE_META+4] = 0;
-                        spm2[MERGE_META+5] = (pa_n<=a0+a1) ? 1 : 0;
-                        spm2[MERGE_META+6] = (pb_n<=b0+b1) ? 1 : 0;
+                        //NOP                                  // 1-port SPM gap
                         spm2[MERGE_META+7] = 0;
+                        //NOP                                  // 1-port SPM gap
                         spm2[MERGE_META+8] = 0;
-                        spm2[MERGE_META+9] = a0;
-                        spm2[MERGE_META+10] = a1;
-                        spm2[MERGE_META+11] = b0;
-                        spm2[MERGE_META+12] = b1;
+                        //NOP                                  // 1-port SPM gap
+                        // --- b0 = min(pb_n, MERGE_TILE) -> gr[3] (reuse)
+                        gr[3] = gr[10];                      // b0 = pb_n
+                        //NOP                                 // RAW break
+                        if (gr[3] <= MERGE_TILE) goto m28_b0_ok; // bge
+                        //NOP                                 // slot 1 of bge
+                        gr[3] = MERGE_TILE;                  // si
+                        //NOP                                 // slot 1 reserve
+                    m28_b0_ok:
+                        s1c[58 + pe] = gr[3];                // b0
+                        //NOP                                 // 1-port s1c gap
+                        // b1r = pb_n - b0, clamp 0 -> gr[11]
+                        gr[11] = gr[10] - gr[3];             // pb_n - b0
+                        //NOP                                 // RAW break
+                        if (gr[11] >= 0) goto m28_b1r_ok;    // bge
+                        //NOP                                 // slot 1 of bge
+                        gr[11] = 0;                          // si
+                        //NOP                                 // slot 1 reserve
+                    m28_b1r_ok:
+                        // b1 = min(b1r, MERGE_TILE) -> gr[4]
+                        gr[4] = gr[11];                      // b1 = b1r
+                        //NOP                                 // RAW break
+                        if (gr[4] <= MERGE_TILE) goto m28_b1_ok; // bge
+                        //NOP                                 // slot 1 of bge
+                        gr[4] = MERGE_TILE;                  // si
+                        //NOP                                 // slot 1 reserve
+                    m28_b1_ok:
+                        s1c[62 + pe] = gr[4];                // b1
+                        //NOP                                 // 1-port s1c gap
+                        // b0+b1 -> gr[11]
+                        gr[11] = gr[3] + gr[4];              // b0+b1
+                        //NOP                                 // RAW break
+                        // src_b = bbase + (pb_s + b0 + b1) * 2 -> s1c[16+pe]
+                        gr[9] = gr[9] + gr[11];              // pb_s += b0+b1
+                        //NOP                                 // RAW break
+                        gr[9] = gr[9] << 1;                  // * 2
+                        //NOP                                 // RAW break
+                        gr[11] = s1c[79]; //NOP              // bbase
+                        gr[9] = gr[9] + gr[11];              // + bbase
+                        //NOP                                 // RAW break
+                        s1c[16 + pe] = gr[9];                // src_b
+                        //NOP                                 // 1-port s1c gap
+                        // rem_b = pb_n - b0 - b1 -> gr[11]; clamp 0
+                        gr[11] = gr[3] + gr[4];              // b0+b1
+                        //NOP                                 // RAW break
+                        gr[11] = gr[10] - gr[11];            // pb_n - (b0+b1)
+                        //NOP                                 // RAW break
+                        if (gr[11] >= 0) goto m28_rem_b_ok;  // bge
+                        //NOP                                 // slot 1 of bge
+                        gr[11] = 0;                          // si
+                        //NOP                                 // slot 1 reserve
+                    m28_rem_b_ok:
+                        s1c[20 + pe] = gr[11];               // rem_b
+                        //NOP                                 // 1-port s1c gap
+                        spm2[MERGE_META+11] = gr[3];         // b0 spm
+                        //NOP                                  // 1-port SPM gap
+                        spm2[MERGE_META+12] = gr[4];         // b1 spm
+                        //NOP                                  // 1-port SPM gap
+                        if (gr[11] > 0) goto m28_drain_b_off; // bgt
+                        //NOP                                  // slot 1 of bgt
+                        spm2[MERGE_META+6] = 1;               // pb_n <= b0+b1
+                        //NOP                                  // slot 1 reserve
+                        goto m28_drain_b_done;
+                        //NOP                                  // slot 1 of goto
+                    m28_drain_b_off:
+                        spm2[MERGE_META+6] = 0;
+                        //NOP                                  // slot 1 reserve
+                    m28_drain_b_done:
+                        // a_srcs[pe] = abase + pa_s * 2 — needed by mvdq
+                        // a_src sections. pa_s was clobbered above;
+                        // recompute from a_sp.
+                        gr[11] = s1c[40 + pe]; //NOP          // a_sp[pe]
+                        gr[7]  = gr[11] << 1;                 // * 2
+                        //NOP                                  // RAW break
+                        gr[11] = s1c[77]; //NOP               // abase
+                        gr[7]  = gr[7] + gr[11];              // + abase
+                        //NOP                                  // RAW break
+                        s1c[66 + pe] = gr[7];                 // a_srcs[pe]
+                        //NOP                                  // 1-port s1c gap
+                        // b_srcs[pe] = bbase + pb_s * 2
+                        gr[11] = s1c[45 + pe]; //NOP          // b_sp[pe]
+                        gr[9]  = gr[11] << 1;                 // * 2
+                        //NOP                                  // RAW break
+                        gr[11] = s1c[79]; //NOP               // bbase
+                        gr[9]  = gr[9] + gr[11];              // + bbase
+                        //NOP                                  // RAW break
+                        s1c[70 + pe] = gr[9];                 // b_srcs[pe]
+                        //NOP                                  // 1-port s1c gap
                     }
-                    // Interleaved mvdq tile loads across PEs
+                    // --- Interleaved mvdq tile loads across PEs ---
+                    // 4 sections, each reads per-PE tile size from s1c
+                    // and per-PE src base from s1c, computes per-PE mw
+                    // reduction into gr[8], then chunk-outer PE-inner
+                    // mvdq. The `if (j >= w) continue` becomes goto;
+                    // the `if (cnt>8) cnt=8` becomes label+bge.
                     int *spm = SPM_unit->buffer;
-                    // A_BUF0: read a0s from s1c[50+pe], a_srcs from s1c[66+pe]
-                    { int mw = 0;
-                      for (int pe=0; pe<4; pe++) {
-                          gr[11] = s1c[50+pe]; //NOP
-                          int v = gr[11]*2;
-                          if (v > mw) mw = v;
-                      }
-                      for (int j = 0; j < mw; j += 8)
-                          for (int pe = 0; pe < 4; pe++) {
-                              gr[11] = s1c[50+pe]; //NOP
-                              int w = gr[11]*2;
-                              if (j >= w) continue;
-                              int cnt = w-j; if (cnt>8) cnt=8;
-                              gr[11] = s1c[66+pe]; //NOP  // a_src
-                              mvdq_copy(&spm[pe*SPM_BANK_GROUP_SIZE+MERGE_A_BUF0+j], &mm[gr[11]+j], cnt);
-                          }
+                    // ====== A_BUF0: a0 from s1c[50+pe], src from s1c[66+pe]
+                    gr[8] = 0;                                 // mw acc
+                    //NOP
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[11] = s1c[50 + pe]; //NOP          // a0
+                        gr[9]  = gr[11] + gr[11];             // * 2
+                        //NOP                                  // RAW break
+                        if (gr[9] <= gr[8]) goto m28_mw_a0_skip; // bge
+                        //NOP                                   // slot 1 of bge
+                        gr[8] = gr[9];                         // new max
+                        //NOP                                   // slot 1 reserve
+                    m28_mw_a0_skip:
+                        (void)0;
                     }
-                    // A_BUF1: read a1s from s1c[54+pe];
-                    // a_src + a0*2 via s1c[66+pe] + s1c[50+pe]*2
-                    { int mw = 0;
-                      for (int pe=0; pe<4; pe++) {
-                          gr[11] = s1c[54+pe]; //NOP
-                          int v = gr[11]*2;
-                          if (v > mw) mw = v;
-                      }
-                      for (int j = 0; j < mw; j += 8)
-                          for (int pe = 0; pe < 4; pe++) {
-                              gr[11] = s1c[54+pe]; //NOP
-                              int w = gr[11]*2;
-                              if (j >= w) continue;
-                              int cnt = w-j; if (cnt>8) cnt=8;
-                              gr[11] = s1c[50+pe]; //NOP  // a0
-                              int a0_scaled = gr[11]*2;
-                              gr[11] = s1c[66+pe]; //NOP  // a_src
-                              mvdq_copy(&spm[pe*SPM_BANK_GROUP_SIZE+MERGE_A_BUF1+j], &mm[gr[11]+a0_scaled+j], cnt);
-                          }
+                    gr[10] = 0;                                // j counter
+                    //NOP
+                m28_mvdq_a0_top:
+                    if (gr[10] >= gr[8]) goto m28_mvdq_a0_done; // bge
+                    //NOP                                       // slot 1 of bge
+                    for (int pe = 0; pe < 4; pe++) {
+                        constexpr int A0_OFF[4] = {
+                            0 * SPM_BANK_GROUP_SIZE + MERGE_A_BUF0,
+                            1 * SPM_BANK_GROUP_SIZE + MERGE_A_BUF0,
+                            2 * SPM_BANK_GROUP_SIZE + MERGE_A_BUF0,
+                            3 * SPM_BANK_GROUP_SIZE + MERGE_A_BUF0 };
+                        int pe_dst_base = A0_OFF[pe];
+                        gr[11] = s1c[50 + pe]; //NOP          // a0
+                        gr[9]  = gr[11] + gr[11];             // w = a0*2
+                        //NOP                                  // RAW break
+                        if (gr[10] >= gr[9]) goto m28_a0_pe_skip; // bge
+                        //NOP                                   // slot 1 of bge
+                        gr[11] = gr[9] - gr[10];              // cnt = w - j
+                        //NOP                                  // RAW break
+                        if (gr[11] <= 8) goto m28_a0_cnt_ok;  // bge
+                        //NOP                                   // slot 1 of bge
+                        gr[11] = 8;                           // si
+                        //NOP                                   // slot 1 reserve
+                    m28_a0_cnt_ok:
+                        // dst = pe_dst_base + j in gr[7]
+                        gr[7] = gr[10] + pe_dst_base;         // addi
+                        //NOP                                  // RAW break
+                        // src = s1c[66+pe] + j in gr[9] (reuse)
+                        gr[9] = s1c[66 + pe]; //NOP           // a_src
+                        gr[9] = gr[9] + gr[10];               // + j
+                        //NOP                                  // RAW break
+                        mvdq_copy(&spm[gr[7]], &mm[gr[9]], gr[11]);
+                    m28_a0_pe_skip:
+                        (void)0;
                     }
-                    // B_BUF0: read b0s from s1c[58+pe], b_srcs from s1c[70+pe]
-                    { int mw = 0;
-                      for (int pe=0; pe<4; pe++) {
-                          gr[11] = s1c[58+pe]; //NOP
-                          int v = gr[11]*2;
-                          if (v > mw) mw = v;
-                      }
-                      for (int j = 0; j < mw; j += 8)
-                          for (int pe = 0; pe < 4; pe++) {
-                              gr[11] = s1c[58+pe]; //NOP
-                              int w = gr[11]*2;
-                              if (j >= w) continue;
-                              int cnt = w-j; if (cnt>8) cnt=8;
-                              gr[11] = s1c[70+pe]; //NOP  // b_src
-                              mvdq_copy(&spm[pe*SPM_BANK_GROUP_SIZE+MERGE_B_BUF0+j], &mm[gr[11]+j], cnt);
-                          }
+                    gr[10] = gr[10] + 8;                      // j += 8
+                    //NOP                                      // RAW break
+                    goto m28_mvdq_a0_top;
+                    //NOP                                      // slot 1 of goto
+                m28_mvdq_a0_done:
+                    // ====== A_BUF1: a1 from s1c[54+pe]; src = a_src+a0*2
+                    gr[8] = 0;                                 // mw acc
+                    //NOP
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[11] = s1c[54 + pe]; //NOP          // a1
+                        gr[9]  = gr[11] + gr[11];             // * 2
+                        //NOP                                  // RAW break
+                        if (gr[9] <= gr[8]) goto m28_mw_a1_skip; // bge
+                        //NOP                                   // slot 1 of bge
+                        gr[8] = gr[9];
+                        //NOP                                   // slot 1 reserve
+                    m28_mw_a1_skip:
+                        (void)0;
                     }
-                    // B_BUF1: read b1s from s1c[62+pe];
-                    // b_src + b0*2 via s1c[70+pe] + s1c[58+pe]*2
-                    { int mw = 0;
-                      for (int pe=0; pe<4; pe++) {
-                          gr[11] = s1c[62+pe]; //NOP
-                          int v = gr[11]*2;
-                          if (v > mw) mw = v;
-                      }
-                      for (int j = 0; j < mw; j += 8)
-                          for (int pe = 0; pe < 4; pe++) {
-                              gr[11] = s1c[62+pe]; //NOP
-                              int w = gr[11]*2;
-                              if (j >= w) continue;
-                              int cnt = w-j; if (cnt>8) cnt=8;
-                              gr[11] = s1c[58+pe]; //NOP  // b0
-                              int b0_scaled = gr[11]*2;
-                              gr[11] = s1c[70+pe]; //NOP  // b_src
-                              mvdq_copy(&spm[pe*SPM_BANK_GROUP_SIZE+MERGE_B_BUF1+j], &mm[gr[11]+b0_scaled+j], cnt);
-                          }
+                    gr[10] = 0;
+                    //NOP
+                m28_mvdq_a1_top:
+                    if (gr[10] >= gr[8]) goto m28_mvdq_a1_done; // bge
+                    //NOP                                       // slot 1 of bge
+                    for (int pe = 0; pe < 4; pe++) {
+                        constexpr int A1_OFF[4] = {
+                            0 * SPM_BANK_GROUP_SIZE + MERGE_A_BUF1,
+                            1 * SPM_BANK_GROUP_SIZE + MERGE_A_BUF1,
+                            2 * SPM_BANK_GROUP_SIZE + MERGE_A_BUF1,
+                            3 * SPM_BANK_GROUP_SIZE + MERGE_A_BUF1 };
+                        int pe_dst_base = A1_OFF[pe];
+                        gr[11] = s1c[54 + pe]; //NOP          // a1
+                        gr[9]  = gr[11] + gr[11];             // w = a1*2
+                        //NOP                                  // RAW break
+                        if (gr[10] >= gr[9]) goto m28_a1_pe_skip; // bge
+                        //NOP                                   // slot 1 of bge
+                        gr[11] = gr[9] - gr[10];              // cnt
+                        //NOP                                  // RAW break
+                        if (gr[11] <= 8) goto m28_a1_cnt_ok;
+                        //NOP
+                        gr[11] = 8;
+                        //NOP
+                    m28_a1_cnt_ok:
+                        gr[7] = gr[10] + pe_dst_base;         // dst
+                        //NOP                                  // RAW break
+                        // src = s1c[66+pe] + s1c[50+pe]*2 + j -> gr[9]
+                        gr[9]  = s1c[50 + pe]; //NOP          // a0
+                        gr[9]  = gr[9] + gr[9];               // a0*2
+                        //NOP                                  // RAW break
+                        gr[3]  = s1c[66 + pe]; //NOP          // a_src
+                        gr[9]  = gr[9] + gr[3];               // a_src + a0*2
+                        //NOP                                  // RAW break
+                        gr[9]  = gr[9] + gr[10];              // + j
+                        //NOP                                  // RAW break
+                        mvdq_copy(&spm[gr[7]], &mm[gr[9]], gr[11]);
+                    m28_a1_pe_skip:
+                        (void)0;
                     }
-                    int niter = ((max_pt + MERGE_STEP - 1)
-                        / MERGE_STEP) * MERGE_STEP;
-                    gr[6] = (niter == 0) ? 0 : niter;
-                    gr[4] = MM_SORT_BUF;
+                    gr[10] = gr[10] + 8;
+                    //NOP
+                    goto m28_mvdq_a1_top;
+                    //NOP
+                m28_mvdq_a1_done:
+                    // ====== B_BUF0: b0 from s1c[58+pe]; src from s1c[70+pe]
+                    gr[8] = 0;
+                    //NOP
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[11] = s1c[58 + pe]; //NOP
+                        gr[9]  = gr[11] + gr[11];
+                        //NOP
+                        if (gr[9] <= gr[8]) goto m28_mw_b0_skip;
+                        //NOP
+                        gr[8] = gr[9];
+                        //NOP
+                    m28_mw_b0_skip:
+                        (void)0;
+                    }
+                    gr[10] = 0;
+                    //NOP
+                m28_mvdq_b0_top:
+                    if (gr[10] >= gr[8]) goto m28_mvdq_b0_done;
+                    //NOP
+                    for (int pe = 0; pe < 4; pe++) {
+                        constexpr int B0_OFF[4] = {
+                            0 * SPM_BANK_GROUP_SIZE + MERGE_B_BUF0,
+                            1 * SPM_BANK_GROUP_SIZE + MERGE_B_BUF0,
+                            2 * SPM_BANK_GROUP_SIZE + MERGE_B_BUF0,
+                            3 * SPM_BANK_GROUP_SIZE + MERGE_B_BUF0 };
+                        int pe_dst_base = B0_OFF[pe];
+                        gr[11] = s1c[58 + pe]; //NOP
+                        gr[9]  = gr[11] + gr[11];
+                        //NOP
+                        if (gr[10] >= gr[9]) goto m28_b0_pe_skip;
+                        //NOP
+                        gr[11] = gr[9] - gr[10];
+                        //NOP
+                        if (gr[11] <= 8) goto m28_b0_cnt_ok;
+                        //NOP
+                        gr[11] = 8;
+                        //NOP
+                    m28_b0_cnt_ok:
+                        gr[7] = gr[10] + pe_dst_base;
+                        //NOP
+                        gr[9] = s1c[70 + pe]; //NOP
+                        gr[9] = gr[9] + gr[10];
+                        //NOP
+                        mvdq_copy(&spm[gr[7]], &mm[gr[9]], gr[11]);
+                    m28_b0_pe_skip:
+                        (void)0;
+                    }
+                    gr[10] = gr[10] + 8;
+                    //NOP
+                    goto m28_mvdq_b0_top;
+                    //NOP
+                m28_mvdq_b0_done:
+                    // ====== B_BUF1: b1 from s1c[62+pe]; src = b_src+b0*2
+                    gr[8] = 0;
+                    //NOP
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[11] = s1c[62 + pe]; //NOP
+                        gr[9]  = gr[11] + gr[11];
+                        //NOP
+                        if (gr[9] <= gr[8]) goto m28_mw_b1_skip;
+                        //NOP
+                        gr[8] = gr[9];
+                        //NOP
+                    m28_mw_b1_skip:
+                        (void)0;
+                    }
+                    gr[10] = 0;
+                    //NOP
+                m28_mvdq_b1_top:
+                    if (gr[10] >= gr[8]) goto m28_mvdq_b1_done;
+                    //NOP
+                    for (int pe = 0; pe < 4; pe++) {
+                        constexpr int B1_OFF[4] = {
+                            0 * SPM_BANK_GROUP_SIZE + MERGE_B_BUF1,
+                            1 * SPM_BANK_GROUP_SIZE + MERGE_B_BUF1,
+                            2 * SPM_BANK_GROUP_SIZE + MERGE_B_BUF1,
+                            3 * SPM_BANK_GROUP_SIZE + MERGE_B_BUF1 };
+                        int pe_dst_base = B1_OFF[pe];
+                        gr[11] = s1c[62 + pe]; //NOP
+                        gr[9]  = gr[11] + gr[11];
+                        //NOP
+                        if (gr[10] >= gr[9]) goto m28_b1_pe_skip;
+                        //NOP
+                        gr[11] = gr[9] - gr[10];
+                        //NOP
+                        if (gr[11] <= 8) goto m28_b1_cnt_ok;
+                        //NOP
+                        gr[11] = 8;
+                        //NOP
+                    m28_b1_cnt_ok:
+                        gr[7] = gr[10] + pe_dst_base;
+                        //NOP
+                        gr[9]  = s1c[58 + pe]; //NOP
+                        gr[9]  = gr[9] + gr[9];
+                        //NOP
+                        gr[3]  = s1c[70 + pe]; //NOP
+                        gr[9]  = gr[9] + gr[3];
+                        //NOP
+                        gr[9]  = gr[9] + gr[10];
+                        //NOP
+                        mvdq_copy(&spm[gr[7]], &mm[gr[9]], gr[11]);
+                    m28_b1_pe_skip:
+                        (void)0;
+                    }
+                    gr[10] = gr[10] + 8;
+                    //NOP
+                    goto m28_mvdq_b1_top;
+                    //NOP
+                m28_mvdq_b1_done:
+                    // niter = ceil_to_multiple(max_pt, MERGE_STEP)
+                    // = (max_pt + MERGE_STEP - 1) / MERGE_STEP * MERGE_STEP.
+                    // max_pt in gr[5]. Emit as gr arithmetic; the
+                    // MERGE_STEP div/mul is a constexpr-bounded helper
+                    // intrinsic (MERGE_STEP = 40 is not a power of 2
+                    // but is a compile-time fixed constant).
+                    // Since (x==0) ? 0 : x == x for non-negative x, the
+                    // (niter==0?0:niter) ternary reduces to niter.
+                    gr[11] = gr[5] + (MERGE_STEP - 1);       // addi
+                    //NOP                                      // RAW break
+                    gr[6] = (gr[11] / MERGE_STEP) * MERGE_STEP; // niter
+                    //NOP
+                    gr[4] = MM_SORT_BUF;                      // si
+                    //NOP
                 }
-                gr[3]=diag_base; gr[24]=n_a; gr[28]=intv_n;
+            m28_skip_merge:
+                // Exit restores: gr[3]=diag_base, gr[24]=n_a, gr[28]=intv_n
+                // Sourced from hoisted s1c arch slots via gr[11] staging.
+                gr[11] = s1c[77]; //NOP                       // diag_base
+                gr[3]  = gr[11];
+                //NOP
+                gr[11] = s1c[75]; //NOP                       // n_a
+                gr[24] = gr[11];
+                //NOP
+                gr[11] = s1c[76]; //NOP                       // intv_n
+                gr[28] = gr[11];
+                //NOP
             }
         } else if (magic_id == 33) {
             // Merge tile reload (overlapped with PE compute).
