@@ -3930,16 +3930,39 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[11] = s1c[6]; //NOP   // bs_target[0]
                     gr[4]  = gr[11] - gr[5];                    // bi2 in gr[4]
                     gr[7] = s1c[79]; //NOP                       // bbase
-                    gr[11] = (gr[4] > 0) ? mm[gr[7] + (gr[4]-1)*2] : 0;
+                    // b_val = (bi2 > 0) ? mm[bbase + (bi2-1)*2] : 0
+                    // Lowered: default gr[11]=0, then MM-load-and-override
+                    // iff bi2 > 0.  All clamps / selectors are label+goto.
+                    gr[11] = 0;                                   // si
+                    //NOP                                          // RAW break
+                    if (gr[4] <= 0) goto m28_bs_p0_b_skip;        // bge
+                    //NOP                                          // slot 1 of bge
+                    gr[10] = gr[4] - 1;                           // bi2 - 1
+                    //NOP                                          // RAW break
+                    gr[10] = gr[10] << 1;                         // * 2
+                    //NOP                                          // RAW break
+                    gr[10] = gr[10] + gr[7];                      // + bbase
+                    //NOP                                          // RAW break
+                    gr[11] = mm[gr[10]];                          // MM load
                     // waitLSQ
-                    //NOP                                        // LSQ settle
+                    //NOP                                          // LSQ settle
+                m28_bs_p0_b_skip:
                     gr[3] = gr[11];                              // stash b_val
                     gr[8] = s1c[74]; //NOP                       // n_phase1
                     gr[9] = s1c[77]; //NOP                       // abase
-                    gr[11] = (gr[5] < gr[8])
-                        ? mm[gr[9] + gr[5]*2] : (int)0xFFFFFFFF;
+                    // a_val = (mid < n_phase1) ? mm[abase + mid*2] : -1
+                    gr[11] = (int)0xFFFFFFFF;                    // si: default -1
+                    //NOP                                          // RAW break
+                    if (gr[5] >= gr[8]) goto m28_bs_p0_a_skip;   // bge
+                    //NOP                                          // slot 1 of bge
+                    gr[10] = gr[5] << 1;                         // mid * 2
+                    //NOP                                          // RAW break
+                    gr[10] = gr[10] + gr[9];                     // + abase
+                    //NOP                                          // RAW break
+                    gr[11] = mm[gr[10]];                         // MM load
                     // waitLSQ
-                    //NOP                                        // LSQ settle
+                    //NOP                                          // LSQ settle
+                m28_bs_p0_a_skip:
                     // Decide update: lo = mid+1 iff bi2>0 && mid<n_phase1 && b_val > a_val
                     if (gr[4] <= 0) goto m28_bs_p0_hi;
                     if (gr[5] >= gr[8]) goto m28_bs_p0_hi;
@@ -3960,16 +3983,35 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[11] = s1c[7]; //NOP
                     gr[4]  = gr[11] - gr[5];
                     gr[7] = s1c[79]; //NOP                       // bbase
-                    gr[11] = (gr[4] > 0) ? mm[gr[7] + (gr[4]-1)*2] : 0;
+                    gr[11] = 0;
+                    //NOP
+                    if (gr[4] <= 0) goto m28_bs_p1_b_skip;
+                    //NOP
+                    gr[10] = gr[4] - 1;
+                    //NOP
+                    gr[10] = gr[10] << 1;
+                    //NOP
+                    gr[10] = gr[10] + gr[7];
+                    //NOP
+                    gr[11] = mm[gr[10]];
                     // waitLSQ
                     //NOP
+                m28_bs_p1_b_skip:
                     gr[3] = gr[11];
                     gr[8] = s1c[74]; //NOP                       // n_phase1
                     gr[9] = s1c[77]; //NOP                       // abase
-                    gr[11] = (gr[5] < gr[8])
-                        ? mm[gr[9] + gr[5]*2] : (int)0xFFFFFFFF;
+                    gr[11] = (int)0xFFFFFFFF;
+                    //NOP
+                    if (gr[5] >= gr[8]) goto m28_bs_p1_a_skip;
+                    //NOP
+                    gr[10] = gr[5] << 1;
+                    //NOP
+                    gr[10] = gr[10] + gr[9];
+                    //NOP
+                    gr[11] = mm[gr[10]];
                     // waitLSQ
                     //NOP
+                m28_bs_p1_a_skip:
                     if (gr[4] <= 0) goto m28_bs_p1_hi;
                     if (gr[5] >= gr[8]) goto m28_bs_p1_hi;
                     if ((uint32_t)gr[3] <= (uint32_t)gr[11]) goto m28_bs_p1_hi;
@@ -3988,16 +4030,35 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[11] = s1c[8]; //NOP
                     gr[4]  = gr[11] - gr[5];
                     gr[7] = s1c[79]; //NOP                       // bbase
-                    gr[11] = (gr[4] > 0) ? mm[gr[7] + (gr[4]-1)*2] : 0;
+                    gr[11] = 0;
+                    //NOP
+                    if (gr[4] <= 0) goto m28_bs_p2_b_skip;
+                    //NOP
+                    gr[10] = gr[4] - 1;
+                    //NOP
+                    gr[10] = gr[10] << 1;
+                    //NOP
+                    gr[10] = gr[10] + gr[7];
+                    //NOP
+                    gr[11] = mm[gr[10]];
                     // waitLSQ
                     //NOP
+                m28_bs_p2_b_skip:
                     gr[3] = gr[11];
                     gr[8] = s1c[74]; //NOP                       // n_phase1
                     gr[9] = s1c[77]; //NOP                       // abase
-                    gr[11] = (gr[5] < gr[8])
-                        ? mm[gr[9] + gr[5]*2] : (int)0xFFFFFFFF;
+                    gr[11] = (int)0xFFFFFFFF;
+                    //NOP
+                    if (gr[5] >= gr[8]) goto m28_bs_p2_a_skip;
+                    //NOP
+                    gr[10] = gr[5] << 1;
+                    //NOP
+                    gr[10] = gr[10] + gr[9];
+                    //NOP
+                    gr[11] = mm[gr[10]];
                     // waitLSQ
                     //NOP
+                m28_bs_p2_a_skip:
                     if (gr[4] <= 0) goto m28_bs_p2_hi;
                     if (gr[5] >= gr[8]) goto m28_bs_p2_hi;
                     if ((uint32_t)gr[3] <= (uint32_t)gr[11]) goto m28_bs_p2_hi;
@@ -5929,11 +5990,44 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
                 int *spm = SPM_unit->buffer;
-                // Diag OUT bases are inlined via D_OUT_OFF_0/D_OUT_OFF_1
-                // constexpr arrays in Pass 3; only i_off is needed here
-                // (for the seam-write first-intv source address).
-                int i_off = (magic_mask & 1)
-                    ? DEDUP_INTV_OUT1 : DEDUP_INTV_OUT0;
+                // --- Prologue: eliminate magic_mask runtime ternaries.
+                //     Select diag/intv OUT_off via label+goto on magic_mask;
+                //     stash i_off into s1c[224] (for seam-write) and per-PE
+                //     absolute bases (pe_spm + out_off) into s1c[216..223]
+                //     for Pass 3/4 so those paths are pure s1c reads.
+                gr[3] = DEDUP_DIAG_OUT0;                     // si default
+                //NOP                                          // RAW break
+                if ((magic_mask & 1) == 0) goto m31_sel_d_ok; // beq
+                //NOP                                          // slot 1 of beq
+                gr[3] = DEDUP_DIAG_OUT1;                     // si
+                //NOP                                          // slot 1 reserve
+            m31_sel_d_ok:
+                gr[5] = DEDUP_INTV_OUT0;                     // si default
+                //NOP                                          // RAW break
+                if ((magic_mask & 1) == 0) goto m31_sel_i_ok; // beq
+                //NOP                                          // slot 1 of beq
+                gr[5] = DEDUP_INTV_OUT1;                     // si
+                //NOP                                          // slot 1 reserve
+            m31_sel_i_ok:
+                s1c[224] = gr[5];                            // i_off stash
+                //NOP                                          // 1-port s1c gap
+                // Per-PE absolute dst bases (pe_spm + out_off)
+                for (int pe = 0; pe < 4; pe++) {
+                    constexpr int PE_SPM_LUT[4] = {
+                        0 * SPM_BANK_GROUP_SIZE,
+                        1 * SPM_BANK_GROUP_SIZE,
+                        2 * SPM_BANK_GROUP_SIZE,
+                        3 * SPM_BANK_GROUP_SIZE };
+                    int pe_spm = PE_SPM_LUT[pe];             // compile-time
+                    gr[11] = gr[3] + pe_spm;                 // addi: diag base
+                    //NOP                                      // RAW break
+                    s1c[216 + pe] = gr[11];
+                    //NOP                                      // 1-port s1c gap
+                    gr[11] = gr[5] + pe_spm;                 // addi: intv base
+                    //NOP                                      // RAW break
+                    s1c[220 + pe] = gr[11];
+                    //NOP                                      // 1-port s1c gap
+                }
                 // --- Pass 1: compute per-PE nds / nis / d_cur / i_cur
                 //     into s1c[196..211]; accumulate max_d/max_i in
                 //     gr[5]/gr[3] (both caller-dead after m29 exit).
@@ -6017,20 +6111,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //       write s1c[184+pe] / s1c[188+pe] (last lo/hi)
                 //     skip:
                 for (int pe = 0; pe < 4; pe++) {
-                    int pe_spm = pe * SPM_BANK_GROUP_SIZE;   // compile-time
                     gr[11] = s1c[200 + pe]; //NOP            // nis
                     if (gr[11] == 0) goto m31_seam_skip;     // beq
                     //NOP                                     // slot 1 of beq
                     fprintf(stderr, "[M31_TRACE_LAST_SEAM] pe=%d\n", pe);
                     //NOP                                     // slot 1 reserve
-                    // last_src = pe_spm + i_off + (nis - 1) * 2
+                    // first_src = s1c[220+pe] = pe_spm + i_off (computed
+                    //   in prologue; eliminates the magic_mask ternary)
+                    // last_src  = first_src + (nis - 1) * 2
                     gr[1] = gr[11];                          // stash nis
                     //NOP                                     // RAW break
                     gr[1] = gr[1] - 1;                       // nis - 1
                     //NOP                                     // RAW break
                     gr[1] = gr[1] << 1;                      // * 2
                     //NOP                                     // RAW break
-                    gr[1] = gr[1] + (pe_spm + i_off);        // + base
+                    gr[9] = s1c[220 + pe]; //NOP             // first_src base
+                    gr[1] = gr[1] + gr[9];                   // last_src
                     //NOP                                     // RAW break
                     // Sample s1c[28+pe] BEFORE cumulative advance
                     gr[11] = s1c[28 + pe]; //NOP             // cum
@@ -6038,17 +6134,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     //NOP                                     // slot 1 of bne
                     fprintf(stderr, "[M31_TRACE_FIRST_SEAM] pe=%d\n", pe);
                     //NOP                                     // slot 1 reserve
-                    // first_src = pe_spm + i_off (lo). Use gr[9] for
-                    // first_src base (= pe_spm + i_off, compile-time per pe).
-                    // Write s1c[176+pe] = spm[first_src] (lo)
-                    gr[11] = spm[pe_spm + i_off];
+                    // Write s1c[176+pe] = spm[first_src] (lo) using gr[9]
+                    //   which already holds first_src from s1c[220+pe].
+                    gr[11] = spm[gr[9]];
                     //NOP                                     // SPM 1/3
                     //NOP                                     // SPM 2/3
                     //NOP                                     // SPM 3/3
                     s1c[176 + pe] = gr[11];
                     //NOP                                     // 1-port s1c gap
                     // Write s1c[180+pe] = spm[first_src + 1] (hi)
-                    gr[11] = spm[pe_spm + i_off + 1];
+                    gr[11] = spm[gr[9] + 1];
                     //NOP                                     // SPM 1/3
                     //NOP                                     // SPM 2/3
                     //NOP                                     // SPM 3/3
@@ -6084,18 +6179,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 if (gr[10] >= gr[11]) goto m31_diag_done;    // bge
                 //NOP                                         // slot 1 of bge
                 for (int pe = 0; pe < 4; pe++) {
-                    constexpr int D_OUT_OFF_0[4] = {
-                        0 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT0,
-                        1 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT0,
-                        2 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT0,
-                        3 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT0 };
-                    constexpr int D_OUT_OFF_1[4] = {
-                        0 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT1,
-                        1 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT1,
-                        2 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT1,
-                        3 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_OUT1 };
-                    int pe_spm_src_base = ((magic_mask & 1)
-                        ? D_OUT_OFF_1[pe] : D_OUT_OFF_0[pe]);
                     // w = nds[pe] * 2 (read s1c[196+pe] directly)
                     gr[11] = s1c[196 + pe]; //NOP            // nds
                     gr[9]  = gr[11] + gr[11];                // w = nds*2
@@ -6110,8 +6193,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[11] = 8;
                     //NOP                                     // slot 1 reserve
                 m31_diag_cnt_ok:
-                    // src = pe_spm_src_base + j -> gr[8]
-                    gr[8] = gr[10] + pe_spm_src_base;        // addi
+                    // src base = s1c[216+pe] (pe_spm + d_out_off, from
+                    //   prologue; eliminates magic_mask ternary)
+                    gr[3] = s1c[216 + pe]; //NOP             // diag dst base
+                    gr[8] = gr[3] + gr[10];                  // + j
                     //NOP                                     // RAW break
                     // dst = d_cur (read s1c[204+pe] directly via gr[1])
                     gr[1] = s1c[204 + pe]; //NOP             // d_cur
@@ -6137,18 +6222,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 if (gr[10] >= gr[11]) goto m31_intv_done;    // bge
                 //NOP                                         // slot 1 of bge
                 for (int pe = 0; pe < 4; pe++) {
-                    constexpr int I_OUT_OFF_0[4] = {
-                        0 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT0,
-                        1 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT0,
-                        2 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT0,
-                        3 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT0 };
-                    constexpr int I_OUT_OFF_1[4] = {
-                        0 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT1,
-                        1 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT1,
-                        2 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT1,
-                        3 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_OUT1 };
-                    int pe_spm_src_base = ((magic_mask & 1)
-                        ? I_OUT_OFF_1[pe] : I_OUT_OFF_0[pe]);
                     gr[11] = s1c[200 + pe]; //NOP            // nis
                     gr[9]  = gr[11] + gr[11];                // w
                     //NOP                                     // RAW break
@@ -6161,7 +6234,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[11] = 8;
                     //NOP                                     // slot 1 reserve
                 m31_intv_cnt_ok:
-                    gr[8] = gr[10] + pe_spm_src_base;        // src
+                    // src base = s1c[220+pe] (pe_spm + i_out_off, from
+                    //   prologue; eliminates magic_mask ternary)
+                    gr[3] = s1c[220 + pe]; //NOP             // intv dst base
+                    gr[8] = gr[3] + gr[10];                  // src = base + j
                     //NOP                                     // RAW break
                     gr[1] = s1c[208 + pe]; //NOP             // i_cur
                     mvdq_copy(&mm[gr[1]], &spm[gr[8]], gr[11]);
