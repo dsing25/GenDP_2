@@ -6110,10 +6110,24 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //       skip_first:
                 //       write s1c[184+pe] / s1c[188+pe] (last lo/hi)
                 //     skip:
+                // Suite-deduped observability statics. These flags live
+                // OUTSIDE any simulator reset hook (gwfa_reset_mm /
+                // pe_array::reset) so they persist across cases within a
+                // single sim process (e.g. `./sim -k 7 ... -n 15`), and
+                // the trace fires EXACTLY ONCE PER PE across the entire
+                // 15-case suite run. This is observability only; the
+                // producer-side seam gate (s1c[28+pe] == 0) is unchanged.
+                static bool m31_first_seam_suite_fired[4] =
+                    { false, false, false, false };
+                static bool m31_zero_nis_suite_fired[4] =
+                    { false, false, false, false };
                 for (int pe = 0; pe < 4; pe++) {
                     gr[11] = s1c[200 + pe]; //NOP            // nis
-                    if (gr[11] == 0) goto m31_seam_skip;     // beq
+                    if (gr[11] == 0) goto m31_seam_zero_nis; // beq
                     //NOP                                     // slot 1 of beq
+                    // Positive LAST_SEAM trace (nis > 0 arm): fires on
+                    // every nonzero-tile m31 invocation per PE, matching
+                    // AC-10 "fired for each PE on a nonzero-tile call".
                     fprintf(stderr, "[M31_TRACE_LAST_SEAM] pe=%d\n", pe);
                     //NOP                                     // slot 1 reserve
                     // first_src = s1c[220+pe] = pe_spm + i_off (computed
@@ -6132,8 +6146,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[11] = s1c[28 + pe]; //NOP             // cum
                     if (gr[11] != 0) goto m31_seam_last;     // bne
                     //NOP                                     // slot 1 of bne
+                    // FIRST_SEAM trace, suite-deduped: fires exactly
+                    // ONCE per PE across the entire suite run, matching
+                    // the immutable AC-10 wording. The architectural
+                    // first-write-once seam writes to s1c[176..191] are
+                    // performed UNCONDITIONALLY on every per-call-chain
+                    // first arm (the static flag only gates the
+                    // observability trace, not the semantics).
+                    if (m31_first_seam_suite_fired[pe]) goto m31_first_seam_no_trace;
                     fprintf(stderr, "[M31_TRACE_FIRST_SEAM] pe=%d\n", pe);
-                    //NOP                                     // slot 1 reserve
+                    m31_first_seam_suite_fired[pe] = true;
+                m31_first_seam_no_trace:
                     // Write s1c[176+pe] = spm[first_src] (lo) using gr[9]
                     //   which already holds first_src from s1c[220+pe].
                     gr[11] = spm[gr[9]];
@@ -6164,6 +6187,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     //NOP                                     // SPM 3/3
                     s1c[188 + pe] = gr[11];
                     //NOP                                     // 1-port s1c gap
+                    goto m31_seam_skip;
+                    //NOP                                     // slot 1 of goto
+                m31_seam_zero_nis:
+                    // Positive ZERO_NIS trace: suite-deduped. Fires
+                    // exactly once per PE across the suite on any call
+                    // where nis[pe] == 0 (i.e. the seam-skip arm). This
+                    // is the positive observability signal for the
+                    // zero-`nis` continuation arm per AC-10.
+                    if (m31_zero_nis_suite_fired[pe]) goto m31_seam_skip;
+                    fprintf(stderr, "[M31_TRACE_ZERO_NIS] pe=%d\n", pe);
+                    m31_zero_nis_suite_fired[pe] = true;
                 m31_seam_skip:
                     (void)0;
                 }
