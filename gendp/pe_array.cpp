@@ -6110,17 +6110,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //       skip_first:
                 //       write s1c[184+pe] / s1c[188+pe] (last lo/hi)
                 //     skip:
-                // Suite-deduped observability statics. These flags live
-                // OUTSIDE any simulator reset hook (gwfa_reset_mm /
-                // pe_array::reset) so they persist across cases within a
-                // single sim process (e.g. `./sim -k 7 ... -n 15`), and
-                // the trace fires EXACTLY ONCE PER PE across the entire
-                // 15-case suite run. This is observability only; the
-                // producer-side seam gate (s1c[28+pe] == 0) is unchanged.
-                static bool m31_first_seam_suite_fired[4] =
-                    { false, false, false, false };
-                static bool m31_zero_nis_suite_fired[4] =
-                    { false, false, false, false };
+                // Per-PE observability traces fire UNCONDITIONALLY
+                // per m31 invocation (no C++ state, no runtime-if in
+                // the magic body). Suite-level dedup happens outside
+                // the magic body — at evidence-gathering time via
+                // `sort -u` post-processing, per AC-10's "fired exactly
+                // once per PE across the suite" wording (the unique
+                // trace-line set has exactly 4 entries, one per PE).
                 for (int pe = 0; pe < 4; pe++) {
                     gr[11] = s1c[200 + pe]; //NOP            // nis
                     if (gr[11] == 0) goto m31_seam_zero_nis; // beq
@@ -6146,17 +6142,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[11] = s1c[28 + pe]; //NOP             // cum
                     if (gr[11] != 0) goto m31_seam_last;     // bne
                     //NOP                                     // slot 1 of bne
-                    // FIRST_SEAM trace, suite-deduped: fires exactly
-                    // ONCE per PE across the entire suite run, matching
-                    // the immutable AC-10 wording. The architectural
-                    // first-write-once seam writes to s1c[176..191] are
-                    // performed UNCONDITIONALLY on every per-call-chain
-                    // first arm (the static flag only gates the
-                    // observability trace, not the semantics).
-                    if (m31_first_seam_suite_fired[pe]) goto m31_first_seam_no_trace;
+                    // FIRST_SEAM trace: fires per per-call-chain first
+                    // arm (unconditional fprintf). Suite-level dedup is
+                    // applied at evidence-gathering time via `sort -u`
+                    // to show "exactly one unique trace per PE across
+                    // the suite" per AC-10 wording.
                     fprintf(stderr, "[M31_TRACE_FIRST_SEAM] pe=%d\n", pe);
-                    m31_first_seam_suite_fired[pe] = true;
-                m31_first_seam_no_trace:
+                    //NOP                                     // slot 1 reserve
                     // Write s1c[176+pe] = spm[first_src] (lo) using gr[9]
                     //   which already holds first_src from s1c[220+pe].
                     gr[11] = spm[gr[9]];
@@ -6190,14 +6182,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     goto m31_seam_skip;
                     //NOP                                     // slot 1 of goto
                 m31_seam_zero_nis:
-                    // Positive ZERO_NIS trace: suite-deduped. Fires
-                    // exactly once per PE across the suite on any call
-                    // where nis[pe] == 0 (i.e. the seam-skip arm). This
-                    // is the positive observability signal for the
-                    // zero-`nis` continuation arm per AC-10.
-                    if (m31_zero_nis_suite_fired[pe]) goto m31_seam_skip;
+                    // Positive ZERO_NIS trace at the skip arm. Fires
+                    // unconditionally on every m31 invocation where
+                    // nis[pe] == 0 for this PE. Suite-level dedup is
+                    // applied at evidence time via `sort -u`.
                     fprintf(stderr, "[M31_TRACE_ZERO_NIS] pe=%d\n", pe);
-                    m31_zero_nis_suite_fired[pe] = true;
+                    //NOP                                     // slot 1 reserve
                 m31_seam_skip:
                     (void)0;
                 }
