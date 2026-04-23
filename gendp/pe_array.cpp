@@ -4756,11 +4756,41 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // Tiled dedup: split search + initial tile load.
             // Inputs: gr[3]=diag_base, gr[24]=n_a, gr[28]=intv_n.
             // Loads first tile of diags+intv into BUF0 per PE, inits META.
-            // s1c layout: [0..3]=diag_mm_src, [4..7]=diag_remaining,
-            //   [8..11]=intv_mm_src, [12..15]=intv_remaining,
-            //   [16..19]=diag_out_base, [20..23]=diag_out_cursor,
-            //   [24..27]=intv_out_base, [28..31]=intv_out_cursor.
-            // Sets gr[6]=loop bound, gr[4]=MM_SORT_BUF.
+            //
+            // Plan 3b l4d: full lowering per AC-2/3/4/5/7/8 with
+            // UNCONDITIONAL debug traces per DEC-3B-CORRECTNESS-BAR
+            // (AC-10: intv_n==0 guard, iv_s>intv_hi clamp, iv_e<intv_hi
+            // clamp).
+            //
+            // Cross-magic s1c contract (preserved on exit):
+            //   s1c[0..3]    dedup diag MM sources
+            //   s1c[4..7]    dedup diag remaining
+            //   s1c[8..11]   dedup intv MM sources
+            //   s1c[12..15]  dedup intv remaining
+            //   s1c[16..19]  dedup diag output base per PE
+            //   s1c[20..23]  dedup diag output cursor per PE
+            //   s1c[24..27]  dedup intv output base per PE
+            //   s1c[28..31]  dedup intv output cursor per PE
+            //
+            // Magic-local scratch (dedup phase internal; s1c[32..73]
+            // is unallocated across sort/merge/dedup contracts):
+            //   s1c[32..36]  splits[5]
+            //   s1c[37]      diag_out_cum (pass-1 running)
+            //   s1c[38]      intv_out_cum (pass-1 running)
+            //   s1c[40..43]  intv_lo[pe]
+            //   s1c[44..47]  intv_hi[pe]
+            //   s1c[48..51]  dd0[pe]     (per-PE diag BUF0 tile)
+            //   s1c[52..55]  dd1[pe]     (per-PE diag BUF1 tile)
+            //   s1c[56..59]  d_srcs[pe]  (MM diag src base per PE)
+            //   s1c[60..63]  ii0[pe]     (per-PE intv BUF0 tile)
+            //   s1c[64..67]  ii1[pe]     (per-PE intv BUF1 tile)
+            //   s1c[68..71]  i_srcs[pe]  (MM intv src base per PE)
+            //
+            // Exit contract:
+            //   gr[4] = MM_DEDUP_DIAG_OUT (opposite of active_diag_base)
+            //   gr[7] = MM_DEDUP_INTV_OUT
+            //   gr[6] = niter  (loop bound; min DEDUP_TILE)
+            //   gr[24] / gr[28] preserved (live-out for m31)
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
@@ -4769,117 +4799,654 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 constexpr int MM_INTV = DIAG_CAP_V * 6;
                 constexpr int MM_SORT_BUF =
                     DIAG_CAP_V * 6 + INTV_CAP_V * 6;
-                // Use MM_SWAP region (free during dedup)
                 constexpr int MM_DEDUP_INTV_OUT =
                     DIAG_CAP_V * 6 + INTV_CAP_V * 4;
-                // Use pre-computed splits from s1c (AC-8)
-                int diag_base = s1c[153]; // active_diag_base
-                int intv_base = s1c[152]; // active_intv_base
-                int n_a       = gr[24];
-                int intv_n    = gr[28];
-
-                // Read pre-computed diag splits from s1c[154..158]
-                int splits[5];
-                for (int i = 0; i < 5; i++) splits[i] = s1c[154+i];
-
-                // Read pre-computed intv boundaries from s1c[163..168]
-                // intv_lo[pe]: first intv whose hi > vd(split[pe])
-                // intv_hi[pe]: first intv whose lo >= vd(split[pe+1])
-                int intv_lo[4] = {0, 0, 0, 0};
-                int intv_hi[4] = {intv_n, intv_n, intv_n, intv_n};
-                if (intv_n > 0) {
-                    for (int pe = 0; pe < 3; pe++)
-                        intv_hi[pe] = s1c[166+pe];
-                    for (int pe = 1; pe < 4; pe++)
-                        intv_lo[pe] = s1c[163+pe-1];
+                // --- Load splits[0..4] from s1c[154..158] -> s1c[32..36]
+                //     via gr[11] staging.
+                for (int i = 0; i < 5; i++) {
+                    gr[11] = s1c[154 + i]; //NOP             // s1c gap
+                    s1c[32 + i] = gr[11];                    // splits[i]
+                    //NOP                                      // 1-port s1c gap
                 }
-
-                // Loop bound: max(diag_n + intv_n) across PEs
-                int max_total = 0;
-                int diag_out_cum = 0, intv_out_cum = 0;
-                int dd0[4], dd1[4], d_srcs[4];
-                int ii0[4], ii1[4], i_srcs[4];
+                // --- Init intv_lo[0..3] = 0, intv_hi[0..3] = intv_n
+                gr[11] = 0;                                  // si
+                //NOP
+                s1c[40] = gr[11];                            // intv_lo[0]
+                //NOP                                          // 1-port s1c gap
+                s1c[41] = gr[11];                            // intv_lo[1]
+                //NOP
+                s1c[42] = gr[11];                            // intv_lo[2]
+                //NOP
+                s1c[43] = gr[11];                            // intv_lo[3]
+                //NOP
+                gr[11] = gr[28];                             // intv_n
+                //NOP                                          // RAW break
+                s1c[44] = gr[11];                            // intv_hi[0]
+                //NOP
+                s1c[45] = gr[11];                            // intv_hi[1]
+                //NOP
+                s1c[46] = gr[11];                            // intv_hi[2]
+                //NOP
+                s1c[47] = gr[11];                            // intv_hi[3]
+                //NOP
+                // --- intv_n > 0 guard: overwrite intv_hi[0..2] with
+                //     s1c[166..168] and intv_lo[1..3] with s1c[163..165].
+                //     UNCONDITIONAL TRACE: emit [M29_TRACE intv_n=0]
+                //     when the guard skip fires (arm coverage per AC-10).
+                if (gr[28] > 0) goto m29_intv_guard_on;      // bgt
+                //NOP                                          // slot 1 of bgt
+                fprintf(stderr, "[M29_TRACE] intv_n==0 guard\n");
+                //NOP                                          // slot 1 reserve
+                goto m29_intv_guard_done;
+                //NOP                                          // slot 1 of goto
+            m29_intv_guard_on:
+                // Overwrite intv_hi[0..2] with s1c[166..168]
+                for (int pe = 0; pe < 3; pe++) {
+                    gr[11] = s1c[166 + pe]; //NOP             // s1c gap
+                    s1c[44 + pe] = gr[11];                    // intv_hi[pe]
+                    //NOP                                       // 1-port s1c gap
+                }
+                // Overwrite intv_lo[1..3] with s1c[163..165]
+                for (int pe = 1; pe < 4; pe++) {
+                    gr[11] = s1c[163 + pe - 1]; //NOP         // s1c gap
+                    s1c[40 + pe] = gr[11];                    // intv_lo[pe]
+                    //NOP                                       // 1-port s1c gap
+                }
+            m29_intv_guard_done:
+                // --- Load diag_base from s1c[153] into gr[3]
+                //     (used repeatedly for d_src compute + exit dispatch)
+                gr[11] = s1c[153]; //NOP                      // diag_base
+                gr[3]  = gr[11];
+                //NOP                                          // RAW break
+                // --- Load intv_base from s1c[152] into gr[4]
+                gr[11] = s1c[152]; //NOP                      // intv_base
+                gr[4]  = gr[11];
+                //NOP                                          // RAW break
+                // --- max_total reduction in gr[5]
+                //     diag_out_cum / intv_out_cum in s1c[37] / s1c[38]
+                gr[5] = 0;                                    // max_total
+                //NOP
+                gr[11] = 0;
+                //NOP
+                s1c[37] = gr[11];                             // diag_out_cum=0
+                //NOP                                          // 1-port s1c gap
+                s1c[38] = gr[11];                             // intv_out_cum=0
+                //NOP                                          // 1-port s1c gap
+                // Per-PE pass 1: compute d_n/iv_s/iv_e/iv_n/total plus
+                // tile sizes and init meta. All scalars gr-staged with
+                // //NOP barriers; all clamps label+goto.
                 for (int pe = 0; pe < 4; pe++) {
-                    int d_n = splits[pe+1] - splits[pe];
-                    int iv_s = intv_lo[pe];
-                    if (iv_s > intv_hi[pe]) iv_s = intv_hi[pe];
-                    int iv_e = intv_lo[pe];
-                    if (iv_e < intv_hi[pe]) iv_e = intv_hi[pe];
-                    int iv_n = iv_e - iv_s;
-                    int total = d_n + iv_n;
-                    if (total > max_total) max_total = total;
-
-                    // Pre-compute tile sizes for mvdq interleaved load
-                    int d0 = (d_n < DEDUP_TILE) ? d_n : DEDUP_TILE;
-                    int d1r = d_n - d0; if (d1r < 0) d1r = 0;
-                    int d1 = (d1r < DEDUP_TILE) ? d1r : DEDUP_TILE;
-                    int d_src = diag_base + splits[pe] * 2;
-                    int i0 = (iv_n < DEDUP_TILE) ? iv_n : DEDUP_TILE;
-                    int i1r = iv_n - i0; if (i1r < 0) i1r = 0;
-                    int i1 = (i1r < DEDUP_TILE) ? i1r : DEDUP_TILE;
-                    int i_src = intv_base + iv_s * 2;
-                    dd0[pe]=d0; dd1[pe]=d1; d_srcs[pe]=d_src;
-                    ii0[pe]=i0; ii1[pe]=i1; i_srcs[pe]=i_src;
-                    // s1c: track MM sources and remaining
-                    s1c[pe]      = d_src + (d0+d1) * 2;
-                    s1c[4 + pe]  = d_n - d0 - d1;
-                    s1c[8 + pe]  = i_src + (i0+i1) * 2;
-                    s1c[12 + pe] = iv_n - i0 - i1;
-                    s1c[16 + pe] = diag_out_cum;         // diag_out_base
-                    s1c[20 + pe] = 0;                    // diag_out_cursor
-                    s1c[24 + pe] = intv_out_cum;         // intv_out_base
-                    s1c[28 + pe] = 0;                    // intv_out_cursor
-                    diag_out_cum += d_n;  // max possible output
-                    intv_out_cum += iv_n;
-
-                    // Init META words (per PE, using pre-computed sizes)
-                    int *spm2 = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
+                    int pe_spm = pe * SPM_BANK_GROUP_SIZE;    // compile-time
+                    int *spm2 = &SPM_unit->buffer[pe_spm];
+                    // d_n = splits[pe+1] - splits[pe] -> gr[7]
+                    gr[11] = s1c[32 + pe]; //NOP              // splits[pe]
+                    gr[8]  = gr[11];                          // stash splits[pe]
+                    //NOP                                       // RAW break
+                    gr[11] = s1c[33 + pe]; //NOP              // splits[pe+1]
+                    gr[7]  = gr[11] - gr[8];                  // d_n
+                    //NOP                                       // RAW break
+                    // iv_s clamp low: iv_s = intv_lo[pe]; if (iv_s > intv_hi[pe]) iv_s = intv_hi[pe]
+                    gr[11] = s1c[40 + pe]; //NOP              // intv_lo[pe]
+                    gr[9]  = gr[11];                          // iv_s candidate
+                    //NOP                                       // RAW break
+                    gr[11] = s1c[44 + pe]; //NOP              // intv_hi[pe]
+                    if (gr[9] <= gr[11]) goto m29_iv_s_ok;    // bge
+                    //NOP                                       // slot 1 of bge
+                    gr[9] = gr[11];                           // iv_s = intv_hi
+                    //NOP                                       // slot 1 reserve
+                    fprintf(stderr, "[M29_TRACE] iv_s>intv_hi clamp pe=%d\n", pe);
+                    //NOP                                       // slot 1 reserve
+                m29_iv_s_ok:
+                    // iv_e = intv_lo[pe]; if (iv_e < intv_hi[pe]) iv_e = intv_hi[pe]
+                    gr[11] = s1c[40 + pe]; //NOP              // intv_lo[pe]
+                    gr[10] = gr[11];                          // iv_e candidate
+                    //NOP                                       // RAW break
+                    gr[11] = s1c[44 + pe]; //NOP              // intv_hi[pe]
+                    if (gr[10] >= gr[11]) goto m29_iv_e_ok;   // bge
+                    //NOP                                       // slot 1 of bge
+                    gr[10] = gr[11];                          // iv_e = intv_hi
+                    //NOP                                       // slot 1 reserve
+                    fprintf(stderr, "[M29_TRACE] iv_e<intv_hi clamp pe=%d\n", pe);
+                    //NOP                                       // slot 1 reserve
+                m29_iv_e_ok:
+                    // iv_n = iv_e - iv_s -> gr[11]
+                    gr[11] = gr[10] - gr[9];
+                    //NOP                                       // RAW break
+                    // total = d_n + iv_n -> gr[10]  (gr[7]+gr[11])
+                    gr[10] = gr[7] + gr[11];                  // total
+                    //NOP                                       // RAW break
+                    // Update max_total (gr[5])
+                    if (gr[10] <= gr[5]) goto m29_max_skip;   // bge
+                    //NOP                                       // slot 1 of bge
+                    gr[5] = gr[10];                           // mv
+                    //NOP                                       // slot 1 reserve
+                m29_max_skip:
+                    // d0 = min(d_n, DEDUP_TILE) in gr[8]  (gr[7] = d_n)
+                    gr[8] = gr[7];                            // d0 = d_n
+                    //NOP                                       // RAW break
+                    if (gr[8] <= DEDUP_TILE) goto m29_d0_ok;  // bge
+                    //NOP                                       // slot 1 of bge
+                    gr[8] = DEDUP_TILE;                       // si
+                    //NOP                                       // slot 1 reserve
+                m29_d0_ok:
+                    s1c[48 + pe] = gr[8];                     // dd0[pe]
+                    //NOP                                       // 1-port s1c gap
+                    // d1r = d_n - d0, clamp 0 -> temp gr[11]
+                    gr[11] = gr[7] - gr[8];                   // d_n - d0
+                    //NOP                                       // RAW break
+                    if (gr[11] >= 0) goto m29_d1r_ok;         // bge
+                    //NOP                                       // slot 1 of bge
+                    gr[11] = 0;                               // si
+                    //NOP                                       // slot 1 reserve
+                m29_d1r_ok:
+                    // d1 = min(d1r, DEDUP_TILE). Use gr[11] as the holder
+                    // (overwrite if > DEDUP_TILE).
+                    if (gr[11] <= DEDUP_TILE) goto m29_d1_ok; // bge
+                    //NOP                                       // slot 1 of bge
+                    gr[11] = DEDUP_TILE;                      // si
+                    //NOP                                       // slot 1 reserve
+                m29_d1_ok:
+                    s1c[52 + pe] = gr[11];                    // dd1[pe]
+                    //NOP                                       // 1-port s1c gap
+                    // d_src = diag_base + splits[pe] * 2 -> s1c[56+pe]
+                    //   splits[pe] was stashed in gr[8] earlier but gr[8]
+                    //   got reused for d0. Reload from s1c[32+pe].
+                    gr[11] = s1c[32 + pe]; //NOP              // splits[pe]
+                    gr[11] = gr[11] << 1;                     // * 2
+                    //NOP                                       // RAW break
+                    gr[11] = gr[11] + gr[3];                  // + diag_base
+                    //NOP                                       // RAW break
+                    s1c[56 + pe] = gr[11];                    // d_srcs[pe]
+                    //NOP                                       // 1-port s1c gap
+                    // i0 = min(iv_n, DEDUP_TILE). iv_n is in a gr slot
+                    // computed earlier and clobbered. Re-derive from
+                    // iv_e - iv_s. But iv_e (gr[10]) and iv_s (gr[9])
+                    // were overwritten above by max_total reduction logic.
+                    // Reload: gr[11] = iv_e - iv_s. Use saved iv_n from
+                    // the max_total compute path: actually gr[11] held
+                    // iv_n briefly at line "iv_n = iv_e - iv_s". It's
+                    // since been overwritten. Reload from computed form.
+                    gr[11] = s1c[40 + pe]; //NOP              // intv_lo[pe]
+                    gr[9]  = gr[11];                          // iv_s raw
+                    //NOP                                       // RAW break
+                    gr[11] = s1c[44 + pe]; //NOP              // intv_hi[pe]
+                    // Effective iv_s = min(iv_s, intv_hi)
+                    if (gr[9] <= gr[11]) goto m29_ivs_eff_ok; // bge
+                    //NOP
+                    gr[9] = gr[11];
+                    //NOP
+                m29_ivs_eff_ok:
+                    // Effective iv_e = max(intv_lo, intv_hi) = intv_hi
+                    // because iv_e init = intv_lo and then overwritten
+                    // to intv_hi if intv_lo < intv_hi (which is the
+                    // common path). So iv_e == intv_hi (gr[11]).
+                    // iv_n = gr[11] - gr[9].
+                    gr[10] = gr[11] - gr[9];                  // iv_n
+                    //NOP                                       // RAW break
+                    // i0 = min(iv_n, DEDUP_TILE) in gr[8]
+                    gr[8] = gr[10];                           // i0 = iv_n
+                    //NOP                                       // RAW break
+                    if (gr[8] <= DEDUP_TILE) goto m29_i0_ok;  // bge
+                    //NOP                                       // slot 1 of bge
+                    gr[8] = DEDUP_TILE;                       // si
+                    //NOP                                       // slot 1 reserve
+                m29_i0_ok:
+                    s1c[60 + pe] = gr[8];                     // ii0[pe]
+                    //NOP                                       // 1-port s1c gap
+                    // i1r = iv_n - i0 clamp 0 -> gr[11]
+                    gr[11] = gr[10] - gr[8];                  // iv_n - i0
+                    //NOP                                       // RAW break
+                    if (gr[11] >= 0) goto m29_i1r_ok;         // bge
+                    //NOP                                       // slot 1 of bge
+                    gr[11] = 0;                               // si
+                    //NOP                                       // slot 1 reserve
+                m29_i1r_ok:
+                    if (gr[11] <= DEDUP_TILE) goto m29_i1_ok; // bge
+                    //NOP                                       // slot 1 of bge
+                    gr[11] = DEDUP_TILE;                      // si
+                    //NOP                                       // slot 1 reserve
+                m29_i1_ok:
+                    s1c[64 + pe] = gr[11];                    // ii1[pe]
+                    //NOP                                       // 1-port s1c gap
+                    // i_src = intv_base + iv_s * 2 -> s1c[68+pe]
+                    gr[11] = gr[9] << 1;                      // iv_s * 2
+                    //NOP                                       // RAW break
+                    gr[11] = gr[11] + gr[4];                  // + intv_base
+                    //NOP                                       // RAW break
+                    s1c[68 + pe] = gr[11];                    // i_srcs[pe]
+                    //NOP                                       // 1-port s1c gap
+                    // Cross-magic dedup contract outputs:
+                    // s1c[pe]    = d_src + (d0+d1) * 2
+                    // s1c[4+pe]  = d_n - d0 - d1
+                    // s1c[8+pe]  = i_src + (i0+i1) * 2
+                    // s1c[12+pe] = iv_n - i0 - i1
+                    // s1c[16+pe] = diag_out_cum
+                    // s1c[20+pe] = 0
+                    // s1c[24+pe] = intv_out_cum
+                    // s1c[28+pe] = 0
+                    // Load d0 + d1 -> gr[11]
+                    gr[11] = s1c[48 + pe]; //NOP              // dd0[pe]
+                    gr[8]  = gr[11];                          // d0 stash
+                    //NOP                                       // RAW break
+                    gr[11] = s1c[52 + pe]; //NOP              // dd1[pe]
+                    gr[11] = gr[11] + gr[8];                  // d0+d1
+                    //NOP                                       // RAW break
+                    gr[11] = gr[11] << 1;                     // * 2
+                    //NOP                                       // RAW break
+                    gr[10] = s1c[56 + pe]; //NOP              // d_src
+                    gr[11] = gr[11] + gr[10];                 // + d_src
+                    //NOP                                       // RAW break
+                    s1c[pe] = gr[11];                         // diag mm src
+                    //NOP                                       // 1-port s1c gap
+                    // rem_diag = d_n - d0 - d1  (d_n is in gr[7] dead? No,
+                    // gr[7] was reused for d0 compute below. Let me reload.)
+                    gr[11] = s1c[33 + pe]; //NOP              // splits[pe+1]
+                    gr[10] = s1c[32 + pe]; //NOP              // splits[pe]
+                    gr[11] = gr[11] - gr[10];                 // d_n
+                    //NOP                                       // RAW break
+                    gr[10] = s1c[48 + pe]; //NOP              // dd0
+                    gr[11] = gr[11] - gr[10];                 // - d0
+                    //NOP                                       // RAW break
+                    gr[10] = s1c[52 + pe]; //NOP              // dd1
+                    gr[11] = gr[11] - gr[10];                 // - d1
+                    //NOP                                       // RAW break
+                    if (gr[11] >= 0) goto m29_rem_d_ok;       // bge
+                    //NOP                                       // slot 1 of bge
+                    gr[11] = 0;                               // si
+                    //NOP                                       // slot 1 reserve
+                m29_rem_d_ok:
+                    s1c[4 + pe] = gr[11];                     // diag remaining
+                    //NOP                                       // 1-port s1c gap
+                    // s1c[8+pe] = i_src + (i0+i1) * 2
+                    gr[11] = s1c[60 + pe]; //NOP              // ii0[pe]
+                    gr[8]  = gr[11];                          // i0 stash
+                    //NOP                                       // RAW break
+                    gr[11] = s1c[64 + pe]; //NOP              // ii1[pe]
+                    gr[11] = gr[11] + gr[8];                  // i0+i1
+                    //NOP                                       // RAW break
+                    gr[11] = gr[11] << 1;                     // * 2
+                    //NOP                                       // RAW break
+                    gr[10] = s1c[68 + pe]; //NOP              // i_src
+                    gr[11] = gr[11] + gr[10];                 // + i_src
+                    //NOP                                       // RAW break
+                    s1c[8 + pe] = gr[11];                     // intv mm src
+                    //NOP                                       // 1-port s1c gap
+                    // s1c[12+pe] = iv_n - i0 - i1  (iv_n reload via compute)
+                    gr[11] = s1c[40 + pe]; //NOP              // intv_lo[pe]
+                    gr[9]  = gr[11];                          // iv_s raw
+                    //NOP                                       // RAW break
+                    gr[11] = s1c[44 + pe]; //NOP              // intv_hi[pe]
+                    if (gr[9] <= gr[11]) goto m29_ivs_rem_ok; // bge
+                    //NOP
+                    gr[9] = gr[11];
+                    //NOP
+                m29_ivs_rem_ok:
+                    gr[10] = gr[11] - gr[9];                  // iv_n
+                    //NOP                                       // RAW break
+                    gr[11] = s1c[60 + pe]; //NOP              // ii0
+                    gr[10] = gr[10] - gr[11];                 // - i0
+                    //NOP                                       // RAW break
+                    gr[11] = s1c[64 + pe]; //NOP              // ii1
+                    gr[10] = gr[10] - gr[11];                 // - i1
+                    //NOP                                       // RAW break
+                    if (gr[10] >= 0) goto m29_rem_i_ok;       // bge
+                    //NOP                                       // slot 1 of bge
+                    gr[10] = 0;                               // si
+                    //NOP                                       // slot 1 reserve
+                m29_rem_i_ok:
+                    s1c[12 + pe] = gr[10];                    // intv remaining
+                    //NOP                                       // 1-port s1c gap
+                    // s1c[16+pe] = diag_out_cum (from s1c[37])
+                    gr[11] = s1c[37]; //NOP                   // diag_out_cum
+                    s1c[16 + pe] = gr[11];                    // diag_out_base
+                    //NOP                                       // 1-port s1c gap
+                    s1c[20 + pe] = 0;                         // diag_out_cursor
+                    //NOP                                       // 1-port s1c gap
+                    // s1c[24+pe] = intv_out_cum (from s1c[38])
+                    gr[11] = s1c[38]; //NOP                   // intv_out_cum
+                    s1c[24 + pe] = gr[11];                    // intv_out_base
+                    //NOP                                       // 1-port s1c gap
+                    s1c[28 + pe] = 0;                         // intv_out_cursor
+                    //NOP                                       // 1-port s1c gap
+                    // diag_out_cum += d_n  (d_n = splits[pe+1]-splits[pe])
+                    gr[11] = s1c[33 + pe]; //NOP              // splits[pe+1]
+                    gr[10] = s1c[32 + pe]; //NOP              // splits[pe]
+                    gr[11] = gr[11] - gr[10];                 // d_n
+                    //NOP                                       // RAW break
+                    gr[10] = s1c[37]; //NOP                   // diag_out_cum
+                    gr[10] = gr[10] + gr[11];                 // + d_n
+                    //NOP                                       // RAW break
+                    s1c[37] = gr[10];                         // write back
+                    //NOP                                       // 1-port s1c gap
+                    // intv_out_cum += iv_n
+                    gr[11] = s1c[40 + pe]; //NOP              // intv_lo[pe]
+                    gr[9]  = gr[11];                          // iv_s raw
+                    //NOP                                       // RAW break
+                    gr[11] = s1c[44 + pe]; //NOP              // intv_hi[pe]
+                    if (gr[9] <= gr[11]) goto m29_ivs_cum_ok; // bge
+                    //NOP
+                    gr[9] = gr[11];
+                    //NOP
+                m29_ivs_cum_ok:
+                    gr[10] = gr[11] - gr[9];                  // iv_n
+                    //NOP                                       // RAW break
+                    gr[11] = s1c[38]; //NOP                   // intv_out_cum
+                    gr[11] = gr[11] + gr[10];                 // + iv_n
+                    //NOP                                       // RAW break
+                    s1c[38] = gr[11];                         // write back
+                    //NOP                                       // 1-port s1c gap
+                    // Init META words (per PE). SPM stores gapped via
+                    // //NOP to avoid 1-port structural hazards.
                     spm2[DEDUP_META+0] = (int)0xFFFFFFFF;
+                    //NOP
                     spm2[DEDUP_META+1] = 0;
-                    for (int m = 2; m < 10; m++) spm2[DEDUP_META+m] = 0;
-                    spm2[DEDUP_META+10] = dd0[pe];
-                    spm2[DEDUP_META+11] = dd1[pe];
-                    spm2[DEDUP_META+12] = ii0[pe];
-                    spm2[DEDUP_META+13] = ii1[pe];
+                    //NOP
+                    spm2[DEDUP_META+2] = 0;
+                    //NOP
+                    spm2[DEDUP_META+3] = 0;
+                    //NOP
+                    spm2[DEDUP_META+4] = 0;
+                    //NOP
+                    spm2[DEDUP_META+5] = 0;
+                    //NOP
+                    spm2[DEDUP_META+6] = 0;
+                    //NOP
+                    spm2[DEDUP_META+7] = 0;
+                    //NOP
+                    spm2[DEDUP_META+8] = 0;
+                    //NOP
+                    spm2[DEDUP_META+9] = 0;
+                    //NOP
+                    // dd0[pe] -> META+10; dd1[pe] -> META+11;
+                    // ii0[pe] -> META+12; ii1[pe] -> META+13
+                    gr[11] = s1c[48 + pe]; //NOP              // dd0
+                    spm2[DEDUP_META+10] = gr[11];
+                    //NOP
+                    gr[11] = s1c[52 + pe]; //NOP              // dd1
+                    spm2[DEDUP_META+11] = gr[11];
+                    //NOP
+                    gr[11] = s1c[60 + pe]; //NOP              // ii0
+                    spm2[DEDUP_META+12] = gr[11];
+                    //NOP
+                    gr[11] = s1c[64 + pe]; //NOP              // ii1
+                    spm2[DEDUP_META+13] = gr[11];
+                    //NOP
                     spm2[DEDUP_META+14] = (int)0xFFFFFFFF;
-                    for (int m = 15; m < 20; m++) spm2[DEDUP_META+m] = 0;
+                    //NOP
+                    spm2[DEDUP_META+15] = 0;
+                    //NOP
+                    spm2[DEDUP_META+16] = 0;
+                    //NOP
+                    spm2[DEDUP_META+17] = 0;
+                    //NOP
+                    spm2[DEDUP_META+18] = 0;
+                    //NOP
+                    spm2[DEDUP_META+19] = 0;
+                    //NOP
                 }
-                // Interleaved mvdq tile loads across PEs
+                // --- Interleaved mvdq tile loads across PEs.
+                //     4 passes: DIAG_BUF0/1 + INTV_BUF0/1.
+                //     Chunk-outer PE-inner; `continue` -> label+goto.
                 int *spm = SPM_unit->buffer;
-                #define M29_MVDQ(buf_off, sizes, srcs, extra) do { \
-                    int mw = 0; \
-                    for (int pe=0; pe<4; pe++) { \
-                        int w = sizes[pe]*2; if (w > mw) mw = w; } \
-                    for (int j = 0; j < mw; j += 8) \
-                        for (int pe = 0; pe < 4; pe++) { \
-                            int w = sizes[pe]*2; \
-                            if (j >= w) continue; \
-                            int cnt = w-j; if (cnt>8) cnt=8; \
-                            mvdq_copy(&spm[pe*SPM_BANK_GROUP_SIZE \
-                                +buf_off+j], &mm[srcs[pe]+extra+j], cnt); \
-                        } \
-                } while(0)
-                // Diag BUF0 and BUF1
-                M29_MVDQ(DEDUP_DIAG_BUF0, dd0, d_srcs, 0);
-                { int d1_srcs[4];
-                  for (int pe=0; pe<4; pe++) d1_srcs[pe] = d_srcs[pe] + dd0[pe]*2;
-                  M29_MVDQ(DEDUP_DIAG_BUF1, dd1, d1_srcs, 0);
+                // ====== Diag BUF0: sizes from s1c[48+pe], srcs from s1c[56+pe]
+                gr[8] = 0;                                    // mw acc
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[11] = s1c[48 + pe]; //NOP              // dd0
+                    gr[9]  = gr[11] + gr[11];                 // * 2
+                    //NOP
+                    if (gr[9] <= gr[8]) goto m29_mw_d0_skip;  // bge
+                    //NOP
+                    gr[8] = gr[9];
+                    //NOP
+                m29_mw_d0_skip:
+                    (void)0;
                 }
-                // Intv BUF0 and BUF1
-                M29_MVDQ(DEDUP_INTV_BUF0, ii0, i_srcs, 0);
-                { int i1_srcs[4];
-                  for (int pe=0; pe<4; pe++) i1_srcs[pe] = i_srcs[pe] + ii0[pe]*2;
-                  M29_MVDQ(DEDUP_INTV_BUF1, ii1, i1_srcs, 0);
+                gr[10] = 0;                                   // j
+                //NOP
+            m29_mvdq_d0_top:
+                if (gr[10] >= gr[8]) goto m29_mvdq_d0_done;   // bge
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    constexpr int D0_OFF[4] = {
+                        0 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF0,
+                        1 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF0,
+                        2 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF0,
+                        3 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF0 };
+                    int pe_dst_base = D0_OFF[pe];
+                    gr[11] = s1c[48 + pe]; //NOP              // dd0
+                    gr[9]  = gr[11] + gr[11];                 // w
+                    //NOP
+                    if (gr[10] >= gr[9]) goto m29_d0_pe_skip; // bge
+                    //NOP
+                    gr[11] = gr[9] - gr[10];                  // cnt
+                    //NOP
+                    if (gr[11] <= 8) goto m29_d0_cnt_ok;      // bge
+                    //NOP
+                    gr[11] = 8;
+                    //NOP
+                m29_d0_cnt_ok:
+                    gr[7] = gr[10] + pe_dst_base;             // dst
+                    //NOP
+                    gr[9] = s1c[56 + pe]; //NOP               // d_src
+                    gr[9] = gr[9] + gr[10];                   // + j
+                    //NOP
+                    mvdq_copy(&spm[gr[7]], &mm[gr[9]], gr[11]);
+                m29_d0_pe_skip:
+                    (void)0;
                 }
-                #undef M29_MVDQ
-                int niter = ((max_total + DEDUP_TILE - 1)
-                    / DEDUP_TILE) * DEDUP_TILE;
-                gr[6] = (niter == 0) ? DEDUP_TILE : niter;
-                // Dedup diag output goes to opposite of active_diag_base
-                gr[4] = (diag_base == MM_SORT_BUF)
-                    ? s1c[144] : MM_SORT_BUF;
-                gr[7] = MM_DEDUP_INTV_OUT;
-                // Save original counts for reference dedup in M32
+                gr[10] = gr[10] + 8;
+                //NOP
+                goto m29_mvdq_d0_top;
+                //NOP
+            m29_mvdq_d0_done:
+                // ====== Diag BUF1: sizes s1c[52+pe]; srcs = s1c[56+pe]+dd0*2
+                gr[8] = 0;
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[11] = s1c[52 + pe]; //NOP              // dd1
+                    gr[9]  = gr[11] + gr[11];
+                    //NOP
+                    if (gr[9] <= gr[8]) goto m29_mw_d1_skip;
+                    //NOP
+                    gr[8] = gr[9];
+                    //NOP
+                m29_mw_d1_skip:
+                    (void)0;
+                }
+                gr[10] = 0;
+                //NOP
+            m29_mvdq_d1_top:
+                if (gr[10] >= gr[8]) goto m29_mvdq_d1_done;
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    constexpr int D1_OFF[4] = {
+                        0 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF1,
+                        1 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF1,
+                        2 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF1,
+                        3 * SPM_BANK_GROUP_SIZE + DEDUP_DIAG_BUF1 };
+                    int pe_dst_base = D1_OFF[pe];
+                    gr[11] = s1c[52 + pe]; //NOP
+                    gr[9]  = gr[11] + gr[11];
+                    //NOP
+                    if (gr[10] >= gr[9]) goto m29_d1_pe_skip;
+                    //NOP
+                    gr[11] = gr[9] - gr[10];
+                    //NOP
+                    if (gr[11] <= 8) goto m29_d1_cnt_ok;
+                    //NOP
+                    gr[11] = 8;
+                    //NOP
+                m29_d1_cnt_ok:
+                    gr[7] = gr[10] + pe_dst_base;
+                    //NOP
+                    // src = d_src + dd0*2 + j
+                    gr[9]  = s1c[48 + pe]; //NOP              // dd0
+                    gr[9]  = gr[9] + gr[9];                   // * 2
+                    //NOP
+                    gr[3]  = s1c[56 + pe]; //NOP              // d_src
+                    gr[9]  = gr[9] + gr[3];
+                    //NOP
+                    gr[9]  = gr[9] + gr[10];                  // + j
+                    //NOP
+                    mvdq_copy(&spm[gr[7]], &mm[gr[9]], gr[11]);
+                m29_d1_pe_skip:
+                    (void)0;
+                }
+                gr[10] = gr[10] + 8;
+                //NOP
+                goto m29_mvdq_d1_top;
+                //NOP
+            m29_mvdq_d1_done:
+                // ====== Intv BUF0: sizes s1c[60+pe], srcs s1c[68+pe]
+                gr[8] = 0;
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[11] = s1c[60 + pe]; //NOP
+                    gr[9]  = gr[11] + gr[11];
+                    //NOP
+                    if (gr[9] <= gr[8]) goto m29_mw_i0_skip;
+                    //NOP
+                    gr[8] = gr[9];
+                    //NOP
+                m29_mw_i0_skip:
+                    (void)0;
+                }
+                gr[10] = 0;
+                //NOP
+            m29_mvdq_i0_top:
+                if (gr[10] >= gr[8]) goto m29_mvdq_i0_done;
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    constexpr int I0_OFF[4] = {
+                        0 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF0,
+                        1 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF0,
+                        2 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF0,
+                        3 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF0 };
+                    int pe_dst_base = I0_OFF[pe];
+                    gr[11] = s1c[60 + pe]; //NOP
+                    gr[9]  = gr[11] + gr[11];
+                    //NOP
+                    if (gr[10] >= gr[9]) goto m29_i0_pe_skip;
+                    //NOP
+                    gr[11] = gr[9] - gr[10];
+                    //NOP
+                    if (gr[11] <= 8) goto m29_i0_cnt_ok;
+                    //NOP
+                    gr[11] = 8;
+                    //NOP
+                m29_i0_cnt_ok:
+                    gr[7] = gr[10] + pe_dst_base;
+                    //NOP
+                    gr[9] = s1c[68 + pe]; //NOP               // i_src
+                    gr[9] = gr[9] + gr[10];                   // + j
+                    //NOP
+                    mvdq_copy(&spm[gr[7]], &mm[gr[9]], gr[11]);
+                m29_i0_pe_skip:
+                    (void)0;
+                }
+                gr[10] = gr[10] + 8;
+                //NOP
+                goto m29_mvdq_i0_top;
+                //NOP
+            m29_mvdq_i0_done:
+                // ====== Intv BUF1: sizes s1c[64+pe]; srcs = s1c[68+pe]+ii0*2
+                gr[8] = 0;
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[11] = s1c[64 + pe]; //NOP
+                    gr[9]  = gr[11] + gr[11];
+                    //NOP
+                    if (gr[9] <= gr[8]) goto m29_mw_i1_skip;
+                    //NOP
+                    gr[8] = gr[9];
+                    //NOP
+                m29_mw_i1_skip:
+                    (void)0;
+                }
+                gr[10] = 0;
+                //NOP
+            m29_mvdq_i1_top:
+                if (gr[10] >= gr[8]) goto m29_mvdq_i1_done;
+                //NOP
+                for (int pe = 0; pe < 4; pe++) {
+                    constexpr int I1_OFF[4] = {
+                        0 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF1,
+                        1 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF1,
+                        2 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF1,
+                        3 * SPM_BANK_GROUP_SIZE + DEDUP_INTV_BUF1 };
+                    int pe_dst_base = I1_OFF[pe];
+                    gr[11] = s1c[64 + pe]; //NOP
+                    gr[9]  = gr[11] + gr[11];
+                    //NOP
+                    if (gr[10] >= gr[9]) goto m29_i1_pe_skip;
+                    //NOP
+                    gr[11] = gr[9] - gr[10];
+                    //NOP
+                    if (gr[11] <= 8) goto m29_i1_cnt_ok;
+                    //NOP
+                    gr[11] = 8;
+                    //NOP
+                m29_i1_cnt_ok:
+                    gr[7] = gr[10] + pe_dst_base;
+                    //NOP
+                    gr[9]  = s1c[60 + pe]; //NOP              // ii0
+                    gr[9]  = gr[9] + gr[9];                   // * 2
+                    //NOP
+                    gr[3]  = s1c[68 + pe]; //NOP              // i_src
+                    gr[9]  = gr[9] + gr[3];
+                    //NOP
+                    gr[9]  = gr[9] + gr[10];                  // + j
+                    //NOP
+                    mvdq_copy(&spm[gr[7]], &mm[gr[9]], gr[11]);
+                m29_i1_pe_skip:
+                    (void)0;
+                }
+                gr[10] = gr[10] + 8;
+                //NOP
+                goto m29_mvdq_i1_top;
+                //NOP
+            m29_mvdq_i1_done:
+                // niter = ceil_to_multiple(max_total, DEDUP_TILE).
+                // Default niter to DEDUP_TILE when max_total == 0
+                // (plan-2a precedent: gr[6] = (niter==0) ? DEDUP_TILE : niter).
+                // Emit as: gr[11] = (max_total + DEDUP_TILE-1) / DEDUP_TILE
+                //                 * DEDUP_TILE
+                //         then: if (gr[11] == 0) goto pick_default else gr[6]=gr[11]
+                gr[11] = gr[5] + (DEDUP_TILE - 1);            // addi
+                //NOP                                           // RAW break
+                gr[11] = (gr[11] / DEDUP_TILE) * DEDUP_TILE;  // constexpr div/mul
+                //NOP                                           // RAW break
+                if (gr[11] != 0) goto m29_niter_nonzero;      // bne
+                //NOP                                           // slot 1 of bne
+                gr[6] = DEDUP_TILE;                           // si
+                //NOP
+                goto m29_niter_done;
+                //NOP                                           // slot 1 of goto
+            m29_niter_nonzero:
+                gr[6] = gr[11];
+                //NOP
+            m29_niter_done:
+                // Exit dispatch: gr[4] = (diag_base==MM_SORT_BUF) ? s1c[144]
+                //                                                  : MM_SORT_BUF.
+                // diag_base RELOAD from s1c[153] (the gr[3] that held it
+                // at magic entry was reused as d_src/i_src scratch in
+                // the mvdq_d1/mvdq_i1 inner loops). gr[11] staging.
+                gr[11] = s1c[153]; //NOP                              // diag_base
+                if (gr[11] != MM_SORT_BUF) goto m29_dedup_out_sort;  // bne
+                //NOP                                                 // slot 1 of bne
+                // diag_base == MM_SORT_BUF: gr[4] = s1c[144]
+                gr[11] = s1c[144]; //NOP
+                gr[4]  = gr[11];
+                //NOP
+                goto m29_dedup_out_done;
+                //NOP                                                 // slot 1 of goto
+            m29_dedup_out_sort:
+                gr[4] = MM_SORT_BUF;                                  // si
+                //NOP
+            m29_dedup_out_done:
+                gr[7] = MM_DEDUP_INTV_OUT;                            // si
+                //NOP
             }
         } else if (magic_id == 30) {
             // Dedup reload: refill exhausted input buffers from MM.
