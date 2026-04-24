@@ -6246,28 +6246,35 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     //NOP                                       // 1-port s1c gap
                     // i0 = min(iv_n, DEDUP_TILE). iv_n is in a gr slot
                     // computed earlier and clobbered. Re-derive from
-                    // iv_e - iv_s. But iv_e (gr[10]) and iv_s (gr[9])
-                    // were overwritten above by max_total reduction logic.
-                    // Reload: gr[11] = iv_e - iv_s. Use saved iv_n from
-                    // the max_total compute path: actually gr[11] held
-                    // iv_n briefly at line "iv_n = iv_e - iv_s". It's
-                    // since been overwritten. Reload from computed form.
+                    // iv_e - iv_s using the SAME min/max clamps as the
+                    // first computation at m29_iv_s_ok / m29_iv_e_ok.
+                    // Bug fix (Codex review R8 P1): earlier code here
+                    // assumed iv_e == intv_hi always, which collapses
+                    // iv_n to 0 on the seam-split case where intv_lo >
+                    // intv_hi (iv_e should then be intv_lo, not intv_hi).
                     gr[11] = s1c[40 + pe]; //NOP              // intv_lo[pe]
-                    gr[9]  = gr[11];                          // iv_s raw
+                    gr[9]  = gr[11];                          // iv_s candidate
                     //NOP                                       // RAW break
                     gr[11] = s1c[44 + pe]; //NOP              // intv_hi[pe]
-                    // Effective iv_s = min(iv_s, intv_hi)
+                    // iv_s = min(intv_lo, intv_hi).
                     if (gr[9] <= gr[11]) goto m29_ivs_eff_ok; // bge
-                    //NOP
-                    gr[9] = gr[11];
-                    //NOP
+                    //NOP                                       // slot 1 of bge
+                    gr[9] = gr[11];                           // iv_s = intv_hi
+                    //NOP                                       // slot 1 reserve
                 m29_ivs_eff_ok:
-                    // Effective iv_e = max(intv_lo, intv_hi) = intv_hi
-                    // because iv_e init = intv_lo and then overwritten
-                    // to intv_hi if intv_lo < intv_hi (which is the
-                    // common path). So iv_e == intv_hi (gr[11]).
-                    // iv_n = gr[11] - gr[9].
-                    gr[10] = gr[11] - gr[9];                  // iv_n
+                    // iv_e = max(intv_lo, intv_hi). Reload intv_lo and
+                    // intv_hi, clamp iv_e up.
+                    gr[11] = s1c[40 + pe]; //NOP              // intv_lo[pe]
+                    gr[10] = gr[11];                          // iv_e candidate
+                    //NOP                                       // RAW break
+                    gr[11] = s1c[44 + pe]; //NOP              // intv_hi[pe]
+                    if (gr[10] >= gr[11]) goto m29_ive_eff_ok; // bge
+                    //NOP                                       // slot 1 of bge
+                    gr[10] = gr[11];                          // iv_e = intv_hi
+                    //NOP                                       // slot 1 reserve
+                m29_ive_eff_ok:
+                    // iv_n = iv_e - iv_s.
+                    gr[10] = gr[10] - gr[9];                  // iv_n
                     //NOP                                       // RAW break
                     // i0 = min(iv_n, DEDUP_TILE) in gr[8]
                     gr[8] = gr[10];                           // i0 = iv_n
