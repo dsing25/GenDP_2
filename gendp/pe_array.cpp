@@ -33,10 +33,10 @@ PerfCounter lsqFullStalls = 0;
 PerfCounter peHalted = 0;
 PerfCounter forwardableBankConflict = 0;
 PerfCounter controllerSpinCycles = 0;
-PerfCounter fin0DupDiags = 0;
 PerfCounter peComputeHaltCycles = 0;
 PerfCounter peComputeNops = 0;
 PerfCounter peCtrlNops = 0;
+PerfCounter controllerNops = 0;
 
 pe_array::pe_array(int input_size, int output_size) {
 
@@ -806,6 +806,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #endif
     if (main_instruction_setting == MAIN_INSTRUCTION_2) {
         if (((opcode == 4 || opcode == 5) && (dest == 5 || dest == 6 || dest == 11 || dest == 12 || dest == 13 || dest == 14)) || opcode == 14) {
+            if (opcode == 14) controllerNops++;
             (*PC)++;
 #ifdef PROFILE
             printf("\n");
@@ -2034,16 +2035,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
                 s1c[21] = gr[7];                          // total_diags
 
-                // --- Non-ISA performance counter: duplicate fin0 diags ---
-                {
-                    int tf = s1c[20];
-                    for (int i = 0; i < tf; i++)
-                        for (int j = i + 1; j < tf; j++)
-                            if (s1c[32+2*i] == s1c[32+2*j] &&
-                                s1c[32+2*i+1] == s1c[32+2*j+1])
-                                fin0DupDiags++;
-                }
-                // --- End non-ISA performance counter ---
 
                 // === Section 4: Prefetch arc_off pairs S2 → S1c ===
                 // s1c[ARC_META+2*d]=arc_off[v], s1c[ARC_META+2*d+1]=arc_off[v+1]
@@ -3764,6 +3755,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #endif
         (*PC)++;
     } else if (opcode == 14) {      // None
+        controllerNops++;
         (*PC)++;
 #ifdef PROFILE
         printf("No-op.\n");
@@ -4326,10 +4318,10 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     peHalted = 0;
     forwardableBankConflict = 0;
     controllerSpinCycles = 0;
-    fin0DupDiags = 0;
     peComputeHaltCycles = 0;
     peComputeNops = 0;
     peCtrlNops = 0;
+    controllerNops = 0;
 
     while (1) {
         cycle++;
@@ -4553,14 +4545,14 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     printf("CaseCycles: %d\n", cycle);
     printf("TotalSpmRequests: %d\n", totalSpmRequests);
     printf("PeCtrlHalted: %d\n", peHalted);
-    printf("PeComputeHalted: %d\n", peComputeHaltCycles);
+    printf("PeCompHalted: %d\n", peComputeHaltCycles);
     printf("PeCtrlNops: %d\n", peCtrlNops);
-    printf("PeComputeNops: %d\n", peComputeNops);
+    printf("PeCompNops: %d\n", peComputeNops);
     printf("BankConflictStalls: %d\n", bankConflictStalls);
     printf("ForwardableBankConflict: %d\n", forwardableBankConflict);
     printf("LsqFullStalls: %d\n", lsqFullStalls);
     printf("SyncSpinBNEs: %d\n", controllerSpinCycles);
-    printf("Fin0DupDiags: %d\n", fin0DupDiags);
+    printf("ControllerNops: %d\n", controllerNops);
 
     // fprintf(stderr, "Finish simulation.\n");
 }
