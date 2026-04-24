@@ -3243,7 +3243,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
             }
         } else if (magic_id == 37) {
-            // Intv new+old merge split + load (pointer-swap version).
+            // Intv new+old merge split + load (Plan 3c l6f).
+            // Header values staged to architectural s1c[74..79] slots
+            // per Codex R2 plan; top-level early-exit via labeled
+            // branches; AC-10 invariants preserved (a_sp in s1c[40..44],
+            // b_sp in s1c[45..49], 3-partition BS shape untouched,
+            // comparator polarity preserved, chunk-outer/PE-inner
+            // mvdq_copy tile-load preserved).
+            //
+            // Arch state slots at entry (magic-local; overwritten
+            // before use by downstream magics):
+            //   s1c[74] = n_new (gr[24])
+            //   s1c[75] = intv_n (from s1c[146])
+            //   s1c[76] = active_intv (from s1c[152])
+            //   s1c[77] = out_buf (MM_SWAP or MM_INTV; computed below)
+            //   s1c[78] = n_total = n_new + intv_n
+            //   s1c[79] = nape = (n_total + 3) >> 2
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
@@ -3252,27 +3267,66 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 constexpr int MM_INTV     = DIAG_CAP_V * 6;
                 constexpr int MM_NEXT_INTV = MM_INTV + INTV_CAP_V * 2;
                 constexpr int MM_SWAP     = MM_NEXT_INTV + INTV_CAP_V * 2;
-                int n_new  = gr[24];
-                // R8 fix: stage s1c[146], s1c[152] through gr[11] + 1-NOP.
+                // Stage n_new = gr[24] -> s1c[74].
+                gr[11] = gr[24]; //NOP
+                s1c[74] = gr[11];                         // n_new
+                //NOP                                      // s1c gap
+                // Stage intv_n = s1c[146] -> s1c[75].
                 gr[11] = s1c[146];
-                //NOP                                    // s1c 1-cycle gap
-                int intv_n = gr[11];
-                int n_total = n_new + intv_n;
+                //NOP                                      // s1c 1-cycle gap
+                s1c[75] = gr[11];                         // intv_n
+                //NOP                                      // s1c gap
+                // n_total = n_new + intv_n -> s1c[78].
+                gr[5] = gr[24];                           // n_new
+                //NOP                                      // RAW break
+                gr[11] = s1c[75]; //NOP                   // intv_n
+                gr[5] = gr[5] + gr[11];                   // n_total
+                //NOP                                      // RAW break
+                s1c[78] = gr[5];                          // n_total
+                //NOP                                      // s1c gap
+                // Stage active_intv = s1c[152] -> s1c[76].
                 gr[11] = s1c[152];
-                //NOP                                    // s1c 1-cycle gap
-                int active_intv = gr[11]; // current intv buffer base
-                if (n_new <= 0 || intv_n <= 0) {
-                    // Only one source: just point active base there
-                    if (n_new > 0)
-                        s1c[152] = MM_NEXT_INTV;
-                    // else: active_intv stays (old intv already there)
-                    gr[6] = 0; s1c[149] = -1;
-                } else {
-                    // Merge: inlined interleaved binary search + load
-                    int out_buf = (active_intv == MM_INTV) ? MM_SWAP : MM_INTV;
-                    int abase = MM_NEXT_INTV, bbase = active_intv;
-                    int n_total2 = n_new + intv_n;
+                //NOP                                      // s1c 1-cycle gap
+                s1c[76] = gr[11];                         // active_intv
+                //NOP                                      // s1c gap
+                // Top-level early-exit: if (n_new <= 0 || intv_n <= 0)
+                // take the single-source arm. Lowered to two sequential
+                // labeled branches (blt/ble over s1c[74] and s1c[75]).
+                gr[11] = s1c[74]; //NOP                   // n_new
+                if (gr[11] <= 0) goto m37_single_src;     // ble
+                //NOP                                      // slot 1 of ble
+                gr[11] = s1c[75]; //NOP                   // intv_n
+                if (gr[11] <= 0) goto m37_single_src;     // ble
+                //NOP                                      // slot 1 of ble
+                goto m37_merge;                           // neither <= 0
+                //NOP                                      // slot 1 of goto
+            m37_single_src:
+                // Single source: if (n_new > 0) set s1c[152]=MM_NEXT_INTV.
+                gr[11] = s1c[74]; //NOP                   // n_new
+                if (gr[11] <= 0) goto m37_single_src_old; // ble
+                //NOP                                      // slot 1 of ble
+                gr[11] = MM_NEXT_INTV; //NOP
+                s1c[152] = gr[11];
+                //NOP                                      // s1c gap
+            m37_single_src_old:
+                gr[6] = 0;                                // merge_happened = false
+                //NOP                                      // RAW break
+                gr[11] = -1; //NOP                        // merge_skipped sentinel
+                s1c[149] = gr[11];
+                //NOP                                      // s1c gap
+                goto m37_done;
+                //NOP                                      // slot 1 of goto
+            m37_merge:
+                {
+                    // Merge: inlined interleaved binary search + load.
+                    // out_buf = (active_intv == MM_INTV) ? MM_SWAP : MM_INTV.
+                    int out_buf = (s1c[76] == MM_INTV) ? MM_SWAP : MM_INTV;
+                    int abase = MM_NEXT_INTV, bbase = s1c[76];
+                    int n_total2 = s1c[74] + s1c[75];     // n_new + intv_n
                     int nape = (n_total2 + 3) / 4;
+                    int n_new = s1c[74];                  // alias for legacy body
+                    int intv_n = s1c[75];                 // alias for legacy body
+                    (void)abase; (void)bbase;             // used below
                     // AC-5 Stage B (Round 16): a_sp[0..4] → s1c[40..44],
                     // b_sp[0..4] → s1c[45..49]. Layout matches m28.
                     // Lifetime: post-bs → per-PE compute loop end.
@@ -3566,8 +3620,14 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[4] = out_buf;
                     s1c[152] = out_buf;
                     s1c[149] = 0;
-                }
-                s1c[148] = n_total;
+                }                                          // end merge arm
+            m37_done:
+                // Shared post-split: publish n_total -> s1c[148]
+                // (re-read from s1c[78] via gr[11] since C++ n_total local
+                // no longer exists across the labeled branches).
+                gr[11] = s1c[78]; //NOP                   // n_total
+                s1c[148] = gr[11];
+                //NOP                                      // s1c gap
                 // AC-5 Stage B (Round 16): bvd0/bvd1/bvd2, pts[4], and
                 // pe_base C++ locals eliminated. Per-PE re-reads of
                 // s1c[159..161] through gr[11] store directly to the
