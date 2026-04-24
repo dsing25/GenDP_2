@@ -3612,17 +3612,24 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         gr[11] = s1c[6 + p]; //NOP      // bs_target[p]
                         gr[4]  = gr[11] - gr[3];         // b_sp candidate
                         gr[5]  = s1c[40 + p]; //NOP     // prior a_sp[p]
-                        if (gr[3] < gr[5]) {
-                            gr[3] = gr[5];
-                            //NOP                         // RAW barrier gr[3]
-                            gr[4] = gr[11] - gr[3];
-                        }
+                        // if (gr[3] < gr[5]) { gr[3]=gr[5]; gr[4]=bs_tgt-gr[3]; }
+                        // Lowered to labeled bge branch.
+                        if (gr[3] >= gr[5]) goto m37_asp_mono_ok; // bge
+                        //NOP                              // slot 1 of bge
+                        gr[3] = gr[5];                   // gr[3] = prior a_sp
+                        //NOP                              // RAW barrier gr[3]
+                        gr[4] = gr[11] - gr[3];          // recompute b_sp candidate
+                        //NOP                              // RAW break
+                    m37_asp_mono_ok:
                         gr[5]  = s1c[45 + p]; //NOP     // prior b_sp[p]
-                        if (gr[4] < gr[5]) {
-                            gr[4] = gr[5];
-                            //NOP                         // RAW barrier gr[4]
-                            gr[3] = gr[11] - gr[4];
-                        }
+                        // if (gr[4] < gr[5]) { gr[4]=gr[5]; gr[3]=bs_tgt-gr[4]; }
+                        if (gr[4] >= gr[5]) goto m37_bsp_mono_ok; // bge
+                        //NOP                              // slot 1 of bge
+                        gr[4] = gr[5];
+                        //NOP                              // RAW barrier gr[4]
+                        gr[3] = gr[11] - gr[4];
+                        //NOP                              // RAW break
+                    m37_bsp_mono_ok:
                         s1c[41 + p] = gr[3];             // a_sp[p+1]
                         //NOP                             // 1-port s1c gap
                         s1c[46 + p] = gr[4];             // b_sp[p+1]
@@ -4172,23 +4179,35 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 // used gr[4] as pe_base and clobbered the m37→m33/m35
                 // out_buf contract (BL-20260421).
                 gr[5] = 0; // pe_base architectural
+                //NOP                                    // RAW break
                 for (int pe = 0; pe < 4; pe++) {
-                    int *spm = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
-                    gr[11] = s1c[159];
-                    //NOP                                // s1c 1-cycle gap
-                    spm[MERGE_META + 13] = gr[11];      // boundary_vd[0]
-                    gr[11] = s1c[160];
-                    //NOP                                // s1c 1-cycle gap
-                    spm[MERGE_META + 14] = gr[11];      // boundary_vd[1]
-                    gr[11] = s1c[161];
-                    //NOP                                // s1c 1-cycle gap
-                    spm[MERGE_META + 15] = gr[11];      // boundary_vd[2]
-                    for (int i = 0; i < 6; i++) spm[976+i] = -1; // hi/lo_pos
-                    spm[982] = 0;                       // cumulative output count
-                    spm[983] = gr[5];                   // pe_base
-                    gr[11] = s1c[pe];                   // pts[pe]
-                    //NOP                                // s1c 1-cycle gap
-                    gr[5] = gr[5] + gr[11];             // pe_base += pts[pe]
+                    // Per-PE tail: no `int *spm = ...` alias; write via
+                    // direct `SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE + ...]`.
+                    // hi/lo_pos initialization unrolled as 6 compile-time
+                    // scalar stores (per the m24/m28 convention for small
+                    // constant-bounded init sequences).
+                    gr[11] = s1c[159]; //NOP
+                    SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+13] = gr[11];
+                    gr[11] = s1c[160]; //NOP
+                    SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+14] = gr[11];
+                    gr[11] = s1c[161]; //NOP
+                    SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+15] = gr[11];
+                    // hi/lo_pos[0..5] = -1 via macro-unrolled scalar stores.
+                    gr[11] = -1; //NOP
+                    SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+976+0] = gr[11];
+                    SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+976+1] = gr[11];
+                    SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+976+2] = gr[11];
+                    SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+976+3] = gr[11];
+                    SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+976+4] = gr[11];
+                    SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+976+5] = gr[11];
+                    // cumulative output count / pe_base.
+                    gr[11] = 0; //NOP
+                    SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+982] = gr[11];
+                    SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+983] = gr[5];
+                    // pe_base += pts[pe].
+                    gr[11] = s1c[pe]; //NOP              // pts[pe]
+                    gr[5] = gr[5] + gr[11];
+                    //NOP                                 // RAW break
                 }
 #ifdef PLAN3C_TRACE_SNAPSHOT
                 // AC-9/AC-10 Plan 3c frozen observable dump (m37 exit).
