@@ -43,3 +43,9 @@ wfDebug.txt
 .ripgreprc
 .codex
 *Plan*
+lastFailedGdb
+lastFailedSeq.seq
+magic_spm_out.txt
+.gitconfig
+wfa_stdout_test.txt
+wfa_stderr_test.txt
