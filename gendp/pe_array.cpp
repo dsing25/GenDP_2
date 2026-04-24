@@ -3877,80 +3877,257 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         gr[11] = s1c[37]; //NOP                // b1
                         SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+12] = gr[11];
                     }
-                    // Chunk-outer / PE-inner mvdq for 4 tiles. spm_all
-                    // alias eliminated; direct SPM_unit->buffer indexing.
-                    // A_BUF0
-                    { int mw = 0;
-                      for (int pe=0; pe<4; pe++) {
-                          gr[11] = s1c[50+pe]; //NOP
-                          int w = gr[11]*2; if (w > mw) mw = w;
-                      }
-                      for (int j = 0; j < mw; j += 8)
-                          for (int pe = 0; pe < 4; pe++) {
-                              gr[11] = s1c[50+pe]; //NOP
-                              int w = gr[11]*2;
-                              if (j >= w) continue;
-                              int cnt = w-j; if (cnt > 8) cnt = 8;
-                              gr[11] = s1c[66+pe]; //NOP
-                              mvdq_copy(&SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_A_BUF0+j],
-                                        &mm[gr[11]+j], cnt);
-                          }
+                    // Chunk-outer / PE-inner mvdq for 4 tiles. All
+                    // mw/j/w/cnt/a0_scaled/b0_scaled C++ locals
+                    // eliminated; state in s1c[30]=mw, s1c[31]=j (per
+                    // pass; overwrites post-BS per-PE scratch which is
+                    // dead by this point). Each pass has unique label
+                    // suffix to avoid duplicate label definition.
+                    //
+                    // === A_BUF0 pass ===
+                    gr[11] = 0; //NOP
+                    s1c[30] = gr[11];                          // mw = 0
+                    //NOP                                       // s1c gap
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[11] = s1c[50+pe]; //NOP             // tile_n (a0)
+                        gr[3]  = gr[11] << 1;                  // w = tile*2
+                        //NOP                                   // RAW break
+                        gr[11] = s1c[30]; //NOP                // mw
+                        if (gr[3] <= gr[11]) goto m37_a0p_mw_ok;
+                        //NOP
+                        s1c[30] = gr[3];                       // mw = w
+                        //NOP
+                    m37_a0p_mw_ok:
+                        (void)0;
                     }
-                    // A_BUF1 (src + a0*2 offset)
-                    { int mw = 0;
-                      for (int pe=0; pe<4; pe++) {
-                          gr[11] = s1c[54+pe]; //NOP
-                          int w = gr[11]*2; if (w > mw) mw = w;
-                      }
-                      for (int j = 0; j < mw; j += 8)
-                          for (int pe = 0; pe < 4; pe++) {
-                              gr[11] = s1c[54+pe]; //NOP
-                              int w = gr[11]*2;
-                              if (j >= w) continue;
-                              int cnt = w-j; if (cnt > 8) cnt = 8;
-                              gr[11] = s1c[50+pe]; //NOP    // a0
-                              int a0_scaled = gr[11]*2;
-                              gr[11] = s1c[66+pe]; //NOP    // a_src
-                              mvdq_copy(&SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_A_BUF1+j],
-                                        &mm[gr[11]+a0_scaled+j], cnt);
-                          }
+                    gr[11] = 0; //NOP
+                    s1c[31] = gr[11];                          // j = 0
+                    //NOP                                       // s1c gap
+                m37_a0p_top:
+                    gr[11] = s1c[31]; //NOP                    // j
+                    gr[3]  = s1c[30]; //NOP                    // mw
+                    if (gr[11] >= gr[3]) goto m37_a0p_done;
+                    //NOP
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[3]  = s1c[50+pe]; //NOP             // tile_n
+                        gr[3]  = gr[3] << 1;                   // w
+                        //NOP
+                        gr[11] = s1c[31]; //NOP                // j
+                        if (gr[11] >= gr[3]) goto m37_a0p_skip;
+                        //NOP
+                        gr[3]  = gr[3] - gr[11];               // w - j
+                        //NOP
+                        gr[11] = 8; //NOP
+                        if (gr[3] <= gr[11]) goto m37_a0p_cnt_ok;
+                        //NOP
+                        gr[3]  = gr[11];                       // clamp 8
+                        //NOP
+                    m37_a0p_cnt_ok:
+                        gr[11] = s1c[31]; //NOP                // j
+                        gr[5]  = s1c[66+pe]; //NOP             // a_src
+                        gr[5]  = gr[5] + gr[11];               // + j
+                        //NOP
+                        mvdq_copy(&SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_A_BUF0 + gr[11]],
+                                  &mm[gr[5]], gr[3]);
+                        // waitLSQ
+                    m37_a0p_skip:
+                        (void)0;
                     }
-                    // B_BUF0
-                    { int mw = 0;
-                      for (int pe=0; pe<4; pe++) {
-                          gr[11] = s1c[58+pe]; //NOP
-                          int w = gr[11]*2; if (w > mw) mw = w;
-                      }
-                      for (int j = 0; j < mw; j += 8)
-                          for (int pe = 0; pe < 4; pe++) {
-                              gr[11] = s1c[58+pe]; //NOP
-                              int w = gr[11]*2;
-                              if (j >= w) continue;
-                              int cnt = w-j; if (cnt > 8) cnt = 8;
-                              gr[11] = s1c[70+pe]; //NOP
-                              mvdq_copy(&SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_B_BUF0+j],
-                                        &mm[gr[11]+j], cnt);
-                          }
+                    gr[11] = s1c[31]; //NOP
+                    gr[11] = gr[11] + 8;
+                    //NOP
+                    s1c[31] = gr[11];
+                    //NOP
+                    goto m37_a0p_top;
+                    //NOP
+                m37_a0p_done:
+                    (void)0;
+                    // === A_BUF1 pass (src + a0*2 offset) ===
+                    gr[11] = 0; //NOP
+                    s1c[30] = gr[11];
+                    //NOP
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[11] = s1c[54+pe]; //NOP             // a1
+                        gr[3]  = gr[11] << 1;                  // w
+                        //NOP
+                        gr[11] = s1c[30]; //NOP
+                        if (gr[3] <= gr[11]) goto m37_a1p_mw_ok;
+                        //NOP
+                        s1c[30] = gr[3];
+                        //NOP
+                    m37_a1p_mw_ok:
+                        (void)0;
                     }
-                    // B_BUF1 (src + b0*2 offset)
-                    { int mw = 0;
-                      for (int pe=0; pe<4; pe++) {
-                          gr[11] = s1c[62+pe]; //NOP
-                          int w = gr[11]*2; if (w > mw) mw = w;
-                      }
-                      for (int j = 0; j < mw; j += 8)
-                          for (int pe = 0; pe < 4; pe++) {
-                              gr[11] = s1c[62+pe]; //NOP
-                              int w = gr[11]*2;
-                              if (j >= w) continue;
-                              int cnt = w-j; if (cnt > 8) cnt = 8;
-                              gr[11] = s1c[58+pe]; //NOP    // b0
-                              int b0_scaled = gr[11]*2;
-                              gr[11] = s1c[70+pe]; //NOP    // b_src
-                              mvdq_copy(&SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_B_BUF1+j],
-                                        &mm[gr[11]+b0_scaled+j], cnt);
-                          }
+                    gr[11] = 0; //NOP
+                    s1c[31] = gr[11];
+                    //NOP
+                m37_a1p_top:
+                    gr[11] = s1c[31]; //NOP
+                    gr[3]  = s1c[30]; //NOP
+                    if (gr[11] >= gr[3]) goto m37_a1p_done;
+                    //NOP
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[3]  = s1c[54+pe]; //NOP             // a1
+                        gr[3]  = gr[3] << 1;                   // w
+                        //NOP
+                        gr[11] = s1c[31]; //NOP                // j
+                        if (gr[11] >= gr[3]) goto m37_a1p_skip;
+                        //NOP
+                        gr[3]  = gr[3] - gr[11];
+                        //NOP
+                        gr[11] = 8; //NOP
+                        if (gr[3] <= gr[11]) goto m37_a1p_cnt_ok;
+                        //NOP
+                        gr[3]  = gr[11];
+                        //NOP
+                    m37_a1p_cnt_ok:
+                        // mm_off = a_src + a0*2 + j
+                        gr[11] = s1c[50+pe]; //NOP             // a0
+                        gr[5]  = gr[11] << 1;                  // a0*2
+                        //NOP
+                        gr[11] = s1c[66+pe]; //NOP             // a_src
+                        gr[5]  = gr[5] + gr[11];               // + a_src
+                        //NOP
+                        gr[11] = s1c[31]; //NOP                // j
+                        gr[5]  = gr[5] + gr[11];               // + j
+                        //NOP
+                        mvdq_copy(&SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_A_BUF1 + gr[11]],
+                                  &mm[gr[5]], gr[3]);
+                        // waitLSQ
+                    m37_a1p_skip:
+                        (void)0;
                     }
+                    gr[11] = s1c[31]; //NOP
+                    gr[11] = gr[11] + 8;
+                    //NOP
+                    s1c[31] = gr[11];
+                    //NOP
+                    goto m37_a1p_top;
+                    //NOP
+                m37_a1p_done:
+                    (void)0;
+                    // === B_BUF0 pass ===
+                    gr[11] = 0; //NOP
+                    s1c[30] = gr[11];
+                    //NOP
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[11] = s1c[58+pe]; //NOP             // b0
+                        gr[3]  = gr[11] << 1;
+                        //NOP
+                        gr[11] = s1c[30]; //NOP
+                        if (gr[3] <= gr[11]) goto m37_b0p_mw_ok;
+                        //NOP
+                        s1c[30] = gr[3];
+                        //NOP
+                    m37_b0p_mw_ok:
+                        (void)0;
+                    }
+                    gr[11] = 0; //NOP
+                    s1c[31] = gr[11];
+                    //NOP
+                m37_b0p_top:
+                    gr[11] = s1c[31]; //NOP
+                    gr[3]  = s1c[30]; //NOP
+                    if (gr[11] >= gr[3]) goto m37_b0p_done;
+                    //NOP
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[3]  = s1c[58+pe]; //NOP             // b0
+                        gr[3]  = gr[3] << 1;
+                        //NOP
+                        gr[11] = s1c[31]; //NOP
+                        if (gr[11] >= gr[3]) goto m37_b0p_skip;
+                        //NOP
+                        gr[3]  = gr[3] - gr[11];
+                        //NOP
+                        gr[11] = 8; //NOP
+                        if (gr[3] <= gr[11]) goto m37_b0p_cnt_ok;
+                        //NOP
+                        gr[3]  = gr[11];
+                        //NOP
+                    m37_b0p_cnt_ok:
+                        gr[11] = s1c[31]; //NOP
+                        gr[5]  = s1c[70+pe]; //NOP             // b_src
+                        gr[5]  = gr[5] + gr[11];
+                        //NOP
+                        mvdq_copy(&SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_B_BUF0 + gr[11]],
+                                  &mm[gr[5]], gr[3]);
+                        // waitLSQ
+                    m37_b0p_skip:
+                        (void)0;
+                    }
+                    gr[11] = s1c[31]; //NOP
+                    gr[11] = gr[11] + 8;
+                    //NOP
+                    s1c[31] = gr[11];
+                    //NOP
+                    goto m37_b0p_top;
+                    //NOP
+                m37_b0p_done:
+                    (void)0;
+                    // === B_BUF1 pass (src + b0*2 offset) ===
+                    gr[11] = 0; //NOP
+                    s1c[30] = gr[11];
+                    //NOP
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[11] = s1c[62+pe]; //NOP             // b1
+                        gr[3]  = gr[11] << 1;
+                        //NOP
+                        gr[11] = s1c[30]; //NOP
+                        if (gr[3] <= gr[11]) goto m37_b1p_mw_ok;
+                        //NOP
+                        s1c[30] = gr[3];
+                        //NOP
+                    m37_b1p_mw_ok:
+                        (void)0;
+                    }
+                    gr[11] = 0; //NOP
+                    s1c[31] = gr[11];
+                    //NOP
+                m37_b1p_top:
+                    gr[11] = s1c[31]; //NOP
+                    gr[3]  = s1c[30]; //NOP
+                    if (gr[11] >= gr[3]) goto m37_b1p_done;
+                    //NOP
+                    for (int pe = 0; pe < 4; pe++) {
+                        gr[3]  = s1c[62+pe]; //NOP             // b1
+                        gr[3]  = gr[3] << 1;
+                        //NOP
+                        gr[11] = s1c[31]; //NOP
+                        if (gr[11] >= gr[3]) goto m37_b1p_skip;
+                        //NOP
+                        gr[3]  = gr[3] - gr[11];
+                        //NOP
+                        gr[11] = 8; //NOP
+                        if (gr[3] <= gr[11]) goto m37_b1p_cnt_ok;
+                        //NOP
+                        gr[3]  = gr[11];
+                        //NOP
+                    m37_b1p_cnt_ok:
+                        // mm_off = b_src + b0*2 + j
+                        gr[11] = s1c[58+pe]; //NOP             // b0
+                        gr[5]  = gr[11] << 1;                  // b0*2
+                        //NOP
+                        gr[11] = s1c[70+pe]; //NOP             // b_src
+                        gr[5]  = gr[5] + gr[11];               // + b_src
+                        //NOP
+                        gr[11] = s1c[31]; //NOP                // j
+                        gr[5]  = gr[5] + gr[11];               // + j
+                        //NOP
+                        mvdq_copy(&SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_B_BUF1 + gr[11]],
+                                  &mm[gr[5]], gr[3]);
+                        // waitLSQ
+                    m37_b1p_skip:
+                        (void)0;
+                    }
+                    gr[11] = s1c[31]; //NOP
+                    gr[11] = gr[11] + 8;
+                    //NOP
+                    s1c[31] = gr[11];
+                    //NOP
+                    goto m37_b1p_top;
+                    //NOP
+                m37_b1p_done:
+                    (void)0;
                     // niter = ((max_pt + MERGE_STEP - 1)/MERGE_STEP) *
                     // MERGE_STEP. Since the integer div+mul round-up is
                     // equivalent, we compute via gr-staged arithmetic.
