@@ -20,10 +20,11 @@ bool check_legal_mv(int src, int dest) {
     return true;
 }
 
-pe::pe(int _id, SPM* spm) {
+pe::pe(int _id, SPM* spm, int _pc_mode) {
 
     SPM_unit = spm;
     id = _id;
+    pc_mode = _pc_mode;
     comp_reg_load = 0, comp_reg_store = 0, addr_reg_load = 0, addr_reg_store = 0, SPM_load = 0, SPM_store = 0,
     comp_instr_load = 0, comp_instr_store = 0,
     comp_reg_load_addr = 0, comp_reg_store_addr = 0, addr_reg_load_addr = 0, addr_reg_store_addr = 0, SPM_load_addr = 0, SPM_store_addr = 0,
@@ -293,11 +294,16 @@ void pe::run(int simd) {
     };
     bool cf0 = is_ctrl_flow(ctrl_op[0]), cf1 = is_ctrl_flow(ctrl_op[1]);
 
-    // One control flow taken: sync other slot
+    // One control flow taken: sync other slot (SHARED mode only).
+    // PC_MODE_DUAL leaves PC[0]/PC[1] independent — required by POA,
+    // whose pe_X traces have a single-slot trailing branch that must
+    // not pull the other slot's PC forward.
     bool took0 = (PC[0] != old_PC + 1);
     bool took1 = (PC[1] != old_PC + 1);
-    if (cf0 && took0 && !cf1) PC[1] = PC[0];
-    if (cf1 && took1 && !cf0) PC[0] = PC[1];
+    if (pc_mode == PC_MODE_SHARED) {
+        if (cf0 && took0 && !cf1) PC[1] = PC[0];
+        if (cf1 && took1 && !cf0) PC[0] = PC[1];
+    }
 
     // Track if PE is halted (both slots executing halt instruction)
     halted = (ctrl_op[0] == CTRL_HALT && ctrl_op[1] == CTRL_HALT);

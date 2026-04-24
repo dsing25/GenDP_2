@@ -34,10 +34,11 @@ class pe {
             }
         };
 
-        pe(int id, SPM* spm);
+        pe(int id, SPM* spm, int pc_mode = PC_MODE_SHARED);
         ~pe();
 
         int id;
+        int pc_mode;        // PC_MODE_SHARED or PC_MODE_DUAL
         int PC[2], comp_PC;
         int ras = 0;
         int src_dest[2][2];

@@ -18,9 +18,11 @@ class pe_array {
 
     public:
 
-        pe_array(int input_size, int output_size);
+        pe_array(int input_size, int output_size,
+                 int pc_mode = PC_MODE_SHARED);
         ~pe_array();
-        
+
+        int pc_mode;        // PC_MODE_SHARED or PC_MODE_DUAL (forwarded to PEs)
         int main_addressing_register[MAIN_ADDR_REGISTER_NUM];
         unsigned long main_instruction_buffer[CTRL_INSTR_BUFFER_NUM][CTRL_INSTR_BUFFER_GROUP_SIZE];
         unsigned long compute_instruction_buffer[COMP_INSTR_BUFFER_GROUP_NUM][COMP_INSTR_BUFFER_GROUP_SIZE];

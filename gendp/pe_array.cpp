@@ -38,11 +38,12 @@ PerfCounter peComputeNops = 0;
 PerfCounter peCtrlNops = 0;
 PerfCounter controllerNops = 0;
 
-pe_array::pe_array(int input_size, int output_size) {
+pe_array::pe_array(int input_size, int output_size, int _pc_mode) {
 
     int i;
     input_buffer_size = input_size;
     output_buffer_size = output_size;
+    pc_mode = _pc_mode;
 
     input_buffer = (int*)calloc(input_buffer_size, sizeof(int));
     output_buffer = (int*)calloc(output_buffer_size, sizeof(int));
@@ -57,7 +58,7 @@ pe_array::pe_array(int input_size, int output_size) {
     //+1 allows addressing full range. 1 is dummy data. Not legal in real hardware
     SPM_unit = new SPM(SPM_ADDR_NUM+1, &active_event_producers);
     for (i = 0; i < PE_NUM; i++)
-        pe_unit[i] = new pe(i, SPM_unit);
+        pe_unit[i] = new pe(i, SPM_unit, pc_mode);
     pe_unit[3]->fifo_out[0] = &fifo_unit[0][0];
     pe_unit[3]->fifo_out[1] = &fifo_unit[0][1];
     load_data = 0;

@@ -19,6 +19,17 @@
 #define MAIN_INSTRUCTION_2 2
 #define PE_4_SETTING 4
 #define PE_64_SETTING 64
+
+// PE control-PC mode (per pe_array instance, set at construction).
+// SHARED: when only one VLIW slot is a control-flow op and takes its
+//   branch, the other slot's PC is force-synced to the branch target.
+//   This is the default and what GSSW/WFA/PHMM/Chain/BSW expect.
+// DUAL:  the two slot PCs evolve fully independently — no cross-slot
+//   sync. Required by POA, whose pe_X traces have an asymmetric
+//   single-slot branch at the end of each PE that must NOT pull the
+//   other slot's PC forward.
+#define PC_MODE_SHARED 0
+#define PC_MODE_DUAL   1
 #define SIMD_WIDTH8 4
 #define PE_NUM 64
 #define FIFO_GROUP_NUM 16
