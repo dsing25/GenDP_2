@@ -8800,6 +8800,19 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
     printf("PC = %d\t", *PC);
 #endif
     if (main_instruction_setting == MAIN_INSTRUCTION_2) {
+        // Magic instructions set bit 63 and reuse the low opcode
+        // bits to encode the magic ID. The pre-PE decode() pass
+        // already ran the magic; re-parsing here as a real opcode
+        // would crash (WFA emits write_magic(5) on its exit path,
+        // whose low 6 bits alias `mv` and would trigger load()
+        // with a bogus source). Codex R14 P1.
+        constexpr unsigned long MAGIC_BIT = 1ul << 63;
+        if (instruction & MAGIC_BIT) {
+#ifdef PROFILE
+            printf("\n");
+#endif
+            return 0;
+        }
         // Arithmetic (opcodes 0-3) now runs pre-PE via
         // decode(). Skip here to avoid double-execution.
         if (opcode <= 3 || opcode == CTRL_CALL
