@@ -2824,6 +2824,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     //NOP
                     // spm_dst = pe*SPM_BANK_GROUP_SIZE + tile_buf_off + j.
                     gr[9] = pe * SPM_BANK_GROUP_SIZE + tile_buf_off;
+                    //NOP                                  // pair break RAW
                     gr[9] = gr[9] + gr[5];                // + j
                     //NOP
                     mvdq_copy(&spm[gr[9]], &mm[gr[7]], gr[8]);
