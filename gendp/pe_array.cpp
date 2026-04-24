@@ -3367,23 +3367,58 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     if (gr[11] < gr[4]) goto m37_bs_step_any;
                     goto m37_bs_done;
                 m37_bs_step_any:
-                    // p = 0
+                    // p = 0: 6-ternary MM loads lowered to labeled two-arm
+                    // sequences per Codex R2 plan. v_b stashed via s1c[30].
                     gr[11] = s1c[0]; //NOP
                     gr[4]  = s1c[3]; //NOP
                     if (gr[11] >= gr[4]) goto m37_bs_step1;
                     gr[5] = gr[11] + gr[4]; //NOP
                     gr[5] = gr[5] / 2;
                     gr[11] = s1c[6]; //NOP
-                    gr[4]  = gr[11] - gr[5];
-                    gr[11] = (gr[4] > 0) ? mm[bbase+(gr[4]-1)*2] : 0;
+                    gr[4]  = gr[11] - gr[5];                  // pos_b
+                    //NOP                                      // RAW break
+                    // v_b = (pos_b > 0) ? mm[bbase + (pos_b-1)*2] : 0
+                    if (gr[4] <= 0) goto m37_p0_vb_zero;      // bge
+                    //NOP                                      // slot 1 of bge
+                    gr[3] = gr[4] - 1;
+                    //NOP                                      // RAW break
+                    gr[3] = gr[3] << 1;
+                    //NOP                                      // RAW break
+                    gr[11] = s1c[76]; //NOP                   // bbase
+                    gr[3] = gr[3] + gr[11];
+                    //NOP                                      // RAW break
+                    gr[11] = mm[gr[3]];
                     // waitLSQ
-                    //NOP
+                    //NOP                                      // LSQ settle
                     gr[3] = gr[11];
-                    gr[11] = (gr[5] < n_new) ? mm[abase+gr[5]*2] : (int)0xFFFFFFFF;
+                    //NOP                                      // RAW break
+                    goto m37_p0_vb_done;
+                    //NOP                                      // slot 1 of goto
+                m37_p0_vb_zero:
+                    gr[3] = 0;
+                    //NOP                                      // RAW break
+                m37_p0_vb_done:
+                    s1c[30] = gr[3];                          // stash v_b
+                    //NOP                                      // s1c gap
+                    // v_a = (mid < n_new) ? mm[abase + mid*2] : 0xFFFFFFFF
+                    if (gr[5] >= gr[24]) goto m37_p0_va_sent; // bge
+                    //NOP                                      // slot 1 of bge
+                    gr[11] = gr[5] << 1;
+                    //NOP                                      // RAW break
+                    gr[11] = gr[11] + MM_NEXT_INTV;
+                    //NOP                                      // RAW break
+                    gr[11] = mm[gr[11]];
                     // waitLSQ
-                    //NOP
+                    //NOP                                      // LSQ settle
+                    goto m37_p0_va_done;
+                    //NOP                                      // slot 1 of goto
+                m37_p0_va_sent:
+                    gr[11] = -1;                              // 0xFFFFFFFF
+                    //NOP                                      // RAW break
+                m37_p0_va_done:
+                    gr[3] = s1c[30]; //NOP                    // reload v_b
                     if (gr[4] <= 0) goto m37_bs_p0_hi;
-                    if (gr[5] >= n_new) goto m37_bs_p0_hi;
+                    if (gr[5] >= gr[24]) goto m37_bs_p0_hi;
                     if ((uint32_t)gr[3] <= (uint32_t)gr[11]) goto m37_bs_p0_hi;
                     gr[4] = gr[5] + 1; //NOP
                     s1c[0] = gr[4];
@@ -3399,15 +3434,47 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[5] = gr[5] / 2;
                     gr[11] = s1c[7]; //NOP
                     gr[4]  = gr[11] - gr[5];
-                    gr[11] = (gr[4] > 0) ? mm[bbase+(gr[4]-1)*2] : 0;
+                    //NOP                                      // RAW break
+                    if (gr[4] <= 0) goto m37_p1_vb_zero;
+                    //NOP
+                    gr[3] = gr[4] - 1;
+                    //NOP
+                    gr[3] = gr[3] << 1;
+                    //NOP
+                    gr[11] = s1c[76]; //NOP                   // bbase
+                    gr[3] = gr[3] + gr[11];
+                    //NOP
+                    gr[11] = mm[gr[3]];
                     // waitLSQ
                     //NOP
                     gr[3] = gr[11];
-                    gr[11] = (gr[5] < n_new) ? mm[abase+gr[5]*2] : (int)0xFFFFFFFF;
+                    //NOP
+                    goto m37_p1_vb_done;
+                    //NOP
+                m37_p1_vb_zero:
+                    gr[3] = 0;
+                    //NOP
+                m37_p1_vb_done:
+                    s1c[30] = gr[3];
+                    //NOP
+                    if (gr[5] >= gr[24]) goto m37_p1_va_sent;
+                    //NOP
+                    gr[11] = gr[5] << 1;
+                    //NOP
+                    gr[11] = gr[11] + MM_NEXT_INTV;
+                    //NOP
+                    gr[11] = mm[gr[11]];
                     // waitLSQ
                     //NOP
+                    goto m37_p1_va_done;
+                    //NOP
+                m37_p1_va_sent:
+                    gr[11] = -1;
+                    //NOP
+                m37_p1_va_done:
+                    gr[3] = s1c[30]; //NOP
                     if (gr[4] <= 0) goto m37_bs_p1_hi;
-                    if (gr[5] >= n_new) goto m37_bs_p1_hi;
+                    if (gr[5] >= gr[24]) goto m37_bs_p1_hi;
                     if ((uint32_t)gr[3] <= (uint32_t)gr[11]) goto m37_bs_p1_hi;
                     gr[4] = gr[5] + 1; //NOP
                     s1c[1] = gr[4];
@@ -3423,15 +3490,47 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[5] = gr[5] / 2;
                     gr[11] = s1c[8]; //NOP
                     gr[4]  = gr[11] - gr[5];
-                    gr[11] = (gr[4] > 0) ? mm[bbase+(gr[4]-1)*2] : 0;
+                    //NOP                                      // RAW break
+                    if (gr[4] <= 0) goto m37_p2_vb_zero;
+                    //NOP
+                    gr[3] = gr[4] - 1;
+                    //NOP
+                    gr[3] = gr[3] << 1;
+                    //NOP
+                    gr[11] = s1c[76]; //NOP                   // bbase
+                    gr[3] = gr[3] + gr[11];
+                    //NOP
+                    gr[11] = mm[gr[3]];
                     // waitLSQ
                     //NOP
                     gr[3] = gr[11];
-                    gr[11] = (gr[5] < n_new) ? mm[abase+gr[5]*2] : (int)0xFFFFFFFF;
+                    //NOP
+                    goto m37_p2_vb_done;
+                    //NOP
+                m37_p2_vb_zero:
+                    gr[3] = 0;
+                    //NOP
+                m37_p2_vb_done:
+                    s1c[30] = gr[3];
+                    //NOP
+                    if (gr[5] >= gr[24]) goto m37_p2_va_sent;
+                    //NOP
+                    gr[11] = gr[5] << 1;
+                    //NOP
+                    gr[11] = gr[11] + MM_NEXT_INTV;
+                    //NOP
+                    gr[11] = mm[gr[11]];
                     // waitLSQ
                     //NOP
+                    goto m37_p2_va_done;
+                    //NOP
+                m37_p2_va_sent:
+                    gr[11] = -1;
+                    //NOP
+                m37_p2_va_done:
+                    gr[3] = s1c[30]; //NOP
                     if (gr[4] <= 0) goto m37_bs_p2_hi;
-                    if (gr[5] >= n_new) goto m37_bs_p2_hi;
+                    if (gr[5] >= gr[24]) goto m37_bs_p2_hi;
                     if ((uint32_t)gr[3] <= (uint32_t)gr[11]) goto m37_bs_p2_hi;
                     gr[4] = gr[5] + 1; //NOP
                     s1c[2] = gr[4];
