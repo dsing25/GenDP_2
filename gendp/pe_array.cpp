@@ -9,9 +9,18 @@
 #include "sys_def.h"
 #include "data_buffer.h"
 #include "simulator.h"
+// GWFA kernel header is only present when the kernel/Gwfa submodule
+// has been initialized. The Makefile sets -DGWFA_BUILD in that case
+// and also builds gwfa_sim.o / gwfa_kernel.o; without the submodule
+// we fall back to gwfa_stub.h which provides linker-clean runtime-
+// abort stubs so the translation unit still compiles and links.
+#ifdef GWFA_BUILD
 extern "C" {
 #include "kernel/Gwfa/gwfa.h"
 }
+#else
+#include "gwfa_stub.h"
+#endif
 #include <iomanip>
 #include <cstdlib>
 #include <cstring>
@@ -1105,33 +1114,27 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //                   gr[16]=lo:ql, hi:n_vtx
                 //                   gr[12]=lo:s, hi:s_term
                 // Each packed lane is consumed via CTRL_GR_LO / CTRL_GR_HI
-                // which sign-extends a 16-bit subregister. Codex R9 P2
-                // flagged this as a latent silent-truncation risk for GWFA
-                // dumps with n_vtx > 32767, n_arc > 65535, or S2 offsets
-                // > 65535. Emit a one-shot stderr warning when any lane
-                // overflows so larger inputs are flagged without
-                // regressing the existing corpus (case 128 in GWFA295
-                // exercises a value that overflows but still scores
-                // correctly because the overflowed bits are not on the
-                // downstream critical path for that case).
-                {
-                    static bool warned = false;
-                    if (!warned && (
-                        (int)sub.n_vtx > 0x7FFF ||
-                        (int)sub.n_arc > 0xFFFF ||
-                        seq_off_s2 > 0xFFFF ||
-                        seq_len_s2 > 0x7FFF ||
-                        arc_off_s2 > 0x7FFF ||
-                        ql > 0xFFFF)) {
-                        fprintf(stderr,
-                            "[gwfa-pack-warn] packed-lane overflow "
-                            "(n_vtx=%u n_arc=%u seq_off=%d seq_len=%d "
-                            "arc_off=%d ql=%d). Further gwfa operations "
-                            "may silently mis-execute. See Codex R9 P2.\n",
-                            (unsigned)sub.n_vtx, (unsigned)sub.n_arc,
-                            seq_off_s2, seq_len_s2, arc_off_s2, ql);
-                        warned = true;
-                    }
+                // which sign-extends a 16-bit subregister. Codex R11 P2:
+                // reject oversize inputs with a clear message rather than
+                // continuing with silently-truncated state. The default
+                // GWFA295 corpus does not overflow any lane; larger
+                // future inputs would now fail fast.
+                if ((int)sub.n_vtx > 0x7FFF ||
+                    (int)sub.n_arc > 0xFFFF ||
+                    seq_off_s2 > 0xFFFF ||
+                    seq_len_s2 > 0x7FFF ||
+                    arc_off_s2 > 0x7FFF ||
+                    ql > 0xFFFF) {
+                    fprintf(stderr,
+                        "[gwfa-pack-error] packed-lane overflow "
+                        "(n_vtx=%u n_arc=%u seq_off=%d seq_len=%d "
+                        "arc_off=%d ql=%d). Input exceeds the 16-bit "
+                        "packed subregister lanes; larger GWFA dumps "
+                        "require a re-architecture to use full 32-bit "
+                        "gr slots. See Codex R11 P2.\n",
+                        (unsigned)sub.n_vtx, (unsigned)sub.n_arc,
+                        seq_off_s2, seq_len_s2, arc_off_s2, ql);
+                    exit(-1);
                 }
                 main_addressing_register[12] =
                     (main_addressing_register[23] & 0xFFFF) << 16; // s=0, s_term in hi

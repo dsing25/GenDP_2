@@ -29,7 +29,6 @@ OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o simulator.o
 # still build sim for the legacy kernels without the Gwfa sources.
 ifneq ($(wildcard kernel/Gwfa/gwfa.c),)
 OBJECT 	+= 	gwfa_sim.o
-CXXFLAGS += -DGWFA_BUILD
 WITH_GWFA := 1
 endif
 
@@ -75,6 +74,20 @@ TARGET = sim
 
 # O3 optimized build
 CXXFLAGS_O3 = -O3 -std=c++11
+
+# Both the debug build (CXXFLAGS) and the release build (CXXFLAGS_O3)
+# need matching preprocessor feature flags so both TUs see the same
+# #ifdef-guarded code.
+ifeq ($(WITH_GWFA),1)
+CXXFLAGS    += -DGWFA_BUILD
+CXXFLAGS_O3 += -DGWFA_BUILD
+endif
+ifeq ($(gwfa_seam_trace),1)
+CXXFLAGS_O3 += -DGWFA_SEAM_TRACE
+endif
+ifeq ($(plan3c_snap),1)
+CXXFLAGS_O3 += -DPLAN3C_TRACE_SNAPSHOT
+endif
 TARGET_O3 = sim_o3
 OBJECT_O3 = $(OBJECT:.o=_o3.o)
 LIB_O3 = libsimulator_o3.a

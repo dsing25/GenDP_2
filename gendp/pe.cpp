@@ -4,9 +4,16 @@
 #include <cassert>
 #include <algorithm>
 #include "simulator.h"
+// GWFA kernel header: real header when the submodule is present,
+// stub header otherwise (see gwfa_stub.h). Matches the gate in
+// pe_array.cpp and Makefile.
+#ifdef GWFA_BUILD
 extern "C" {
 #include "kernel/Gwfa/gwfa.h"
 }
+#else
+#include "gwfa_stub.h"
+#endif
 #include <iostream>
 
 bool check_legal_mv(int src, int dest) {

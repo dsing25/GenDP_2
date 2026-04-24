@@ -6,7 +6,12 @@
 #include "poa.h"
 #include "chain.h"
 #include "bankThrasher.h"
+// gwfa_sim.h is part of the GWFA kernel and only available when the
+// kernel/Gwfa submodule has been initialized (Makefile sets
+// -DGWFA_BUILD in that case).
+#ifdef GWFA_BUILD
 #include "gwfa_sim.h"
+#endif
 #include <getopt.h>
 #include <chrono>
 #include <ctime>
@@ -65,7 +70,16 @@ int main(int argc, char *argv[]) {
     else if (kernel == 4) chain_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
     else if (kernel == 5) wfa_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
     else if (kernel == 6) bankThrasher_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
+#ifdef GWFA_BUILD
     else if (kernel == 7) gwfa_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
+#else
+    else if (kernel == 7) {
+        fprintf(stderr, "Error: kernel 7 (gwfa) requires the "
+            "kernel/Gwfa submodule. Run `git submodule update --init "
+            "kernel/Gwfa` and rebuild.\n");
+        return 1;
+    }
+#endif
 
     timenow = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::cout << "End Simulation: " << ctime(&timenow) << std::endl;
