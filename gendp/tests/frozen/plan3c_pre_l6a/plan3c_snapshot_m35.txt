@@ -1,0 +1,2598 @@
+m35 pe=0 out_n=34 mm_dst=113246208 spm_src=16
+m35 pe=1 out_n=34 mm_dst=113246276 spm_src=8208
+m35 pe=2 out_n=34 mm_dst=113246344 spm_src=16400
+m35 pe=3 out_n=34 mm_dst=113246412 spm_src=24592
+m35 s1c[0..7]=34,34,34,34,34,34,34,34,
+m35 mm_out=113246208 cum_exit=136 max_words=68
+m35 pe=0 out_n=0 mm_dst=113246276 spm_src=176
+m35 pe=1 out_n=0 mm_dst=113246344 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=113246412 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=113246480 spm_src=24752
+m35 s1c[0..7]=34,34,34,34,34,34,34,34,
+m35 mm_out=113246208 cum_exit=136 max_words=0
+m35 pe=0 out_n=40 mm_dst=113246208 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113246510 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113246812 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113247114 spm_src=24592
+m35 s1c[0..7]=151,151,151,148,40,40,40,40,
+m35 mm_out=113246208 cum_exit=601 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246288 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113246590 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113246892 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113247194 spm_src=24752
+m35 s1c[0..7]=151,151,151,148,80,80,80,80,
+m35 mm_out=113246208 cum_exit=601 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246368 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113246670 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113246972 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113247274 spm_src=24592
+m35 s1c[0..7]=151,151,151,148,120,120,120,120,
+m35 mm_out=113246208 cum_exit=601 max_words=80
+m35 pe=0 out_n=31 mm_dst=113246448 spm_src=176
+m35 pe=1 out_n=31 mm_dst=113246750 spm_src=8368
+m35 pe=2 out_n=31 mm_dst=113247052 spm_src=16560
+m35 pe=3 out_n=28 mm_dst=113247354 spm_src=24752
+m35 s1c[0..7]=151,151,151,148,151,151,151,148,
+m35 mm_out=113246208 cum_exit=601 max_words=62
+m35 pe=0 out_n=0 mm_dst=113246510 spm_src=16
+m35 pe=1 out_n=0 mm_dst=113246812 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=113247114 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=113247410 spm_src=24592
+m35 s1c[0..7]=151,151,151,148,151,151,151,148,
+m35 mm_out=113246208 cum_exit=601 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109051996 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052088 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052180 spm_src=24592
+m35 s1c[0..7]=46,46,46,45,40,40,40,40,
+m35 mm_out=109051904 cum_exit=183 max_words=80
+m35 pe=0 out_n=6 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=6 mm_dst=109052076 spm_src=8368
+m35 pe=2 out_n=6 mm_dst=109052168 spm_src=16560
+m35 pe=3 out_n=5 mm_dst=109052260 spm_src=24752
+m35 s1c[0..7]=46,46,46,45,46,46,46,45,
+m35 mm_out=109051904 cum_exit=183 max_words=12
+m35 pe=0 out_n=0 mm_dst=109051996 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052088 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109052180 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109052270 spm_src=24592
+m35 s1c[0..7]=46,46,46,45,46,46,46,45,
+m35 mm_out=109051904 cum_exit=183 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052074 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052244 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052414 spm_src=24592
+m35 s1c[0..7]=85,85,85,82,40,40,40,40,
+m35 mm_out=109051904 cum_exit=337 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052154 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052324 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109052494 spm_src=24752
+m35 s1c[0..7]=85,85,85,82,80,80,80,80,
+m35 mm_out=109051904 cum_exit=337 max_words=80
+m35 pe=0 out_n=5 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=5 mm_dst=109052234 spm_src=8208
+m35 pe=2 out_n=5 mm_dst=109052404 spm_src=16400
+m35 pe=3 out_n=2 mm_dst=109052574 spm_src=24592
+m35 s1c[0..7]=85,85,85,82,85,85,85,82,
+m35 mm_out=109051904 cum_exit=337 max_words=10
+m35 pe=0 out_n=0 mm_dst=109052074 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052244 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109052414 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109052578 spm_src=24752
+m35 s1c[0..7]=85,85,85,82,85,85,85,82,
+m35 mm_out=109051904 cum_exit=337 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052104 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052304 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052504 spm_src=24592
+m35 s1c[0..7]=100,100,100,100,40,40,40,40,
+m35 mm_out=109051904 cum_exit=400 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052184 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052384 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109052584 spm_src=24752
+m35 s1c[0..7]=100,100,100,100,80,80,80,80,
+m35 mm_out=109051904 cum_exit=400 max_words=80
+m35 pe=0 out_n=20 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=20 mm_dst=109052264 spm_src=8208
+m35 pe=2 out_n=20 mm_dst=109052464 spm_src=16400
+m35 pe=3 out_n=20 mm_dst=109052664 spm_src=24592
+m35 s1c[0..7]=100,100,100,100,100,100,100,100,
+m35 mm_out=109051904 cum_exit=400 max_words=40
+m35 pe=0 out_n=0 mm_dst=109052104 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052304 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109052504 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109052704 spm_src=24752
+m35 s1c[0..7]=100,100,100,100,100,100,100,100,
+m35 mm_out=109051904 cum_exit=400 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052124 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052344 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052564 spm_src=24592
+m35 s1c[0..7]=110,110,110,108,40,40,40,40,
+m35 mm_out=109051904 cum_exit=438 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052204 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052424 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109052644 spm_src=24752
+m35 s1c[0..7]=110,110,110,108,80,80,80,80,
+m35 mm_out=109051904 cum_exit=438 max_words=80
+m35 pe=0 out_n=30 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=30 mm_dst=109052284 spm_src=8208
+m35 pe=2 out_n=30 mm_dst=109052504 spm_src=16400
+m35 pe=3 out_n=28 mm_dst=109052724 spm_src=24592
+m35 s1c[0..7]=110,110,110,108,110,110,110,108,
+m35 mm_out=109051904 cum_exit=438 max_words=60
+m35 pe=0 out_n=0 mm_dst=109052124 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052344 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109052564 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109052780 spm_src=24752
+m35 s1c[0..7]=110,110,110,108,110,110,110,108,
+m35 mm_out=109051904 cum_exit=438 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052132 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052360 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052588 spm_src=24592
+m35 s1c[0..7]=114,114,114,114,40,40,40,40,
+m35 mm_out=109051904 cum_exit=456 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052212 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052440 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109052668 spm_src=24752
+m35 s1c[0..7]=114,114,114,114,80,80,80,80,
+m35 mm_out=109051904 cum_exit=456 max_words=80
+m35 pe=0 out_n=34 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=34 mm_dst=109052292 spm_src=8208
+m35 pe=2 out_n=34 mm_dst=109052520 spm_src=16400
+m35 pe=3 out_n=34 mm_dst=109052748 spm_src=24592
+m35 s1c[0..7]=114,114,114,114,114,114,114,114,
+m35 mm_out=109051904 cum_exit=456 max_words=68
+m35 pe=0 out_n=0 mm_dst=109052132 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052360 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109052588 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109052816 spm_src=24752
+m35 s1c[0..7]=114,114,114,114,114,114,114,114,
+m35 mm_out=109051904 cum_exit=456 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052142 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052380 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052618 spm_src=24592
+m35 s1c[0..7]=119,119,119,116,40,40,40,40,
+m35 mm_out=109051904 cum_exit=473 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052222 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052460 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109052698 spm_src=24752
+m35 s1c[0..7]=119,119,119,116,80,80,80,80,
+m35 mm_out=109051904 cum_exit=473 max_words=80
+m35 pe=0 out_n=39 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=39 mm_dst=109052302 spm_src=8208
+m35 pe=2 out_n=39 mm_dst=109052540 spm_src=16400
+m35 pe=3 out_n=36 mm_dst=109052778 spm_src=24592
+m35 s1c[0..7]=119,119,119,116,119,119,119,116,
+m35 mm_out=109051904 cum_exit=473 max_words=78
+m35 pe=0 out_n=0 mm_dst=109052142 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052380 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109052618 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109052850 spm_src=24752
+m35 s1c[0..7]=119,119,119,116,119,119,119,116,
+m35 mm_out=109051904 cum_exit=473 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052158 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052412 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052666 spm_src=24592
+m35 s1c[0..7]=127,127,127,125,40,40,40,40,
+m35 mm_out=109051904 cum_exit=506 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052238 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052492 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109052746 spm_src=24752
+m35 s1c[0..7]=127,127,127,125,80,80,80,80,
+m35 mm_out=109051904 cum_exit=506 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052318 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052572 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052826 spm_src=24592
+m35 s1c[0..7]=127,127,127,125,120,120,120,120,
+m35 mm_out=109051904 cum_exit=506 max_words=80
+m35 pe=0 out_n=7 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=7 mm_dst=109052398 spm_src=8368
+m35 pe=2 out_n=7 mm_dst=109052652 spm_src=16560
+m35 pe=3 out_n=5 mm_dst=109052906 spm_src=24752
+m35 s1c[0..7]=127,127,127,125,127,127,127,125,
+m35 mm_out=109051904 cum_exit=506 max_words=14
+m35 pe=0 out_n=0 mm_dst=109052158 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052412 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109052666 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109052916 spm_src=24592
+m35 s1c[0..7]=127,127,127,125,127,127,127,125,
+m35 mm_out=109051904 cum_exit=506 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052180 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052456 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052732 spm_src=24592
+m35 s1c[0..7]=138,138,138,137,40,40,40,40,
+m35 mm_out=109051904 cum_exit=551 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052260 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052536 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109052812 spm_src=24752
+m35 s1c[0..7]=138,138,138,137,80,80,80,80,
+m35 mm_out=109051904 cum_exit=551 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052340 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052616 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052892 spm_src=24592
+m35 s1c[0..7]=138,138,138,137,120,120,120,120,
+m35 mm_out=109051904 cum_exit=551 max_words=80
+m35 pe=0 out_n=18 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=18 mm_dst=109052420 spm_src=8368
+m35 pe=2 out_n=18 mm_dst=109052696 spm_src=16560
+m35 pe=3 out_n=17 mm_dst=109052972 spm_src=24752
+m35 s1c[0..7]=138,138,138,137,138,138,138,137,
+m35 mm_out=109051904 cum_exit=551 max_words=36
+m35 pe=0 out_n=0 mm_dst=109052180 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052456 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109052732 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053006 spm_src=24592
+m35 s1c[0..7]=138,138,138,137,138,138,138,137,
+m35 mm_out=109051904 cum_exit=551 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052200 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052496 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052792 spm_src=24592
+m35 s1c[0..7]=148,148,148,147,40,40,40,40,
+m35 mm_out=109051904 cum_exit=591 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052280 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052576 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109052872 spm_src=24752
+m35 s1c[0..7]=148,148,148,147,80,80,80,80,
+m35 mm_out=109051904 cum_exit=591 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052360 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052656 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052952 spm_src=24592
+m35 s1c[0..7]=148,148,148,147,120,120,120,120,
+m35 mm_out=109051904 cum_exit=591 max_words=80
+m35 pe=0 out_n=28 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=28 mm_dst=109052440 spm_src=8368
+m35 pe=2 out_n=28 mm_dst=109052736 spm_src=16560
+m35 pe=3 out_n=27 mm_dst=109053032 spm_src=24752
+m35 s1c[0..7]=148,148,148,147,148,148,148,147,
+m35 mm_out=109051904 cum_exit=591 max_words=56
+m35 pe=0 out_n=0 mm_dst=109052200 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052496 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109052792 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053086 spm_src=24592
+m35 s1c[0..7]=148,148,148,147,148,148,148,147,
+m35 mm_out=109051904 cum_exit=591 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052230 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052556 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052882 spm_src=24592
+m35 s1c[0..7]=163,163,163,160,40,40,40,40,
+m35 mm_out=109051904 cum_exit=649 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052310 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052636 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109052962 spm_src=24752
+m35 s1c[0..7]=163,163,163,160,80,80,80,80,
+m35 mm_out=109051904 cum_exit=649 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052390 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052716 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053042 spm_src=24592
+m35 s1c[0..7]=163,163,163,160,120,120,120,120,
+m35 mm_out=109051904 cum_exit=649 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052470 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052796 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053122 spm_src=24752
+m35 s1c[0..7]=163,163,163,160,160,160,160,160,
+m35 mm_out=109051904 cum_exit=649 max_words=80
+m35 pe=0 out_n=3 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=3 mm_dst=109052550 spm_src=8208
+m35 pe=2 out_n=3 mm_dst=109052876 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053202 spm_src=24592
+m35 s1c[0..7]=163,163,163,160,163,163,163,160,
+m35 mm_out=109051904 cum_exit=649 max_words=6
+m35 pe=0 out_n=0 mm_dst=109052230 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052556 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109052882 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053202 spm_src=24752
+m35 s1c[0..7]=163,163,163,160,163,163,163,160,
+m35 mm_out=109051904 cum_exit=649 max_words=0
+m35 pe=0 out_n=40 mm_dst=113246208 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247192 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248176 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113249160 spm_src=24592
+m35 s1c[0..7]=492,492,492,489,40,40,40,40,
+m35 mm_out=113246208 cum_exit=1965 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246288 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247272 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248256 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113249240 spm_src=24752
+m35 s1c[0..7]=492,492,492,489,80,80,80,80,
+m35 mm_out=113246208 cum_exit=1965 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246368 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247352 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248336 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113249320 spm_src=24592
+m35 s1c[0..7]=492,492,492,489,120,120,120,120,
+m35 mm_out=113246208 cum_exit=1965 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246448 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247432 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248416 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113249400 spm_src=24752
+m35 s1c[0..7]=492,492,492,489,160,160,160,160,
+m35 mm_out=113246208 cum_exit=1965 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246528 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247512 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248496 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113249480 spm_src=24592
+m35 s1c[0..7]=492,492,492,489,200,200,200,200,
+m35 mm_out=113246208 cum_exit=1965 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246608 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247592 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248576 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113249560 spm_src=24752
+m35 s1c[0..7]=492,492,492,489,240,240,240,240,
+m35 mm_out=113246208 cum_exit=1965 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246688 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247672 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248656 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113249640 spm_src=24592
+m35 s1c[0..7]=492,492,492,489,280,280,280,280,
+m35 mm_out=113246208 cum_exit=1965 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246768 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247752 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248736 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113249720 spm_src=24752
+m35 s1c[0..7]=492,492,492,489,320,320,320,320,
+m35 mm_out=113246208 cum_exit=1965 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246848 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247832 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248816 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113249800 spm_src=24592
+m35 s1c[0..7]=492,492,492,489,360,360,360,360,
+m35 mm_out=113246208 cum_exit=1965 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246928 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247912 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248896 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113249880 spm_src=24752
+m35 s1c[0..7]=492,492,492,489,400,400,400,400,
+m35 mm_out=113246208 cum_exit=1965 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247008 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247992 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248976 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113249960 spm_src=24592
+m35 s1c[0..7]=492,492,492,489,440,440,440,440,
+m35 mm_out=113246208 cum_exit=1965 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247088 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248072 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249056 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113250040 spm_src=24752
+m35 s1c[0..7]=492,492,492,489,480,480,480,480,
+m35 mm_out=113246208 cum_exit=1965 max_words=80
+m35 pe=0 out_n=12 mm_dst=113247168 spm_src=16
+m35 pe=1 out_n=12 mm_dst=113248152 spm_src=8208
+m35 pe=2 out_n=12 mm_dst=113249136 spm_src=16400
+m35 pe=3 out_n=9 mm_dst=113250120 spm_src=24592
+m35 s1c[0..7]=492,492,492,489,492,492,492,489,
+m35 mm_out=113246208 cum_exit=1965 max_words=24
+m35 pe=0 out_n=0 mm_dst=113247192 spm_src=176
+m35 pe=1 out_n=0 mm_dst=113248176 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=113249160 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=113250138 spm_src=24752
+m35 s1c[0..7]=492,492,492,489,492,492,492,489,
+m35 mm_out=113246208 cum_exit=1965 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052236 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052568 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052900 spm_src=24592
+m35 s1c[0..7]=166,166,166,163,40,40,40,40,
+m35 mm_out=109051904 cum_exit=661 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052316 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052648 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109052980 spm_src=24752
+m35 s1c[0..7]=166,166,166,163,80,80,80,80,
+m35 mm_out=109051904 cum_exit=661 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052396 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052728 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053060 spm_src=24592
+m35 s1c[0..7]=166,166,166,163,120,120,120,120,
+m35 mm_out=109051904 cum_exit=661 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052476 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052808 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053140 spm_src=24752
+m35 s1c[0..7]=166,166,166,163,160,160,160,160,
+m35 mm_out=109051904 cum_exit=661 max_words=80
+m35 pe=0 out_n=6 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=6 mm_dst=109052556 spm_src=8208
+m35 pe=2 out_n=6 mm_dst=109052888 spm_src=16400
+m35 pe=3 out_n=3 mm_dst=109053220 spm_src=24592
+m35 s1c[0..7]=166,166,166,163,166,166,166,163,
+m35 mm_out=109051904 cum_exit=661 max_words=12
+m35 pe=0 out_n=0 mm_dst=109052236 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052568 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109052900 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053226 spm_src=24752
+m35 s1c[0..7]=166,166,166,163,166,166,166,163,
+m35 mm_out=109051904 cum_exit=661 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052266 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052628 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052990 spm_src=24592
+m35 s1c[0..7]=181,181,181,181,40,40,40,40,
+m35 mm_out=109051904 cum_exit=724 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052346 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052708 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053070 spm_src=24752
+m35 s1c[0..7]=181,181,181,181,80,80,80,80,
+m35 mm_out=109051904 cum_exit=724 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052426 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052788 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053150 spm_src=24592
+m35 s1c[0..7]=181,181,181,181,120,120,120,120,
+m35 mm_out=109051904 cum_exit=724 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052506 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052868 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053230 spm_src=24752
+m35 s1c[0..7]=181,181,181,181,160,160,160,160,
+m35 mm_out=109051904 cum_exit=724 max_words=80
+m35 pe=0 out_n=21 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=21 mm_dst=109052586 spm_src=8208
+m35 pe=2 out_n=21 mm_dst=109052948 spm_src=16400
+m35 pe=3 out_n=21 mm_dst=109053310 spm_src=24592
+m35 s1c[0..7]=181,181,181,181,181,181,181,181,
+m35 mm_out=109051904 cum_exit=724 max_words=42
+m35 pe=0 out_n=0 mm_dst=109052266 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052628 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109052990 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053352 spm_src=24752
+m35 s1c[0..7]=181,181,181,181,181,181,181,181,
+m35 mm_out=109051904 cum_exit=724 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052318 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052732 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053146 spm_src=24592
+m35 s1c[0..7]=207,207,207,204,40,40,40,40,
+m35 mm_out=109051904 cum_exit=825 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052398 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052812 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053226 spm_src=24752
+m35 s1c[0..7]=207,207,207,204,80,80,80,80,
+m35 mm_out=109051904 cum_exit=825 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052478 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052892 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053306 spm_src=24592
+m35 s1c[0..7]=207,207,207,204,120,120,120,120,
+m35 mm_out=109051904 cum_exit=825 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052558 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052972 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053386 spm_src=24752
+m35 s1c[0..7]=207,207,207,204,160,160,160,160,
+m35 mm_out=109051904 cum_exit=825 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052638 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053052 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053466 spm_src=24592
+m35 s1c[0..7]=207,207,207,204,200,200,200,200,
+m35 mm_out=109051904 cum_exit=825 max_words=80
+m35 pe=0 out_n=7 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=7 mm_dst=109052718 spm_src=8368
+m35 pe=2 out_n=7 mm_dst=109053132 spm_src=16560
+m35 pe=3 out_n=4 mm_dst=109053546 spm_src=24752
+m35 s1c[0..7]=207,207,207,204,207,207,207,204,
+m35 mm_out=109051904 cum_exit=825 max_words=14
+m35 pe=0 out_n=0 mm_dst=109052318 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052732 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053146 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053554 spm_src=24592
+m35 s1c[0..7]=207,207,207,204,207,207,207,204,
+m35 mm_out=109051904 cum_exit=825 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052348 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052792 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053236 spm_src=24592
+m35 s1c[0..7]=222,222,222,219,40,40,40,40,
+m35 mm_out=109051904 cum_exit=885 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052428 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052872 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053316 spm_src=24752
+m35 s1c[0..7]=222,222,222,219,80,80,80,80,
+m35 mm_out=109051904 cum_exit=885 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052508 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052952 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053396 spm_src=24592
+m35 s1c[0..7]=222,222,222,219,120,120,120,120,
+m35 mm_out=109051904 cum_exit=885 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052588 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053032 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053476 spm_src=24752
+m35 s1c[0..7]=222,222,222,219,160,160,160,160,
+m35 mm_out=109051904 cum_exit=885 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052668 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053112 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053556 spm_src=24592
+m35 s1c[0..7]=222,222,222,219,200,200,200,200,
+m35 mm_out=109051904 cum_exit=885 max_words=80
+m35 pe=0 out_n=22 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=22 mm_dst=109052748 spm_src=8368
+m35 pe=2 out_n=22 mm_dst=109053192 spm_src=16560
+m35 pe=3 out_n=19 mm_dst=109053636 spm_src=24752
+m35 s1c[0..7]=222,222,222,219,222,222,222,219,
+m35 mm_out=109051904 cum_exit=885 max_words=44
+m35 pe=0 out_n=0 mm_dst=109052348 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052792 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053236 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053674 spm_src=24592
+m35 s1c[0..7]=222,222,222,219,222,222,222,219,
+m35 mm_out=109051904 cum_exit=885 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052386 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052868 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053350 spm_src=24592
+m35 s1c[0..7]=241,241,241,239,40,40,40,40,
+m35 mm_out=109051904 cum_exit=962 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052466 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052948 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053430 spm_src=24752
+m35 s1c[0..7]=241,241,241,239,80,80,80,80,
+m35 mm_out=109051904 cum_exit=962 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052546 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053028 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053510 spm_src=24592
+m35 s1c[0..7]=241,241,241,239,120,120,120,120,
+m35 mm_out=109051904 cum_exit=962 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052626 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053108 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053590 spm_src=24752
+m35 s1c[0..7]=241,241,241,239,160,160,160,160,
+m35 mm_out=109051904 cum_exit=962 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052706 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053188 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053670 spm_src=24592
+m35 s1c[0..7]=241,241,241,239,200,200,200,200,
+m35 mm_out=109051904 cum_exit=962 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052786 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053268 spm_src=16560
+m35 pe=3 out_n=39 mm_dst=109053750 spm_src=24752
+m35 s1c[0..7]=241,241,241,239,240,240,240,239,
+m35 mm_out=109051904 cum_exit=962 max_words=80
+m35 pe=0 out_n=1 mm_dst=109052384 spm_src=16
+m35 pe=1 out_n=1 mm_dst=109052866 spm_src=8208
+m35 pe=2 out_n=1 mm_dst=109053348 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053828 spm_src=24592
+m35 s1c[0..7]=241,241,241,239,241,241,241,239,
+m35 mm_out=109051904 cum_exit=962 max_words=2
+m35 pe=0 out_n=0 mm_dst=109052386 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052868 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053350 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053828 spm_src=24752
+m35 s1c[0..7]=241,241,241,239,241,241,241,239,
+m35 mm_out=109051904 cum_exit=962 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052414 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052924 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053434 spm_src=24592
+m35 s1c[0..7]=255,255,255,255,40,40,40,40,
+m35 mm_out=109051904 cum_exit=1020 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052494 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053004 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053514 spm_src=24752
+m35 s1c[0..7]=255,255,255,255,80,80,80,80,
+m35 mm_out=109051904 cum_exit=1020 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052574 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053084 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053594 spm_src=24592
+m35 s1c[0..7]=255,255,255,255,120,120,120,120,
+m35 mm_out=109051904 cum_exit=1020 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052654 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053164 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053674 spm_src=24752
+m35 s1c[0..7]=255,255,255,255,160,160,160,160,
+m35 mm_out=109051904 cum_exit=1020 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052734 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053244 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053754 spm_src=24592
+m35 s1c[0..7]=255,255,255,255,200,200,200,200,
+m35 mm_out=109051904 cum_exit=1020 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052814 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053324 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053834 spm_src=24752
+m35 s1c[0..7]=255,255,255,255,240,240,240,240,
+m35 mm_out=109051904 cum_exit=1020 max_words=80
+m35 pe=0 out_n=15 mm_dst=109052384 spm_src=16
+m35 pe=1 out_n=15 mm_dst=109052894 spm_src=8208
+m35 pe=2 out_n=15 mm_dst=109053404 spm_src=16400
+m35 pe=3 out_n=15 mm_dst=109053914 spm_src=24592
+m35 s1c[0..7]=255,255,255,255,255,255,255,255,
+m35 mm_out=109051904 cum_exit=1020 max_words=30
+m35 pe=0 out_n=0 mm_dst=109052414 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052924 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053434 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053944 spm_src=24752
+m35 s1c[0..7]=255,255,255,255,255,255,255,255,
+m35 mm_out=109051904 cum_exit=1020 max_words=0
+m35 pe=0 out_n=40 mm_dst=113246208 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247724 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249240 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113250756 spm_src=24592
+m35 s1c[0..7]=758,758,758,755,40,40,40,40,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246288 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247804 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249320 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113250836 spm_src=24752
+m35 s1c[0..7]=758,758,758,755,80,80,80,80,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246368 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247884 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249400 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113250916 spm_src=24592
+m35 s1c[0..7]=758,758,758,755,120,120,120,120,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246448 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247964 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249480 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113250996 spm_src=24752
+m35 s1c[0..7]=758,758,758,755,160,160,160,160,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246528 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248044 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249560 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113251076 spm_src=24592
+m35 s1c[0..7]=758,758,758,755,200,200,200,200,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246608 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248124 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249640 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113251156 spm_src=24752
+m35 s1c[0..7]=758,758,758,755,240,240,240,240,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246688 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248204 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249720 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113251236 spm_src=24592
+m35 s1c[0..7]=758,758,758,755,280,280,280,280,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246768 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248284 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249800 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113251316 spm_src=24752
+m35 s1c[0..7]=758,758,758,755,320,320,320,320,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246848 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248364 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249880 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113251396 spm_src=24592
+m35 s1c[0..7]=758,758,758,755,360,360,360,360,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246928 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248444 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249960 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113251476 spm_src=24752
+m35 s1c[0..7]=758,758,758,755,400,400,400,400,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247008 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248524 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113250040 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113251556 spm_src=24592
+m35 s1c[0..7]=758,758,758,755,440,440,440,440,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247088 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248604 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113250120 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113251636 spm_src=24752
+m35 s1c[0..7]=758,758,758,755,480,480,480,480,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247168 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248684 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113250200 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113251716 spm_src=24592
+m35 s1c[0..7]=758,758,758,755,520,520,520,520,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247248 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248764 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113250280 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113251796 spm_src=24752
+m35 s1c[0..7]=758,758,758,755,560,560,560,560,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247328 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248844 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113250360 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113251876 spm_src=24592
+m35 s1c[0..7]=758,758,758,755,600,600,600,600,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247408 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248924 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113250440 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113251956 spm_src=24752
+m35 s1c[0..7]=758,758,758,755,640,640,640,640,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247488 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113249004 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113250520 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113252036 spm_src=24592
+m35 s1c[0..7]=758,758,758,755,680,680,680,680,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247568 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113249084 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113250600 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113252116 spm_src=24752
+m35 s1c[0..7]=758,758,758,755,720,720,720,720,
+m35 mm_out=113246208 cum_exit=3029 max_words=80
+m35 pe=0 out_n=38 mm_dst=113247648 spm_src=16
+m35 pe=1 out_n=38 mm_dst=113249164 spm_src=8208
+m35 pe=2 out_n=38 mm_dst=113250680 spm_src=16400
+m35 pe=3 out_n=35 mm_dst=113252196 spm_src=24592
+m35 s1c[0..7]=758,758,758,755,758,758,758,755,
+m35 mm_out=113246208 cum_exit=3029 max_words=76
+m35 pe=0 out_n=0 mm_dst=113247724 spm_src=176
+m35 pe=1 out_n=0 mm_dst=113249240 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=113250756 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=113252266 spm_src=24752
+m35 s1c[0..7]=758,758,758,755,758,758,758,755,
+m35 mm_out=113246208 cum_exit=3029 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052418 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052932 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053446 spm_src=24592
+m35 s1c[0..7]=257,257,257,257,40,40,40,40,
+m35 mm_out=109051904 cum_exit=1028 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052498 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053012 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053526 spm_src=24752
+m35 s1c[0..7]=257,257,257,257,80,80,80,80,
+m35 mm_out=109051904 cum_exit=1028 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052578 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053092 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053606 spm_src=24592
+m35 s1c[0..7]=257,257,257,257,120,120,120,120,
+m35 mm_out=109051904 cum_exit=1028 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052658 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053172 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053686 spm_src=24752
+m35 s1c[0..7]=257,257,257,257,160,160,160,160,
+m35 mm_out=109051904 cum_exit=1028 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052738 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053252 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053766 spm_src=24592
+m35 s1c[0..7]=257,257,257,257,200,200,200,200,
+m35 mm_out=109051904 cum_exit=1028 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052818 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053332 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053846 spm_src=24752
+m35 s1c[0..7]=257,257,257,257,240,240,240,240,
+m35 mm_out=109051904 cum_exit=1028 max_words=80
+m35 pe=0 out_n=17 mm_dst=109052384 spm_src=16
+m35 pe=1 out_n=17 mm_dst=109052898 spm_src=8208
+m35 pe=2 out_n=17 mm_dst=109053412 spm_src=16400
+m35 pe=3 out_n=17 mm_dst=109053926 spm_src=24592
+m35 s1c[0..7]=257,257,257,257,257,257,257,257,
+m35 mm_out=109051904 cum_exit=1028 max_words=34
+m35 pe=0 out_n=0 mm_dst=109052418 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052932 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053446 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053960 spm_src=24752
+m35 s1c[0..7]=257,257,257,257,257,257,257,257,
+m35 mm_out=109051904 cum_exit=1028 max_words=0
+m35 pe=0 out_n=40 mm_dst=113246208 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247770 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249332 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113250894 spm_src=24592
+m35 s1c[0..7]=781,781,781,780,40,40,40,40,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246288 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247850 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249412 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113250974 spm_src=24752
+m35 s1c[0..7]=781,781,781,780,80,80,80,80,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246368 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247930 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249492 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113251054 spm_src=24592
+m35 s1c[0..7]=781,781,781,780,120,120,120,120,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246448 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248010 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249572 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113251134 spm_src=24752
+m35 s1c[0..7]=781,781,781,780,160,160,160,160,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246528 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248090 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249652 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113251214 spm_src=24592
+m35 s1c[0..7]=781,781,781,780,200,200,200,200,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246608 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248170 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249732 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113251294 spm_src=24752
+m35 s1c[0..7]=781,781,781,780,240,240,240,240,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246688 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248250 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249812 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113251374 spm_src=24592
+m35 s1c[0..7]=781,781,781,780,280,280,280,280,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246768 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248330 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249892 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113251454 spm_src=24752
+m35 s1c[0..7]=781,781,781,780,320,320,320,320,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246848 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248410 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249972 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113251534 spm_src=24592
+m35 s1c[0..7]=781,781,781,780,360,360,360,360,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246928 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248490 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113250052 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113251614 spm_src=24752
+m35 s1c[0..7]=781,781,781,780,400,400,400,400,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247008 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248570 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113250132 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113251694 spm_src=24592
+m35 s1c[0..7]=781,781,781,780,440,440,440,440,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247088 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248650 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113250212 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113251774 spm_src=24752
+m35 s1c[0..7]=781,781,781,780,480,480,480,480,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247168 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248730 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113250292 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113251854 spm_src=24592
+m35 s1c[0..7]=781,781,781,780,520,520,520,520,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247248 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248810 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113250372 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113251934 spm_src=24752
+m35 s1c[0..7]=781,781,781,780,560,560,560,560,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247328 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248890 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113250452 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113252014 spm_src=24592
+m35 s1c[0..7]=781,781,781,780,600,600,600,600,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247408 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248970 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113250532 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113252094 spm_src=24752
+m35 s1c[0..7]=781,781,781,780,640,640,640,640,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247488 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113249050 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113250612 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113252174 spm_src=24592
+m35 s1c[0..7]=781,781,781,780,680,680,680,680,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247568 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113249130 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113250692 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113252254 spm_src=24752
+m35 s1c[0..7]=781,781,781,780,720,720,720,720,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247648 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113249210 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113250772 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113252334 spm_src=24592
+m35 s1c[0..7]=781,781,781,780,760,760,760,760,
+m35 mm_out=113246208 cum_exit=3123 max_words=80
+m35 pe=0 out_n=21 mm_dst=113247728 spm_src=176
+m35 pe=1 out_n=21 mm_dst=113249290 spm_src=8368
+m35 pe=2 out_n=21 mm_dst=113250852 spm_src=16560
+m35 pe=3 out_n=20 mm_dst=113252414 spm_src=24752
+m35 s1c[0..7]=781,781,781,780,781,781,781,780,
+m35 mm_out=113246208 cum_exit=3123 max_words=42
+m35 pe=0 out_n=0 mm_dst=113247770 spm_src=16
+m35 pe=1 out_n=0 mm_dst=113249332 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=113250894 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=113252454 spm_src=24592
+m35 s1c[0..7]=781,781,781,780,781,781,781,780,
+m35 mm_out=113246208 cum_exit=3123 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052428 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052952 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053476 spm_src=24592
+m35 s1c[0..7]=262,262,262,259,40,40,40,40,
+m35 mm_out=109051904 cum_exit=1045 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052508 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053032 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053556 spm_src=24752
+m35 s1c[0..7]=262,262,262,259,80,80,80,80,
+m35 mm_out=109051904 cum_exit=1045 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052588 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053112 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053636 spm_src=24592
+m35 s1c[0..7]=262,262,262,259,120,120,120,120,
+m35 mm_out=109051904 cum_exit=1045 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052668 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053192 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053716 spm_src=24752
+m35 s1c[0..7]=262,262,262,259,160,160,160,160,
+m35 mm_out=109051904 cum_exit=1045 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052748 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053272 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053796 spm_src=24592
+m35 s1c[0..7]=262,262,262,259,200,200,200,200,
+m35 mm_out=109051904 cum_exit=1045 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052828 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053352 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053876 spm_src=24752
+m35 s1c[0..7]=262,262,262,259,240,240,240,240,
+m35 mm_out=109051904 cum_exit=1045 max_words=80
+m35 pe=0 out_n=22 mm_dst=109052384 spm_src=16
+m35 pe=1 out_n=22 mm_dst=109052908 spm_src=8208
+m35 pe=2 out_n=22 mm_dst=109053432 spm_src=16400
+m35 pe=3 out_n=19 mm_dst=109053956 spm_src=24592
+m35 s1c[0..7]=262,262,262,259,262,262,262,259,
+m35 mm_out=109051904 cum_exit=1045 max_words=44
+m35 pe=0 out_n=0 mm_dst=109052428 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052952 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053476 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053994 spm_src=24752
+m35 s1c[0..7]=262,262,262,259,262,262,262,259,
+m35 mm_out=109051904 cum_exit=1045 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052428 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052952 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053476 spm_src=24592
+m35 s1c[0..7]=262,262,262,259,40,40,40,40,
+m35 mm_out=109051904 cum_exit=1045 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052508 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053032 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053556 spm_src=24752
+m35 s1c[0..7]=262,262,262,259,80,80,80,80,
+m35 mm_out=109051904 cum_exit=1045 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052588 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053112 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053636 spm_src=24592
+m35 s1c[0..7]=262,262,262,259,120,120,120,120,
+m35 mm_out=109051904 cum_exit=1045 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052668 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053192 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053716 spm_src=24752
+m35 s1c[0..7]=262,262,262,259,160,160,160,160,
+m35 mm_out=109051904 cum_exit=1045 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052748 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053272 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053796 spm_src=24592
+m35 s1c[0..7]=262,262,262,259,200,200,200,200,
+m35 mm_out=109051904 cum_exit=1045 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052828 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053352 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053876 spm_src=24752
+m35 s1c[0..7]=262,262,262,259,240,240,240,240,
+m35 mm_out=109051904 cum_exit=1045 max_words=80
+m35 pe=0 out_n=22 mm_dst=109052384 spm_src=16
+m35 pe=1 out_n=22 mm_dst=109052908 spm_src=8208
+m35 pe=2 out_n=22 mm_dst=109053432 spm_src=16400
+m35 pe=3 out_n=19 mm_dst=109053956 spm_src=24592
+m35 s1c[0..7]=262,262,262,259,262,262,262,259,
+m35 mm_out=109051904 cum_exit=1045 max_words=44
+m35 pe=0 out_n=0 mm_dst=109052428 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052952 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053476 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053994 spm_src=24752
+m35 s1c[0..7]=262,262,262,259,262,262,262,259,
+m35 mm_out=109051904 cum_exit=1045 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052434 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052964 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053494 spm_src=24592
+m35 s1c[0..7]=265,265,265,263,40,40,40,40,
+m35 mm_out=109051904 cum_exit=1058 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052514 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053044 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053574 spm_src=24752
+m35 s1c[0..7]=265,265,265,263,80,80,80,80,
+m35 mm_out=109051904 cum_exit=1058 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052594 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053124 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053654 spm_src=24592
+m35 s1c[0..7]=265,265,265,263,120,120,120,120,
+m35 mm_out=109051904 cum_exit=1058 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052674 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053204 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053734 spm_src=24752
+m35 s1c[0..7]=265,265,265,263,160,160,160,160,
+m35 mm_out=109051904 cum_exit=1058 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052754 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053284 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053814 spm_src=24592
+m35 s1c[0..7]=265,265,265,263,200,200,200,200,
+m35 mm_out=109051904 cum_exit=1058 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052834 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053364 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053894 spm_src=24752
+m35 s1c[0..7]=265,265,265,263,240,240,240,240,
+m35 mm_out=109051904 cum_exit=1058 max_words=80
+m35 pe=0 out_n=25 mm_dst=109052384 spm_src=16
+m35 pe=1 out_n=25 mm_dst=109052914 spm_src=8208
+m35 pe=2 out_n=25 mm_dst=109053444 spm_src=16400
+m35 pe=3 out_n=23 mm_dst=109053974 spm_src=24592
+m35 s1c[0..7]=265,265,265,263,265,265,265,263,
+m35 mm_out=109051904 cum_exit=1058 max_words=50
+m35 pe=0 out_n=0 mm_dst=109052434 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052964 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053494 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109054020 spm_src=24752
+m35 s1c[0..7]=265,265,265,263,265,265,265,263,
+m35 mm_out=109051904 cum_exit=1058 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052410 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052916 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053422 spm_src=24592
+m35 s1c[0..7]=253,253,253,250,40,40,40,40,
+m35 mm_out=109051904 cum_exit=1009 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052490 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052996 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053502 spm_src=24752
+m35 s1c[0..7]=253,253,253,250,80,80,80,80,
+m35 mm_out=109051904 cum_exit=1009 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052570 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053076 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053582 spm_src=24592
+m35 s1c[0..7]=253,253,253,250,120,120,120,120,
+m35 mm_out=109051904 cum_exit=1009 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052650 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053156 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053662 spm_src=24752
+m35 s1c[0..7]=253,253,253,250,160,160,160,160,
+m35 mm_out=109051904 cum_exit=1009 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052730 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053236 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053742 spm_src=24592
+m35 s1c[0..7]=253,253,253,250,200,200,200,200,
+m35 mm_out=109051904 cum_exit=1009 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052810 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053316 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053822 spm_src=24752
+m35 s1c[0..7]=253,253,253,250,240,240,240,240,
+m35 mm_out=109051904 cum_exit=1009 max_words=80
+m35 pe=0 out_n=13 mm_dst=109052384 spm_src=16
+m35 pe=1 out_n=13 mm_dst=109052890 spm_src=8208
+m35 pe=2 out_n=13 mm_dst=109053396 spm_src=16400
+m35 pe=3 out_n=10 mm_dst=109053902 spm_src=24592
+m35 s1c[0..7]=253,253,253,250,253,253,253,250,
+m35 mm_out=109051904 cum_exit=1009 max_words=26
+m35 pe=0 out_n=0 mm_dst=109052410 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052916 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053422 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053922 spm_src=24752
+m35 s1c[0..7]=253,253,253,250,253,253,253,250,
+m35 mm_out=109051904 cum_exit=1009 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052416 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052928 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053440 spm_src=24592
+m35 s1c[0..7]=256,256,256,254,40,40,40,40,
+m35 mm_out=109051904 cum_exit=1022 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052496 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053008 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053520 spm_src=24752
+m35 s1c[0..7]=256,256,256,254,80,80,80,80,
+m35 mm_out=109051904 cum_exit=1022 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052576 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053088 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053600 spm_src=24592
+m35 s1c[0..7]=256,256,256,254,120,120,120,120,
+m35 mm_out=109051904 cum_exit=1022 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052656 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053168 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053680 spm_src=24752
+m35 s1c[0..7]=256,256,256,254,160,160,160,160,
+m35 mm_out=109051904 cum_exit=1022 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052736 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053248 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053760 spm_src=24592
+m35 s1c[0..7]=256,256,256,254,200,200,200,200,
+m35 mm_out=109051904 cum_exit=1022 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052816 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053328 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053840 spm_src=24752
+m35 s1c[0..7]=256,256,256,254,240,240,240,240,
+m35 mm_out=109051904 cum_exit=1022 max_words=80
+m35 pe=0 out_n=16 mm_dst=109052384 spm_src=16
+m35 pe=1 out_n=16 mm_dst=109052896 spm_src=8208
+m35 pe=2 out_n=16 mm_dst=109053408 spm_src=16400
+m35 pe=3 out_n=14 mm_dst=109053920 spm_src=24592
+m35 s1c[0..7]=256,256,256,254,256,256,256,254,
+m35 mm_out=109051904 cum_exit=1022 max_words=32
+m35 pe=0 out_n=0 mm_dst=109052416 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052928 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053440 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053948 spm_src=24752
+m35 s1c[0..7]=256,256,256,254,256,256,256,254,
+m35 mm_out=109051904 cum_exit=1022 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052416 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052928 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053440 spm_src=24592
+m35 s1c[0..7]=256,256,256,255,40,40,40,40,
+m35 mm_out=109051904 cum_exit=1023 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052496 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053008 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053520 spm_src=24752
+m35 s1c[0..7]=256,256,256,255,80,80,80,80,
+m35 mm_out=109051904 cum_exit=1023 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052576 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053088 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053600 spm_src=24592
+m35 s1c[0..7]=256,256,256,255,120,120,120,120,
+m35 mm_out=109051904 cum_exit=1023 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052656 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053168 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053680 spm_src=24752
+m35 s1c[0..7]=256,256,256,255,160,160,160,160,
+m35 mm_out=109051904 cum_exit=1023 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052736 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053248 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053760 spm_src=24592
+m35 s1c[0..7]=256,256,256,255,200,200,200,200,
+m35 mm_out=109051904 cum_exit=1023 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052816 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053328 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053840 spm_src=24752
+m35 s1c[0..7]=256,256,256,255,240,240,240,240,
+m35 mm_out=109051904 cum_exit=1023 max_words=80
+m35 pe=0 out_n=16 mm_dst=109052384 spm_src=16
+m35 pe=1 out_n=16 mm_dst=109052896 spm_src=8208
+m35 pe=2 out_n=16 mm_dst=109053408 spm_src=16400
+m35 pe=3 out_n=15 mm_dst=109053920 spm_src=24592
+m35 s1c[0..7]=256,256,256,255,256,256,256,255,
+m35 mm_out=109051904 cum_exit=1023 max_words=32
+m35 pe=0 out_n=0 mm_dst=109052416 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052928 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053440 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053950 spm_src=24752
+m35 s1c[0..7]=256,256,256,255,256,256,256,255,
+m35 mm_out=109051904 cum_exit=1023 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052374 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052844 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053314 spm_src=24592
+m35 s1c[0..7]=235,235,235,235,40,40,40,40,
+m35 mm_out=109051904 cum_exit=940 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052454 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052924 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053394 spm_src=24752
+m35 s1c[0..7]=235,235,235,235,80,80,80,80,
+m35 mm_out=109051904 cum_exit=940 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052534 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053004 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053474 spm_src=24592
+m35 s1c[0..7]=235,235,235,235,120,120,120,120,
+m35 mm_out=109051904 cum_exit=940 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052614 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053084 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053554 spm_src=24752
+m35 s1c[0..7]=235,235,235,235,160,160,160,160,
+m35 mm_out=109051904 cum_exit=940 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052694 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053164 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053634 spm_src=24592
+m35 s1c[0..7]=235,235,235,235,200,200,200,200,
+m35 mm_out=109051904 cum_exit=940 max_words=80
+m35 pe=0 out_n=35 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=35 mm_dst=109052774 spm_src=8368
+m35 pe=2 out_n=35 mm_dst=109053244 spm_src=16560
+m35 pe=3 out_n=35 mm_dst=109053714 spm_src=24752
+m35 s1c[0..7]=235,235,235,235,235,235,235,235,
+m35 mm_out=109051904 cum_exit=940 max_words=70
+m35 pe=0 out_n=0 mm_dst=109052374 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052844 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053314 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053784 spm_src=24592
+m35 s1c[0..7]=235,235,235,235,235,235,235,235,
+m35 mm_out=109051904 cum_exit=940 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052390 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052876 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053362 spm_src=24592
+m35 s1c[0..7]=243,243,243,240,40,40,40,40,
+m35 mm_out=109051904 cum_exit=969 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052470 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052956 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053442 spm_src=24752
+m35 s1c[0..7]=243,243,243,240,80,80,80,80,
+m35 mm_out=109051904 cum_exit=969 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052550 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053036 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053522 spm_src=24592
+m35 s1c[0..7]=243,243,243,240,120,120,120,120,
+m35 mm_out=109051904 cum_exit=969 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052630 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053116 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053602 spm_src=24752
+m35 s1c[0..7]=243,243,243,240,160,160,160,160,
+m35 mm_out=109051904 cum_exit=969 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052710 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053196 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053682 spm_src=24592
+m35 s1c[0..7]=243,243,243,240,200,200,200,200,
+m35 mm_out=109051904 cum_exit=969 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052790 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053276 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053762 spm_src=24752
+m35 s1c[0..7]=243,243,243,240,240,240,240,240,
+m35 mm_out=109051904 cum_exit=969 max_words=80
+m35 pe=0 out_n=3 mm_dst=109052384 spm_src=16
+m35 pe=1 out_n=3 mm_dst=109052870 spm_src=8208
+m35 pe=2 out_n=3 mm_dst=109053356 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053842 spm_src=24592
+m35 s1c[0..7]=243,243,243,240,243,243,243,240,
+m35 mm_out=109051904 cum_exit=969 max_words=6
+m35 pe=0 out_n=0 mm_dst=109052390 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052876 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053362 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053842 spm_src=24752
+m35 s1c[0..7]=243,243,243,240,243,243,243,240,
+m35 mm_out=109051904 cum_exit=969 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052390 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052876 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053362 spm_src=24592
+m35 s1c[0..7]=243,243,243,242,40,40,40,40,
+m35 mm_out=109051904 cum_exit=971 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052470 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052956 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053442 spm_src=24752
+m35 s1c[0..7]=243,243,243,242,80,80,80,80,
+m35 mm_out=109051904 cum_exit=971 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052550 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053036 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053522 spm_src=24592
+m35 s1c[0..7]=243,243,243,242,120,120,120,120,
+m35 mm_out=109051904 cum_exit=971 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052630 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053116 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053602 spm_src=24752
+m35 s1c[0..7]=243,243,243,242,160,160,160,160,
+m35 mm_out=109051904 cum_exit=971 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052710 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053196 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053682 spm_src=24592
+m35 s1c[0..7]=243,243,243,242,200,200,200,200,
+m35 mm_out=109051904 cum_exit=971 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052790 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053276 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053762 spm_src=24752
+m35 s1c[0..7]=243,243,243,242,240,240,240,240,
+m35 mm_out=109051904 cum_exit=971 max_words=80
+m35 pe=0 out_n=3 mm_dst=109052384 spm_src=16
+m35 pe=1 out_n=3 mm_dst=109052870 spm_src=8208
+m35 pe=2 out_n=3 mm_dst=109053356 spm_src=16400
+m35 pe=3 out_n=2 mm_dst=109053842 spm_src=24592
+m35 s1c[0..7]=243,243,243,242,243,243,243,242,
+m35 mm_out=109051904 cum_exit=971 max_words=6
+m35 pe=0 out_n=0 mm_dst=109052390 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052876 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053362 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053846 spm_src=24752
+m35 s1c[0..7]=243,243,243,242,243,243,243,242,
+m35 mm_out=109051904 cum_exit=971 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052366 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052828 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053290 spm_src=24592
+m35 s1c[0..7]=231,231,231,229,40,40,40,40,
+m35 mm_out=109051904 cum_exit=922 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052446 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052908 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053370 spm_src=24752
+m35 s1c[0..7]=231,231,231,229,80,80,80,80,
+m35 mm_out=109051904 cum_exit=922 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052526 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052988 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053450 spm_src=24592
+m35 s1c[0..7]=231,231,231,229,120,120,120,120,
+m35 mm_out=109051904 cum_exit=922 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052606 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053068 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053530 spm_src=24752
+m35 s1c[0..7]=231,231,231,229,160,160,160,160,
+m35 mm_out=109051904 cum_exit=922 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052686 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053148 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053610 spm_src=24592
+m35 s1c[0..7]=231,231,231,229,200,200,200,200,
+m35 mm_out=109051904 cum_exit=922 max_words=80
+m35 pe=0 out_n=31 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=31 mm_dst=109052766 spm_src=8368
+m35 pe=2 out_n=31 mm_dst=109053228 spm_src=16560
+m35 pe=3 out_n=29 mm_dst=109053690 spm_src=24752
+m35 s1c[0..7]=231,231,231,229,231,231,231,229,
+m35 mm_out=109051904 cum_exit=922 max_words=62
+m35 pe=0 out_n=0 mm_dst=109052366 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052828 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053290 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053748 spm_src=24592
+m35 s1c[0..7]=231,231,231,229,231,231,231,229,
+m35 mm_out=109051904 cum_exit=922 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052352 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052800 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053248 spm_src=24592
+m35 s1c[0..7]=224,224,224,221,40,40,40,40,
+m35 mm_out=109051904 cum_exit=893 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052432 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052880 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053328 spm_src=24752
+m35 s1c[0..7]=224,224,224,221,80,80,80,80,
+m35 mm_out=109051904 cum_exit=893 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052512 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052960 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053408 spm_src=24592
+m35 s1c[0..7]=224,224,224,221,120,120,120,120,
+m35 mm_out=109051904 cum_exit=893 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052592 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053040 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053488 spm_src=24752
+m35 s1c[0..7]=224,224,224,221,160,160,160,160,
+m35 mm_out=109051904 cum_exit=893 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052672 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053120 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053568 spm_src=24592
+m35 s1c[0..7]=224,224,224,221,200,200,200,200,
+m35 mm_out=109051904 cum_exit=893 max_words=80
+m35 pe=0 out_n=24 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=24 mm_dst=109052752 spm_src=8368
+m35 pe=2 out_n=24 mm_dst=109053200 spm_src=16560
+m35 pe=3 out_n=21 mm_dst=109053648 spm_src=24752
+m35 s1c[0..7]=224,224,224,221,224,224,224,221,
+m35 mm_out=109051904 cum_exit=893 max_words=48
+m35 pe=0 out_n=0 mm_dst=109052352 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052800 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053248 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053690 spm_src=24592
+m35 s1c[0..7]=224,224,224,221,224,224,224,221,
+m35 mm_out=109051904 cum_exit=893 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052354 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052804 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053254 spm_src=24592
+m35 s1c[0..7]=225,225,225,224,40,40,40,40,
+m35 mm_out=109051904 cum_exit=899 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052434 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052884 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053334 spm_src=24752
+m35 s1c[0..7]=225,225,225,224,80,80,80,80,
+m35 mm_out=109051904 cum_exit=899 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052514 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052964 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053414 spm_src=24592
+m35 s1c[0..7]=225,225,225,224,120,120,120,120,
+m35 mm_out=109051904 cum_exit=899 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052594 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053044 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053494 spm_src=24752
+m35 s1c[0..7]=225,225,225,224,160,160,160,160,
+m35 mm_out=109051904 cum_exit=899 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052674 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053124 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053574 spm_src=24592
+m35 s1c[0..7]=225,225,225,224,200,200,200,200,
+m35 mm_out=109051904 cum_exit=899 max_words=80
+m35 pe=0 out_n=25 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=25 mm_dst=109052754 spm_src=8368
+m35 pe=2 out_n=25 mm_dst=109053204 spm_src=16560
+m35 pe=3 out_n=24 mm_dst=109053654 spm_src=24752
+m35 s1c[0..7]=225,225,225,224,225,225,225,224,
+m35 mm_out=109051904 cum_exit=899 max_words=50
+m35 pe=0 out_n=0 mm_dst=109052354 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052804 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053254 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053702 spm_src=24592
+m35 s1c[0..7]=225,225,225,224,225,225,225,224,
+m35 mm_out=109051904 cum_exit=899 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052356 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052808 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053260 spm_src=24592
+m35 s1c[0..7]=226,226,226,224,40,40,40,40,
+m35 mm_out=109051904 cum_exit=902 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052436 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052888 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053340 spm_src=24752
+m35 s1c[0..7]=226,226,226,224,80,80,80,80,
+m35 mm_out=109051904 cum_exit=902 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052516 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052968 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053420 spm_src=24592
+m35 s1c[0..7]=226,226,226,224,120,120,120,120,
+m35 mm_out=109051904 cum_exit=902 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052596 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053048 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053500 spm_src=24752
+m35 s1c[0..7]=226,226,226,224,160,160,160,160,
+m35 mm_out=109051904 cum_exit=902 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052676 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053128 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053580 spm_src=24592
+m35 s1c[0..7]=226,226,226,224,200,200,200,200,
+m35 mm_out=109051904 cum_exit=902 max_words=80
+m35 pe=0 out_n=26 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=26 mm_dst=109052756 spm_src=8368
+m35 pe=2 out_n=26 mm_dst=109053208 spm_src=16560
+m35 pe=3 out_n=24 mm_dst=109053660 spm_src=24752
+m35 s1c[0..7]=226,226,226,224,226,226,226,224,
+m35 mm_out=109051904 cum_exit=902 max_words=52
+m35 pe=0 out_n=0 mm_dst=109052356 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052808 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053260 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053708 spm_src=24592
+m35 s1c[0..7]=226,226,226,224,226,226,226,224,
+m35 mm_out=109051904 cum_exit=902 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052320 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052736 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053152 spm_src=24592
+m35 s1c[0..7]=208,208,208,208,40,40,40,40,
+m35 mm_out=109051904 cum_exit=832 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052400 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052816 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053232 spm_src=24752
+m35 s1c[0..7]=208,208,208,208,80,80,80,80,
+m35 mm_out=109051904 cum_exit=832 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052480 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052896 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053312 spm_src=24592
+m35 s1c[0..7]=208,208,208,208,120,120,120,120,
+m35 mm_out=109051904 cum_exit=832 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052560 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052976 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053392 spm_src=24752
+m35 s1c[0..7]=208,208,208,208,160,160,160,160,
+m35 mm_out=109051904 cum_exit=832 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052640 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053056 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053472 spm_src=24592
+m35 s1c[0..7]=208,208,208,208,200,200,200,200,
+m35 mm_out=109051904 cum_exit=832 max_words=80
+m35 pe=0 out_n=8 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=8 mm_dst=109052720 spm_src=8368
+m35 pe=2 out_n=8 mm_dst=109053136 spm_src=16560
+m35 pe=3 out_n=8 mm_dst=109053552 spm_src=24752
+m35 s1c[0..7]=208,208,208,208,208,208,208,208,
+m35 mm_out=109051904 cum_exit=832 max_words=16
+m35 pe=0 out_n=0 mm_dst=109052320 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052736 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053152 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053568 spm_src=24592
+m35 s1c[0..7]=208,208,208,208,208,208,208,208,
+m35 mm_out=109051904 cum_exit=832 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052322 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052740 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053158 spm_src=24592
+m35 s1c[0..7]=209,209,209,208,40,40,40,40,
+m35 mm_out=109051904 cum_exit=835 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052402 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052820 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053238 spm_src=24752
+m35 s1c[0..7]=209,209,209,208,80,80,80,80,
+m35 mm_out=109051904 cum_exit=835 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052482 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052900 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053318 spm_src=24592
+m35 s1c[0..7]=209,209,209,208,120,120,120,120,
+m35 mm_out=109051904 cum_exit=835 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052562 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052980 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053398 spm_src=24752
+m35 s1c[0..7]=209,209,209,208,160,160,160,160,
+m35 mm_out=109051904 cum_exit=835 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052642 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053060 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053478 spm_src=24592
+m35 s1c[0..7]=209,209,209,208,200,200,200,200,
+m35 mm_out=109051904 cum_exit=835 max_words=80
+m35 pe=0 out_n=9 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=9 mm_dst=109052722 spm_src=8368
+m35 pe=2 out_n=9 mm_dst=109053140 spm_src=16560
+m35 pe=3 out_n=8 mm_dst=109053558 spm_src=24752
+m35 s1c[0..7]=209,209,209,208,209,209,209,208,
+m35 mm_out=109051904 cum_exit=835 max_words=18
+m35 pe=0 out_n=0 mm_dst=109052322 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052740 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053158 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053574 spm_src=24592
+m35 s1c[0..7]=209,209,209,208,209,209,209,208,
+m35 mm_out=109051904 cum_exit=835 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052290 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052676 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053062 spm_src=24592
+m35 s1c[0..7]=193,193,193,190,40,40,40,40,
+m35 mm_out=109051904 cum_exit=769 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052370 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052756 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053142 spm_src=24752
+m35 s1c[0..7]=193,193,193,190,80,80,80,80,
+m35 mm_out=109051904 cum_exit=769 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052450 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052836 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053222 spm_src=24592
+m35 s1c[0..7]=193,193,193,190,120,120,120,120,
+m35 mm_out=109051904 cum_exit=769 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052530 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052916 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053302 spm_src=24752
+m35 s1c[0..7]=193,193,193,190,160,160,160,160,
+m35 mm_out=109051904 cum_exit=769 max_words=80
+m35 pe=0 out_n=33 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=33 mm_dst=109052610 spm_src=8208
+m35 pe=2 out_n=33 mm_dst=109052996 spm_src=16400
+m35 pe=3 out_n=30 mm_dst=109053382 spm_src=24592
+m35 s1c[0..7]=193,193,193,190,193,193,193,190,
+m35 mm_out=109051904 cum_exit=769 max_words=66
+m35 pe=0 out_n=0 mm_dst=109052290 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052676 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053062 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053442 spm_src=24752
+m35 s1c[0..7]=193,193,193,190,193,193,193,190,
+m35 mm_out=109051904 cum_exit=769 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052264 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052624 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052984 spm_src=24592
+m35 s1c[0..7]=180,180,180,179,40,40,40,40,
+m35 mm_out=109051904 cum_exit=719 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052344 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052704 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053064 spm_src=24752
+m35 s1c[0..7]=180,180,180,179,80,80,80,80,
+m35 mm_out=109051904 cum_exit=719 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052424 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052784 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053144 spm_src=24592
+m35 s1c[0..7]=180,180,180,179,120,120,120,120,
+m35 mm_out=109051904 cum_exit=719 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052504 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052864 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053224 spm_src=24752
+m35 s1c[0..7]=180,180,180,179,160,160,160,160,
+m35 mm_out=109051904 cum_exit=719 max_words=80
+m35 pe=0 out_n=20 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=20 mm_dst=109052584 spm_src=8208
+m35 pe=2 out_n=20 mm_dst=109052944 spm_src=16400
+m35 pe=3 out_n=19 mm_dst=109053304 spm_src=24592
+m35 s1c[0..7]=180,180,180,179,180,180,180,179,
+m35 mm_out=109051904 cum_exit=719 max_words=40
+m35 pe=0 out_n=0 mm_dst=109052264 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052624 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109052984 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053342 spm_src=24752
+m35 s1c[0..7]=180,180,180,179,180,180,180,179,
+m35 mm_out=109051904 cum_exit=719 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052284 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052664 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053044 spm_src=24592
+m35 s1c[0..7]=190,190,190,188,40,40,40,40,
+m35 mm_out=109051904 cum_exit=758 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052364 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052744 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053124 spm_src=24752
+m35 s1c[0..7]=190,190,190,188,80,80,80,80,
+m35 mm_out=109051904 cum_exit=758 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052444 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052824 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053204 spm_src=24592
+m35 s1c[0..7]=190,190,190,188,120,120,120,120,
+m35 mm_out=109051904 cum_exit=758 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052524 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052904 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053284 spm_src=24752
+m35 s1c[0..7]=190,190,190,188,160,160,160,160,
+m35 mm_out=109051904 cum_exit=758 max_words=80
+m35 pe=0 out_n=30 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=30 mm_dst=109052604 spm_src=8208
+m35 pe=2 out_n=30 mm_dst=109052984 spm_src=16400
+m35 pe=3 out_n=28 mm_dst=109053364 spm_src=24592
+m35 s1c[0..7]=190,190,190,188,190,190,190,188,
+m35 mm_out=109051904 cum_exit=758 max_words=60
+m35 pe=0 out_n=0 mm_dst=109052284 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052664 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053044 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053420 spm_src=24752
+m35 s1c[0..7]=190,190,190,188,190,190,190,188,
+m35 mm_out=109051904 cum_exit=758 max_words=0
+m35 pe=0 out_n=40 mm_dst=113246208 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247330 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248452 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113249574 spm_src=24592
+m35 s1c[0..7]=561,561,561,559,40,40,40,40,
+m35 mm_out=113246208 cum_exit=2242 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246288 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247410 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248532 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113249654 spm_src=24752
+m35 s1c[0..7]=561,561,561,559,80,80,80,80,
+m35 mm_out=113246208 cum_exit=2242 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246368 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247490 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248612 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113249734 spm_src=24592
+m35 s1c[0..7]=561,561,561,559,120,120,120,120,
+m35 mm_out=113246208 cum_exit=2242 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246448 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247570 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248692 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113249814 spm_src=24752
+m35 s1c[0..7]=561,561,561,559,160,160,160,160,
+m35 mm_out=113246208 cum_exit=2242 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246528 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247650 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248772 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113249894 spm_src=24592
+m35 s1c[0..7]=561,561,561,559,200,200,200,200,
+m35 mm_out=113246208 cum_exit=2242 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246608 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247730 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248852 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113249974 spm_src=24752
+m35 s1c[0..7]=561,561,561,559,240,240,240,240,
+m35 mm_out=113246208 cum_exit=2242 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246688 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247810 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248932 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113250054 spm_src=24592
+m35 s1c[0..7]=561,561,561,559,280,280,280,280,
+m35 mm_out=113246208 cum_exit=2242 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246768 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247890 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249012 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113250134 spm_src=24752
+m35 s1c[0..7]=561,561,561,559,320,320,320,320,
+m35 mm_out=113246208 cum_exit=2242 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246848 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247970 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249092 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113250214 spm_src=24592
+m35 s1c[0..7]=561,561,561,559,360,360,360,360,
+m35 mm_out=113246208 cum_exit=2242 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246928 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248050 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249172 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113250294 spm_src=24752
+m35 s1c[0..7]=561,561,561,559,400,400,400,400,
+m35 mm_out=113246208 cum_exit=2242 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247008 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248130 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249252 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113250374 spm_src=24592
+m35 s1c[0..7]=561,561,561,559,440,440,440,440,
+m35 mm_out=113246208 cum_exit=2242 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247088 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248210 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249332 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113250454 spm_src=24752
+m35 s1c[0..7]=561,561,561,559,480,480,480,480,
+m35 mm_out=113246208 cum_exit=2242 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247168 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248290 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249412 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113250534 spm_src=24592
+m35 s1c[0..7]=561,561,561,559,520,520,520,520,
+m35 mm_out=113246208 cum_exit=2242 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247248 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248370 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249492 spm_src=16560
+m35 pe=3 out_n=39 mm_dst=113250614 spm_src=24752
+m35 s1c[0..7]=561,561,561,559,560,560,560,559,
+m35 mm_out=113246208 cum_exit=2242 max_words=80
+m35 pe=0 out_n=1 mm_dst=113247328 spm_src=16
+m35 pe=1 out_n=1 mm_dst=113248450 spm_src=8208
+m35 pe=2 out_n=1 mm_dst=113249572 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=113250692 spm_src=24592
+m35 s1c[0..7]=561,561,561,559,561,561,561,559,
+m35 mm_out=113246208 cum_exit=2242 max_words=2
+m35 pe=0 out_n=0 mm_dst=113247330 spm_src=176
+m35 pe=1 out_n=0 mm_dst=113248452 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=113249574 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=113250692 spm_src=24752
+m35 s1c[0..7]=561,561,561,559,561,561,561,559,
+m35 mm_out=113246208 cum_exit=2242 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052304 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052704 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053104 spm_src=24592
+m35 s1c[0..7]=200,200,200,200,40,40,40,40,
+m35 mm_out=109051904 cum_exit=800 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052384 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052784 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053184 spm_src=24752
+m35 s1c[0..7]=200,200,200,200,80,80,80,80,
+m35 mm_out=109051904 cum_exit=800 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052464 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052864 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053264 spm_src=24592
+m35 s1c[0..7]=200,200,200,200,120,120,120,120,
+m35 mm_out=109051904 cum_exit=800 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052544 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052944 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053344 spm_src=24752
+m35 s1c[0..7]=200,200,200,200,160,160,160,160,
+m35 mm_out=109051904 cum_exit=800 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052624 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053024 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053424 spm_src=24592
+m35 s1c[0..7]=200,200,200,200,200,200,200,200,
+m35 mm_out=109051904 cum_exit=800 max_words=80
+m35 pe=0 out_n=0 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052704 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053104 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053504 spm_src=24752
+m35 s1c[0..7]=200,200,200,200,200,200,200,200,
+m35 mm_out=109051904 cum_exit=800 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052314 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052724 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053134 spm_src=24592
+m35 s1c[0..7]=205,205,205,204,40,40,40,40,
+m35 mm_out=109051904 cum_exit=819 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052394 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052804 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053214 spm_src=24752
+m35 s1c[0..7]=205,205,205,204,80,80,80,80,
+m35 mm_out=109051904 cum_exit=819 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052474 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052884 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053294 spm_src=24592
+m35 s1c[0..7]=205,205,205,204,120,120,120,120,
+m35 mm_out=109051904 cum_exit=819 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052554 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052964 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053374 spm_src=24752
+m35 s1c[0..7]=205,205,205,204,160,160,160,160,
+m35 mm_out=109051904 cum_exit=819 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052634 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053044 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053454 spm_src=24592
+m35 s1c[0..7]=205,205,205,204,200,200,200,200,
+m35 mm_out=109051904 cum_exit=819 max_words=80
+m35 pe=0 out_n=5 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=5 mm_dst=109052714 spm_src=8368
+m35 pe=2 out_n=5 mm_dst=109053124 spm_src=16560
+m35 pe=3 out_n=4 mm_dst=109053534 spm_src=24752
+m35 s1c[0..7]=205,205,205,204,205,205,205,204,
+m35 mm_out=109051904 cum_exit=819 max_words=10
+m35 pe=0 out_n=0 mm_dst=109052314 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052724 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053134 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053542 spm_src=24592
+m35 s1c[0..7]=205,205,205,204,205,205,205,204,
+m35 mm_out=109051904 cum_exit=819 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052324 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052744 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053164 spm_src=24592
+m35 s1c[0..7]=210,210,210,208,40,40,40,40,
+m35 mm_out=109051904 cum_exit=838 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052404 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052824 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053244 spm_src=24752
+m35 s1c[0..7]=210,210,210,208,80,80,80,80,
+m35 mm_out=109051904 cum_exit=838 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052484 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052904 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053324 spm_src=24592
+m35 s1c[0..7]=210,210,210,208,120,120,120,120,
+m35 mm_out=109051904 cum_exit=838 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052564 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052984 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053404 spm_src=24752
+m35 s1c[0..7]=210,210,210,208,160,160,160,160,
+m35 mm_out=109051904 cum_exit=838 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052644 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053064 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053484 spm_src=24592
+m35 s1c[0..7]=210,210,210,208,200,200,200,200,
+m35 mm_out=109051904 cum_exit=838 max_words=80
+m35 pe=0 out_n=10 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=10 mm_dst=109052724 spm_src=8368
+m35 pe=2 out_n=10 mm_dst=109053144 spm_src=16560
+m35 pe=3 out_n=8 mm_dst=109053564 spm_src=24752
+m35 s1c[0..7]=210,210,210,208,210,210,210,208,
+m35 mm_out=109051904 cum_exit=838 max_words=20
+m35 pe=0 out_n=0 mm_dst=109052324 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052744 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053164 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053580 spm_src=24592
+m35 s1c[0..7]=210,210,210,208,210,210,210,208,
+m35 mm_out=109051904 cum_exit=838 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052340 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052776 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053212 spm_src=24592
+m35 s1c[0..7]=218,218,218,215,40,40,40,40,
+m35 mm_out=109051904 cum_exit=869 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052420 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052856 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053292 spm_src=24752
+m35 s1c[0..7]=218,218,218,215,80,80,80,80,
+m35 mm_out=109051904 cum_exit=869 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052500 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052936 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053372 spm_src=24592
+m35 s1c[0..7]=218,218,218,215,120,120,120,120,
+m35 mm_out=109051904 cum_exit=869 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052580 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053016 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053452 spm_src=24752
+m35 s1c[0..7]=218,218,218,215,160,160,160,160,
+m35 mm_out=109051904 cum_exit=869 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052660 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053096 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053532 spm_src=24592
+m35 s1c[0..7]=218,218,218,215,200,200,200,200,
+m35 mm_out=109051904 cum_exit=869 max_words=80
+m35 pe=0 out_n=18 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=18 mm_dst=109052740 spm_src=8368
+m35 pe=2 out_n=18 mm_dst=109053176 spm_src=16560
+m35 pe=3 out_n=15 mm_dst=109053612 spm_src=24752
+m35 s1c[0..7]=218,218,218,215,218,218,218,215,
+m35 mm_out=109051904 cum_exit=869 max_words=36
+m35 pe=0 out_n=0 mm_dst=109052340 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052776 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053212 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053642 spm_src=24592
+m35 s1c[0..7]=218,218,218,215,218,218,218,215,
+m35 mm_out=109051904 cum_exit=869 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052364 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052824 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053284 spm_src=24592
+m35 s1c[0..7]=230,230,230,227,40,40,40,40,
+m35 mm_out=109051904 cum_exit=917 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052444 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052904 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053364 spm_src=24752
+m35 s1c[0..7]=230,230,230,227,80,80,80,80,
+m35 mm_out=109051904 cum_exit=917 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052524 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052984 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053444 spm_src=24592
+m35 s1c[0..7]=230,230,230,227,120,120,120,120,
+m35 mm_out=109051904 cum_exit=917 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052604 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053064 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053524 spm_src=24752
+m35 s1c[0..7]=230,230,230,227,160,160,160,160,
+m35 mm_out=109051904 cum_exit=917 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052684 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053144 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053604 spm_src=24592
+m35 s1c[0..7]=230,230,230,227,200,200,200,200,
+m35 mm_out=109051904 cum_exit=917 max_words=80
+m35 pe=0 out_n=30 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=30 mm_dst=109052764 spm_src=8368
+m35 pe=2 out_n=30 mm_dst=109053224 spm_src=16560
+m35 pe=3 out_n=27 mm_dst=109053684 spm_src=24752
+m35 s1c[0..7]=230,230,230,227,230,230,230,227,
+m35 mm_out=109051904 cum_exit=917 max_words=60
+m35 pe=0 out_n=0 mm_dst=109052364 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052824 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053284 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053738 spm_src=24592
+m35 s1c[0..7]=230,230,230,227,230,230,230,227,
+m35 mm_out=109051904 cum_exit=917 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052350 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052796 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053242 spm_src=24592
+m35 s1c[0..7]=223,223,223,220,40,40,40,40,
+m35 mm_out=109051904 cum_exit=889 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052430 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052876 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053322 spm_src=24752
+m35 s1c[0..7]=223,223,223,220,80,80,80,80,
+m35 mm_out=109051904 cum_exit=889 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052510 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052956 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053402 spm_src=24592
+m35 s1c[0..7]=223,223,223,220,120,120,120,120,
+m35 mm_out=109051904 cum_exit=889 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052590 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053036 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053482 spm_src=24752
+m35 s1c[0..7]=223,223,223,220,160,160,160,160,
+m35 mm_out=109051904 cum_exit=889 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052670 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053116 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053562 spm_src=24592
+m35 s1c[0..7]=223,223,223,220,200,200,200,200,
+m35 mm_out=109051904 cum_exit=889 max_words=80
+m35 pe=0 out_n=23 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=23 mm_dst=109052750 spm_src=8368
+m35 pe=2 out_n=23 mm_dst=109053196 spm_src=16560
+m35 pe=3 out_n=20 mm_dst=109053642 spm_src=24752
+m35 s1c[0..7]=223,223,223,220,223,223,223,220,
+m35 mm_out=109051904 cum_exit=889 max_words=46
+m35 pe=0 out_n=0 mm_dst=109052350 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052796 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053242 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053682 spm_src=24592
+m35 s1c[0..7]=223,223,223,220,223,223,223,220,
+m35 mm_out=109051904 cum_exit=889 max_words=0
+m35 pe=0 out_n=40 mm_dst=113246208 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247450 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248692 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113249934 spm_src=24592
+m35 s1c[0..7]=621,621,621,618,40,40,40,40,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246288 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247530 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248772 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113250014 spm_src=24752
+m35 s1c[0..7]=621,621,621,618,80,80,80,80,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246368 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247610 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248852 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113250094 spm_src=24592
+m35 s1c[0..7]=621,621,621,618,120,120,120,120,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246448 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247690 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248932 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113250174 spm_src=24752
+m35 s1c[0..7]=621,621,621,618,160,160,160,160,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246528 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247770 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249012 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113250254 spm_src=24592
+m35 s1c[0..7]=621,621,621,618,200,200,200,200,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246608 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247850 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249092 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113250334 spm_src=24752
+m35 s1c[0..7]=621,621,621,618,240,240,240,240,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246688 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247930 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249172 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113250414 spm_src=24592
+m35 s1c[0..7]=621,621,621,618,280,280,280,280,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246768 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248010 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249252 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113250494 spm_src=24752
+m35 s1c[0..7]=621,621,621,618,320,320,320,320,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246848 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248090 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249332 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113250574 spm_src=24592
+m35 s1c[0..7]=621,621,621,618,360,360,360,360,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246928 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248170 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249412 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113250654 spm_src=24752
+m35 s1c[0..7]=621,621,621,618,400,400,400,400,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247008 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248250 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249492 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113250734 spm_src=24592
+m35 s1c[0..7]=621,621,621,618,440,440,440,440,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247088 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248330 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249572 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113250814 spm_src=24752
+m35 s1c[0..7]=621,621,621,618,480,480,480,480,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247168 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248410 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249652 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113250894 spm_src=24592
+m35 s1c[0..7]=621,621,621,618,520,520,520,520,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247248 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113248490 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113249732 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113250974 spm_src=24752
+m35 s1c[0..7]=621,621,621,618,560,560,560,560,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=40 mm_dst=113247328 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113248570 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113249812 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113251054 spm_src=24592
+m35 s1c[0..7]=621,621,621,618,600,600,600,600,
+m35 mm_out=113246208 cum_exit=2481 max_words=80
+m35 pe=0 out_n=21 mm_dst=113247408 spm_src=176
+m35 pe=1 out_n=21 mm_dst=113248650 spm_src=8368
+m35 pe=2 out_n=21 mm_dst=113249892 spm_src=16560
+m35 pe=3 out_n=18 mm_dst=113251134 spm_src=24752
+m35 s1c[0..7]=621,621,621,618,621,621,621,618,
+m35 mm_out=113246208 cum_exit=2481 max_words=42
+m35 pe=0 out_n=0 mm_dst=113247450 spm_src=16
+m35 pe=1 out_n=0 mm_dst=113248692 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=113249934 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=113251170 spm_src=24592
+m35 s1c[0..7]=621,621,621,618,621,621,621,618,
+m35 mm_out=113246208 cum_exit=2481 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052340 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052776 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053212 spm_src=24592
+m35 s1c[0..7]=218,218,218,215,40,40,40,40,
+m35 mm_out=109051904 cum_exit=869 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052420 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052856 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053292 spm_src=24752
+m35 s1c[0..7]=218,218,218,215,80,80,80,80,
+m35 mm_out=109051904 cum_exit=869 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052500 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052936 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053372 spm_src=24592
+m35 s1c[0..7]=218,218,218,215,120,120,120,120,
+m35 mm_out=109051904 cum_exit=869 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052580 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109053016 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053452 spm_src=24752
+m35 s1c[0..7]=218,218,218,215,160,160,160,160,
+m35 mm_out=109051904 cum_exit=869 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052660 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053096 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053532 spm_src=24592
+m35 s1c[0..7]=218,218,218,215,200,200,200,200,
+m35 mm_out=109051904 cum_exit=869 max_words=80
+m35 pe=0 out_n=18 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=18 mm_dst=109052740 spm_src=8368
+m35 pe=2 out_n=18 mm_dst=109053176 spm_src=16560
+m35 pe=3 out_n=15 mm_dst=109053612 spm_src=24752
+m35 s1c[0..7]=218,218,218,215,218,218,218,215,
+m35 mm_out=109051904 cum_exit=869 max_words=36
+m35 pe=0 out_n=0 mm_dst=109052340 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052776 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053212 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053642 spm_src=24592
+m35 s1c[0..7]=218,218,218,215,218,218,218,215,
+m35 mm_out=109051904 cum_exit=869 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052308 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052712 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053116 spm_src=24592
+m35 s1c[0..7]=202,202,202,199,40,40,40,40,
+m35 mm_out=109051904 cum_exit=805 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052388 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052792 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053196 spm_src=24752
+m35 s1c[0..7]=202,202,202,199,80,80,80,80,
+m35 mm_out=109051904 cum_exit=805 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052468 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052872 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053276 spm_src=24592
+m35 s1c[0..7]=202,202,202,199,120,120,120,120,
+m35 mm_out=109051904 cum_exit=805 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052548 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052952 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053356 spm_src=24752
+m35 s1c[0..7]=202,202,202,199,160,160,160,160,
+m35 mm_out=109051904 cum_exit=805 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052628 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109053032 spm_src=16400
+m35 pe=3 out_n=39 mm_dst=109053436 spm_src=24592
+m35 s1c[0..7]=202,202,202,199,200,200,200,199,
+m35 mm_out=109051904 cum_exit=805 max_words=80
+m35 pe=0 out_n=2 mm_dst=109052304 spm_src=176
+m35 pe=1 out_n=2 mm_dst=109052708 spm_src=8368
+m35 pe=2 out_n=2 mm_dst=109053112 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053514 spm_src=24752
+m35 s1c[0..7]=202,202,202,199,202,202,202,199,
+m35 mm_out=109051904 cum_exit=805 max_words=4
+m35 pe=0 out_n=0 mm_dst=109052308 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052712 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109053116 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053514 spm_src=24592
+m35 s1c[0..7]=202,202,202,199,202,202,202,199,
+m35 mm_out=109051904 cum_exit=805 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052294 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052684 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053074 spm_src=24592
+m35 s1c[0..7]=195,195,195,195,40,40,40,40,
+m35 mm_out=109051904 cum_exit=780 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052374 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052764 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053154 spm_src=24752
+m35 s1c[0..7]=195,195,195,195,80,80,80,80,
+m35 mm_out=109051904 cum_exit=780 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052454 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052844 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053234 spm_src=24592
+m35 s1c[0..7]=195,195,195,195,120,120,120,120,
+m35 mm_out=109051904 cum_exit=780 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052534 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052924 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053314 spm_src=24752
+m35 s1c[0..7]=195,195,195,195,160,160,160,160,
+m35 mm_out=109051904 cum_exit=780 max_words=80
+m35 pe=0 out_n=35 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=35 mm_dst=109052614 spm_src=8208
+m35 pe=2 out_n=35 mm_dst=109053004 spm_src=16400
+m35 pe=3 out_n=35 mm_dst=109053394 spm_src=24592
+m35 s1c[0..7]=195,195,195,195,195,195,195,195,
+m35 mm_out=109051904 cum_exit=780 max_words=70
+m35 pe=0 out_n=0 mm_dst=109052294 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052684 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053074 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053464 spm_src=24752
+m35 s1c[0..7]=195,195,195,195,195,195,195,195,
+m35 mm_out=109051904 cum_exit=780 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052278 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052652 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053026 spm_src=24592
+m35 s1c[0..7]=187,187,187,184,40,40,40,40,
+m35 mm_out=109051904 cum_exit=745 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052358 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052732 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053106 spm_src=24752
+m35 s1c[0..7]=187,187,187,184,80,80,80,80,
+m35 mm_out=109051904 cum_exit=745 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052438 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052812 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053186 spm_src=24592
+m35 s1c[0..7]=187,187,187,184,120,120,120,120,
+m35 mm_out=109051904 cum_exit=745 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052518 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052892 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053266 spm_src=24752
+m35 s1c[0..7]=187,187,187,184,160,160,160,160,
+m35 mm_out=109051904 cum_exit=745 max_words=80
+m35 pe=0 out_n=27 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=27 mm_dst=109052598 spm_src=8208
+m35 pe=2 out_n=27 mm_dst=109052972 spm_src=16400
+m35 pe=3 out_n=24 mm_dst=109053346 spm_src=24592
+m35 s1c[0..7]=187,187,187,184,187,187,187,184,
+m35 mm_out=109051904 cum_exit=745 max_words=54
+m35 pe=0 out_n=0 mm_dst=109052278 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052652 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053026 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053394 spm_src=24752
+m35 s1c[0..7]=187,187,187,184,187,187,187,184,
+m35 mm_out=109051904 cum_exit=745 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052280 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052656 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053032 spm_src=24592
+m35 s1c[0..7]=188,188,188,187,40,40,40,40,
+m35 mm_out=109051904 cum_exit=751 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052360 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052736 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053112 spm_src=24752
+m35 s1c[0..7]=188,188,188,187,80,80,80,80,
+m35 mm_out=109051904 cum_exit=751 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052440 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052816 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053192 spm_src=24592
+m35 s1c[0..7]=188,188,188,187,120,120,120,120,
+m35 mm_out=109051904 cum_exit=751 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052520 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052896 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053272 spm_src=24752
+m35 s1c[0..7]=188,188,188,187,160,160,160,160,
+m35 mm_out=109051904 cum_exit=751 max_words=80
+m35 pe=0 out_n=28 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=28 mm_dst=109052600 spm_src=8208
+m35 pe=2 out_n=28 mm_dst=109052976 spm_src=16400
+m35 pe=3 out_n=27 mm_dst=109053352 spm_src=24592
+m35 s1c[0..7]=188,188,188,187,188,188,188,187,
+m35 mm_out=109051904 cum_exit=751 max_words=56
+m35 pe=0 out_n=0 mm_dst=109052280 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052656 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109053032 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053406 spm_src=24752
+m35 s1c[0..7]=188,188,188,187,188,188,188,187,
+m35 mm_out=109051904 cum_exit=751 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052256 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052608 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052960 spm_src=24592
+m35 s1c[0..7]=176,176,176,176,40,40,40,40,
+m35 mm_out=109051904 cum_exit=704 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052336 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052688 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053040 spm_src=24752
+m35 s1c[0..7]=176,176,176,176,80,80,80,80,
+m35 mm_out=109051904 cum_exit=704 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052416 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052768 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053120 spm_src=24592
+m35 s1c[0..7]=176,176,176,176,120,120,120,120,
+m35 mm_out=109051904 cum_exit=704 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052496 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052848 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053200 spm_src=24752
+m35 s1c[0..7]=176,176,176,176,160,160,160,160,
+m35 mm_out=109051904 cum_exit=704 max_words=80
+m35 pe=0 out_n=16 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=16 mm_dst=109052576 spm_src=8208
+m35 pe=2 out_n=16 mm_dst=109052928 spm_src=16400
+m35 pe=3 out_n=16 mm_dst=109053280 spm_src=24592
+m35 s1c[0..7]=176,176,176,176,176,176,176,176,
+m35 mm_out=109051904 cum_exit=704 max_words=32
+m35 pe=0 out_n=0 mm_dst=109052256 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052608 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109052960 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053312 spm_src=24752
+m35 s1c[0..7]=176,176,176,176,176,176,176,176,
+m35 mm_out=109051904 cum_exit=704 max_words=0
+m35 pe=0 out_n=40 mm_dst=113246208 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247074 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113247940 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113248806 spm_src=24592
+m35 s1c[0..7]=433,433,433,433,40,40,40,40,
+m35 mm_out=113246208 cum_exit=1732 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246288 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247154 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248020 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113248886 spm_src=24752
+m35 s1c[0..7]=433,433,433,433,80,80,80,80,
+m35 mm_out=113246208 cum_exit=1732 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246368 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247234 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248100 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113248966 spm_src=24592
+m35 s1c[0..7]=433,433,433,433,120,120,120,120,
+m35 mm_out=113246208 cum_exit=1732 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246448 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247314 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248180 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113249046 spm_src=24752
+m35 s1c[0..7]=433,433,433,433,160,160,160,160,
+m35 mm_out=113246208 cum_exit=1732 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246528 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247394 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248260 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113249126 spm_src=24592
+m35 s1c[0..7]=433,433,433,433,200,200,200,200,
+m35 mm_out=113246208 cum_exit=1732 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246608 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247474 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248340 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113249206 spm_src=24752
+m35 s1c[0..7]=433,433,433,433,240,240,240,240,
+m35 mm_out=113246208 cum_exit=1732 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246688 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247554 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248420 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113249286 spm_src=24592
+m35 s1c[0..7]=433,433,433,433,280,280,280,280,
+m35 mm_out=113246208 cum_exit=1732 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246768 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247634 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248500 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113249366 spm_src=24752
+m35 s1c[0..7]=433,433,433,433,320,320,320,320,
+m35 mm_out=113246208 cum_exit=1732 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246848 spm_src=16
+m35 pe=1 out_n=40 mm_dst=113247714 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=113248580 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=113249446 spm_src=24592
+m35 s1c[0..7]=433,433,433,433,360,360,360,360,
+m35 mm_out=113246208 cum_exit=1732 max_words=80
+m35 pe=0 out_n=40 mm_dst=113246928 spm_src=176
+m35 pe=1 out_n=40 mm_dst=113247794 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=113248660 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=113249526 spm_src=24752
+m35 s1c[0..7]=433,433,433,433,400,400,400,400,
+m35 mm_out=113246208 cum_exit=1732 max_words=80
+m35 pe=0 out_n=33 mm_dst=113247008 spm_src=16
+m35 pe=1 out_n=33 mm_dst=113247874 spm_src=8208
+m35 pe=2 out_n=33 mm_dst=113248740 spm_src=16400
+m35 pe=3 out_n=33 mm_dst=113249606 spm_src=24592
+m35 s1c[0..7]=433,433,433,433,433,433,433,433,
+m35 mm_out=113246208 cum_exit=1732 max_words=66
+m35 pe=0 out_n=0 mm_dst=113247074 spm_src=176
+m35 pe=1 out_n=0 mm_dst=113247940 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=113248806 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=113249672 spm_src=24752
+m35 s1c[0..7]=433,433,433,433,433,433,433,433,
+m35 mm_out=113246208 cum_exit=1732 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052234 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052564 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052894 spm_src=24592
+m35 s1c[0..7]=165,165,165,163,40,40,40,40,
+m35 mm_out=109051904 cum_exit=658 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052314 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052644 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109052974 spm_src=24752
+m35 s1c[0..7]=165,165,165,163,80,80,80,80,
+m35 mm_out=109051904 cum_exit=658 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052394 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052724 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053054 spm_src=24592
+m35 s1c[0..7]=165,165,165,163,120,120,120,120,
+m35 mm_out=109051904 cum_exit=658 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052474 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052804 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053134 spm_src=24752
+m35 s1c[0..7]=165,165,165,163,160,160,160,160,
+m35 mm_out=109051904 cum_exit=658 max_words=80
+m35 pe=0 out_n=5 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=5 mm_dst=109052554 spm_src=8208
+m35 pe=2 out_n=5 mm_dst=109052884 spm_src=16400
+m35 pe=3 out_n=3 mm_dst=109053214 spm_src=24592
+m35 s1c[0..7]=165,165,165,163,165,165,165,163,
+m35 mm_out=109051904 cum_exit=658 max_words=10
+m35 pe=0 out_n=0 mm_dst=109052234 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052564 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109052894 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053220 spm_src=24752
+m35 s1c[0..7]=165,165,165,163,165,165,165,163,
+m35 mm_out=109051904 cum_exit=658 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052240 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052576 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052912 spm_src=24592
+m35 s1c[0..7]=168,168,168,165,40,40,40,40,
+m35 mm_out=109051904 cum_exit=669 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052320 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052656 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109052992 spm_src=24752
+m35 s1c[0..7]=168,168,168,165,80,80,80,80,
+m35 mm_out=109051904 cum_exit=669 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052400 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052736 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053072 spm_src=24592
+m35 s1c[0..7]=168,168,168,165,120,120,120,120,
+m35 mm_out=109051904 cum_exit=669 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052480 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052816 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109053152 spm_src=24752
+m35 s1c[0..7]=168,168,168,165,160,160,160,160,
+m35 mm_out=109051904 cum_exit=669 max_words=80
+m35 pe=0 out_n=8 mm_dst=109052224 spm_src=16
+m35 pe=1 out_n=8 mm_dst=109052560 spm_src=8208
+m35 pe=2 out_n=8 mm_dst=109052896 spm_src=16400
+m35 pe=3 out_n=5 mm_dst=109053232 spm_src=24592
+m35 s1c[0..7]=168,168,168,165,168,168,168,165,
+m35 mm_out=109051904 cum_exit=669 max_words=16
+m35 pe=0 out_n=0 mm_dst=109052240 spm_src=176
+m35 pe=1 out_n=0 mm_dst=109052576 spm_src=8368
+m35 pe=2 out_n=0 mm_dst=109052912 spm_src=16560
+m35 pe=3 out_n=0 mm_dst=109053242 spm_src=24752
+m35 s1c[0..7]=168,168,168,165,168,168,168,165,
+m35 mm_out=109051904 cum_exit=669 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052220 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052536 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052852 spm_src=24592
+m35 s1c[0..7]=158,158,158,155,40,40,40,40,
+m35 mm_out=109051904 cum_exit=629 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052300 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052616 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109052932 spm_src=24752
+m35 s1c[0..7]=158,158,158,155,80,80,80,80,
+m35 mm_out=109051904 cum_exit=629 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052380 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052696 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109053012 spm_src=24592
+m35 s1c[0..7]=158,158,158,155,120,120,120,120,
+m35 mm_out=109051904 cum_exit=629 max_words=80
+m35 pe=0 out_n=38 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=38 mm_dst=109052460 spm_src=8368
+m35 pe=2 out_n=38 mm_dst=109052776 spm_src=16560
+m35 pe=3 out_n=35 mm_dst=109053092 spm_src=24752
+m35 s1c[0..7]=158,158,158,155,158,158,158,155,
+m35 mm_out=109051904 cum_exit=629 max_words=76
+m35 pe=0 out_n=0 mm_dst=109052220 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052536 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109052852 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053162 spm_src=24592
+m35 s1c[0..7]=158,158,158,155,158,158,158,155,
+m35 mm_out=109051904 cum_exit=629 max_words=0
+m35 pe=0 out_n=40 mm_dst=109051904 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052200 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052496 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052792 spm_src=24592
+m35 s1c[0..7]=148,148,148,147,40,40,40,40,
+m35 mm_out=109051904 cum_exit=591 max_words=80
+m35 pe=0 out_n=40 mm_dst=109051984 spm_src=176
+m35 pe=1 out_n=40 mm_dst=109052280 spm_src=8368
+m35 pe=2 out_n=40 mm_dst=109052576 spm_src=16560
+m35 pe=3 out_n=40 mm_dst=109052872 spm_src=24752
+m35 s1c[0..7]=148,148,148,147,80,80,80,80,
+m35 mm_out=109051904 cum_exit=591 max_words=80
+m35 pe=0 out_n=40 mm_dst=109052064 spm_src=16
+m35 pe=1 out_n=40 mm_dst=109052360 spm_src=8208
+m35 pe=2 out_n=40 mm_dst=109052656 spm_src=16400
+m35 pe=3 out_n=40 mm_dst=109052952 spm_src=24592
+m35 s1c[0..7]=148,148,148,147,120,120,120,120,
+m35 mm_out=109051904 cum_exit=591 max_words=80
+m35 pe=0 out_n=28 mm_dst=109052144 spm_src=176
+m35 pe=1 out_n=28 mm_dst=109052440 spm_src=8368
+m35 pe=2 out_n=28 mm_dst=109052736 spm_src=16560
+m35 pe=3 out_n=27 mm_dst=109053032 spm_src=24752
+m35 s1c[0..7]=148,148,148,147,148,148,148,147,
+m35 mm_out=109051904 cum_exit=591 max_words=56
+m35 pe=0 out_n=0 mm_dst=109052200 spm_src=16
+m35 pe=1 out_n=0 mm_dst=109052496 spm_src=8208
+m35 pe=2 out_n=0 mm_dst=109052792 spm_src=16400
+m35 pe=3 out_n=0 mm_dst=109053086 spm_src=24592
+m35 s1c[0..7]=148,148,148,147,148,148,148,147,
+m35 mm_out=109051904 cum_exit=591 max_words=0

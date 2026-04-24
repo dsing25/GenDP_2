@@ -31,6 +31,10 @@ ifeq ($(profile),1)
 CXXFLAGS+= -DPROFILE
 endif
 
+ifeq ($(plan3c_snap),1)
+CXXFLAGS+= -DPLAN3C_TRACE_SNAPSHOT
+endif
+
 LIB_SIMULATOR_OBJECTS= \
 			alu_32.o \
 			compute_unit_32.o \

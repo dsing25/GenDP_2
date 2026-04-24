@@ -197,29 +197,59 @@ and multi-line expressions should be dismissed manually.
 ## 7. AC-9 / AC-10 Frozen Reference Trace
 
 `scripts/gwfa_run_validation.sh` does not exist in this repo; the validation
-driver is `scripts/gwfa_check_correctness.py`. For the frozen reference
-trace, capture the mode-1 and mode-2 score outputs from HEAD just before
-`l6a` lands and commit them under `tests/frozen/plan3c_pre_l6a/`:
+driver is `scripts/gwfa_check_correctness.py`. The frozen oracle is a
+multi-file set committed under `tests/frozen/plan3c_pre_l6a/` directly
+before `l6a` lands. It has four components:
 
-```
-mkdir -p tests/frozen/plan3c_pre_l6a
-make -j ADDRESS_SANITIZER=0
-python3 scripts/gwfa_check_correctness.py 1 -t 56 \
-    > tests/frozen/plan3c_pre_l6a/mode1_t56_scores.txt 2>&1
-python3 scripts/gwfa_check_correctness.py 2 -t 56 \
-    > tests/frozen/plan3c_pre_l6a/mode2_t56_scores.txt 2>&1
-```
+1. **Mode-1 score baseline** — `mode1_t56_scores.txt`, produced by
+   `python3 scripts/gwfa_check_correctness.py 1 -t 56`. First-line
+   pass/fail regression check; must stay at `15 passed, 0 failed out of
+   15` across every m32..m39 lowering.
+2. **Mode-2 score baseline** — `mode2_t56_scores.txt`, produced by
+   `python3 scripts/gwfa_check_correctness.py 2 -t 56`. Full 295-case
+   regression check; must stay at `295 passed, 0 failed out of 295`
+   across every cluster gate and the final exit gate.
+3. **Wavefront trace** — `wfDebug_HEAD.txt`, copied from `wfDebug.txt`
+   after `python3 scripts/gwfa_check_correctness.py 3`. Per-step
+   `[gfa_ed_step]` / `Z` / `WF` lines covering case 0. Any m33/m35/m37
+   lowering that changes PE-visible wavefront evolution on case 0
+   shows up as a byte-level diff here.
+4. **Per-magic observable snapshots** — `plan3c_snapshot_m33.txt`,
+   `plan3c_snapshot_m35.txt`, `plan3c_snapshot_m37.txt`, produced by
+   `scripts/plan3c_capture_snapshot.sh`. The snapshot is emitted by
+   three `#ifdef PLAN3C_TRACE_SNAPSHOT` blocks at the exits of m33,
+   m35, m37 in `pe_array.cpp` and dumps:
+   - **m33**: per-PE `MERGE_META[5..12]`; `s1c[8..23]`; and
+     per-PE `a_src[0..1]` / `a_tile[0..1]` / `b_src[0..1]` / `b_tile[0..1]`
+     (the 4 MM source ranges loaded into A0/A1/B0/B1 tile buffers).
+   - **m35**: per-PE `out_n` / `mm_dst` / `spm_src`; `s1c[0..7]`;
+     `mm_out` / exit `cum` / `max_words`.
+   - **m37**: `a_sp[0..4]` at `s1c[40..44]` / `b_sp[0..4]` at
+     `s1c[45..49]`; `s1c[148..152]`; per-PE `MERGE_META[4..15]`; per-PE
+     tile sizes `s1c[50+pe]/s1c[54+pe]/s1c[58+pe]/s1c[62+pe]`; per-PE
+     tile sources `s1c[66+pe]/s1c[70+pe]`.
 
-For AC-9 byte-equality (MM destinations, SPM metadata slots, PE input
-frames), the score-per-case baseline captured above is the first-level
-oracle; any m33/m35/m37 lowering that regresses even one case against this
-baseline fails AC-9 by construction. Deeper byte-level diffing (per-case
-MM layout dumps, drain-counter traces) is an opt-in upgrade via the
-`PLAN2A_SEAM_ASSERT`-style instrumentation already present in m32 at
-`pe_array.cpp:6429-6463`; equivalent assertions may be added ad-hoc in
-m33/m35/m37 for a specific suspect case without modifying the simulator
-default path.
+The snapshot is compiled in via `make plan3c_snap=1` (new target added by
+this artifact; gated by the `PLAN3C_TRACE_SNAPSHOT` preprocessor symbol so
+the default production build stays untouched). `plan3c_capture_snapshot.sh`
+drives a single-case run, moves the snapshot files into
+`tests/frozen/plan3c_pre_l6a/`, then restores a default `sim` build.
 
-For AC-10, the m37 split-array byte-equality oracle is the same frozen
-snapshot — any divergence in `a_sp[]` / `b_sp[]` surfaces as a score
-mismatch on the cases that exercise m37's merge path.
+AC-9 / AC-10 verification after each lowered magic:
+
+- **After m33 (l6b)**: rerun the capture script and diff the new
+  `plan3c_snapshot_m33.txt` against the committed baseline. Byte-equal =
+  PE-visible observables preserved. Any diff = AC-9 failure.
+- **After m35 (l6d)**: same, for `plan3c_snapshot_m35.txt`.
+- **After m37 (l6f)**: same, for `plan3c_snapshot_m37.txt`. This is also
+  the AC-10 `a_sp`/`b_sp` byte-equality oracle.
+- **After m32 (l6a), m34 (l6c), m36 (l6e), m38 (l6g), m39 (l6h)**: no
+  dedicated snapshot file needed, but the same mode-1 and mode-2 score
+  gates still apply. m36 does touch `s1c[154..158]` / `s1c[159..162]`
+  read by m37, so the post-m37 snapshot diff indirectly gates m36 too.
+
+Additional opt-in instrumentation already present in the tree: m32 at
+`pe_array.cpp:6429..6463` has `PLAN2A_SEAM_ASSERT` assertions comparing
+`s1c[176..191]` against the mm first/last intv values per PE; this is the
+AC-6 seam-contract enforcement path and is orthogonal to
+`PLAN3C_TRACE_SNAPSHOT`.

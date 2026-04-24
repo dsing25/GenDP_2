@@ -1,0 +1,37 @@
+=== GWFA full mode ===
+Loading dataset for 295 cases...
+Running 295 cases with 56 threads...
+  progress: 10/295
+  progress: 20/295
+  progress: 30/295
+  progress: 40/295
+  progress: 50/295
+  progress: 60/295
+  progress: 70/295
+  progress: 80/295
+  progress: 90/295
+  progress: 100/295
+  progress: 110/295
+  progress: 120/295
+  progress: 130/295
+  progress: 140/295
+  progress: 150/295
+  progress: 160/295
+  progress: 170/295
+  progress: 180/295
+  progress: 190/295
+  progress: 200/295
+  progress: 210/295
+  progress: 220/295
+  progress: 230/295
+  progress: 240/295
+  progress: 250/295
+  progress: 260/295
+  progress: 270/295
+  progress: 280/295
+  progress: 290/295
+  progress: 295/295
+
+==================================================
+Results: 295 passed, 0 failed out of 295
+==================================================

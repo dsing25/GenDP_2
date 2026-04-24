@@ -3469,6 +3469,31 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     //NOP                                // s1c 1-cycle gap
                     gr[5] = gr[5] + gr[11];             // pe_base += pts[pe]
                 }
+#ifdef PLAN3C_TRACE_SNAPSHOT
+                // AC-9/AC-10 Plan 3c frozen observable dump (m37 exit).
+                static std::ofstream snap37("plan3c_snapshot_m37.txt",
+                                             std::ios::app);
+                snap37 << "m37 a_sp=";
+                for (int i = 40; i <= 44; i++) snap37 << s1c[i] << ",";
+                snap37 << " b_sp=";
+                for (int i = 45; i <= 49; i++) snap37 << s1c[i] << ",";
+                snap37 << "\n";
+                snap37 << "m37 s1c[148..152]=";
+                for (int i = 148; i <= 152; i++) snap37 << s1c[i] << ",";
+                snap37 << "\n";
+                for (int pe = 0; pe < 4; pe++) {
+                    int *s2 = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
+                    snap37 << "m37 pe=" << pe;
+                    for (int i = 4; i <= 15; i++)
+                        snap37 << " MM[" << i << "]=" << s2[MERGE_META+i];
+                    snap37 << "\n";
+                    snap37 << "m37 pe=" << pe
+                           << " tile_a=" << s1c[50+pe] << "," << s1c[54+pe]
+                           << " tile_b=" << s1c[58+pe] << "," << s1c[62+pe]
+                           << " a_src=" << s1c[66+pe]
+                           << " b_src=" << s1c[70+pe] << "\n";
+                }
+#endif
             }
         } else if (magic_id == 38) {
             // Intv merge finalize: compute intv_n, restore gr[24]=n_a,
@@ -4746,6 +4771,31 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     if (s1c[20+pe] <= 0 && s[MERGE_META+11]==0
                         && s[MERGE_META+12]==0) s[MERGE_META+6] = 1;
                 }
+#ifdef PLAN3C_TRACE_SNAPSHOT
+                // AC-9 Plan 3c frozen observable dump (m33 exit).
+                static std::ofstream snap33("plan3c_snapshot_m33.txt",
+                                             std::ios::app);
+                for (int pe = 0; pe < 4; pe++) {
+                    int *s = &spm[pe * SPM_BANK_GROUP_SIZE];
+                    snap33 << "m33 pe=" << pe;
+                    for (int i = 5; i <= 12; i++)
+                        snap33 << " MM[" << i << "]=" << s[MERGE_META+i];
+                    snap33 << "\n";
+                }
+                snap33 << "m33 s1c[8..23]=";
+                for (int i = 8; i <= 23; i++) snap33 << s1c[i] << ",";
+                snap33 << "\n";
+                for (int pe = 0; pe < 4; pe++) {
+                    snap33 << "m33 a_src[" << pe << "]=" << a_src[0][pe]
+                           << "," << a_src[1][pe]
+                           << " a_tile=" << a_tile[0][pe] << ","
+                           << a_tile[1][pe]
+                           << " b_src=" << b_src[0][pe] << ","
+                           << b_src[1][pe]
+                           << " b_tile=" << b_tile[0][pe] << ","
+                           << b_tile[1][pe] << "\n";
+                }
+#endif
             }
         } else if (magic_id == 35) {
             // Merge writeback: SPM output → MM.
@@ -4792,6 +4842,21 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 for (int pe = 0; pe < 4; pe++)
                     s1c[4+pe] += out_ns[pe];
                 gr[2] += MERGE_STEP;
+#ifdef PLAN3C_TRACE_SNAPSHOT
+                // AC-9 Plan 3c frozen observable dump (m35 exit).
+                static std::ofstream snap35("plan3c_snapshot_m35.txt",
+                                             std::ios::app);
+                for (int pe = 0; pe < 4; pe++) {
+                    snap35 << "m35 pe=" << pe << " out_n=" << out_ns[pe]
+                           << " mm_dst=" << mm_dsts[pe]
+                           << " spm_src=" << spm_srcs[pe] << "\n";
+                }
+                snap35 << "m35 s1c[0..7]=";
+                for (int i = 0; i <= 7; i++) snap35 << s1c[i] << ",";
+                snap35 << "\n";
+                snap35 << "m35 mm_out=" << mm_out << " cum_exit=" << cum
+                       << " max_words=" << max_words << "\n";
+#endif
             }
         } else if (magic_id == 36) {
             // Diag merge finalize (pointer-swap version).
