@@ -3791,7 +3791,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
             }
         } else if (magic_id == 39) {
-            // Intv sort setup: ISA-lowered register operations.
+            // Intv sort setup (Plan 3c l6h, finalized as scalar register
+            // sequence per plan's per-magic spec). Reads s1c[155] as the
+            // intv count, publishes gr[3]=MM_NEXT_INTV, gr[4]=MM_SWAP,
+            // gr[24]=n_intv, gr[6]=(n_intv+3)>>2 (diag-per-PE).
+            //
+            // AC-5 latency: the s1c[155] load at line 1 has the required
+            // 1-cycle gap before gr[24] is first consumed at the addi
+            // (pair 3, below); two intervening pair slots carry the two
+            // constexpr MM-base si's (gr[3], gr[4]) which do not depend
+            // on gr[24].
             {
                 int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
                 constexpr int DIAG_CAP_V  = (16 << 20);
@@ -3799,13 +3808,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 constexpr int MM_INTV     = DIAG_CAP_V * 6;
                 constexpr int MM_NEXT_INTV = MM_INTV + INTV_CAP_V * 2;
                 constexpr int MM_SWAP     = MM_NEXT_INTV + INTV_CAP_V * 2;
-                gr[24] = s1c[155];                       // mv s1c→gr
+                gr[24] = s1c[155];                       // mv s1c -> gr (n_intv)
                 gr[3]  = MM_NEXT_INTV;                   // si (constexpr)
-                //NOP
+                //NOP                                     // s1c gap
                 gr[4]  = MM_SWAP;                        // si (constexpr)
                 gr[6]  = gr[24] + 3;                     // addi
-                //NOP
-                gr[6]  = (unsigned)gr[6] >> 2;           // shifti_r (div by 4)
+                //NOP                                     // RAW break gr[6]
+                gr[6]  = (unsigned)gr[6] >> 2;           // shifti_r (div 4)
             }
         } else if (magic_id == 28) {
             // Diag merge split + tile load.
