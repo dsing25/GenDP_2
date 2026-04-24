@@ -82,6 +82,21 @@ ifeq ($(WITH_GWFA),1)
 CXXFLAGS    += -DGWFA_BUILD
 CXXFLAGS_O3 += -DGWFA_BUILD
 endif
+
+# Stamp file that tracks the current WITH_GWFA state. `make` cannot see
+# CXXFLAGS changes, so initializing the Gwfa submodule after a no-GWFA
+# build would silently reuse stale main.o / pe.o / pe_array.o (missing
+# -DGWFA_BUILD) and ship a `sim` that cannot dispatch `-k 7`. The stamp
+# rule rewrites .gwfa_state only when WITH_GWFA flips; the rewrite bumps
+# mtime, so the GWFA-gated TUs below rebuild automatically.
+.PHONY: .gwfa_state_FORCE
+.gwfa_state: .gwfa_state_FORCE
+	@echo "WITH_GWFA=$(WITH_GWFA)" > $@.tmp
+	@if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; \
+	else rm -f $@.tmp; fi
+.gwfa_state_FORCE:
+
+main.o pe.o pe_array.o main_o3.o pe_o3.o pe_array_o3.o: .gwfa_state
 ifeq ($(gwfa_seam_trace),1)
 CXXFLAGS_O3 += -DGWFA_SEAM_TRACE
 endif

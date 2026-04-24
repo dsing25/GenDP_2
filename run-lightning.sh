@@ -64,8 +64,16 @@ python3 scripts/wfa_check_correctness.py \
 
 ### GWFA
 cd $GenDP_WORK_DIR/gendp
-python3 scripts/gwfa_instruction_generator.py
-python3 scripts/gwfa_check_correctness.py 1
+# Mirror Makefile / run-backtest.sh: skip GWFA on checkouts without
+# the kernel/Gwfa submodule. Otherwise gwfa_check_correctness.py calls
+# ./sim -k 7 which aborts on a non-GWFA build, and `set -e` kills the
+# rest of the lightning workflow.
+if [ -f kernel/Gwfa/gwfa.c ]; then
+  python3 scripts/gwfa_instruction_generator.py
+  python3 scripts/gwfa_check_correctness.py 1
+else
+  echo "run-lightning: kernel/Gwfa submodule absent; skipping GWFA step."
+fi
 
 cd $GenDP_WORK_DIR
 cat success.txt

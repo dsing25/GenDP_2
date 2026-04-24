@@ -9,9 +9,14 @@ ctrl_ib = 4
 in_buf = 5
 out_buf = 6
 in_port = 7
-in_instr = 8
+# Legacy: in_instr (8) and out_instr (10) were the old instruction-chain
+# ports. IDs 8 and 10 are now CTRL_GR_LO / CTRL_GR_HI (packed-lane
+# subregisters of gr). gbv is not dispatched by any kernel in main.cpp;
+# it remains only as a legacy instruction-generator reference, and the
+# one remaining use of in_instr below has been migrated to in_port to
+# avoid producing encodings that the current simulator would misread as
+# gr-subregister traffic.
 out_port = 9
-out_instr = 10
 fifo = [11, 12]
 
 # define register file elsewhere - for reference
@@ -254,7 +259,7 @@ def pe_0_instruction():
     f.write(data_movement_instruction(SPM, in_port, 0, 1, 0, 3, 0, 0, 0, 0, mv))                            # SPM[gr[3]++] = in
     f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))                             # gr[1] = in
     f.write(data_movement_instruction(out_port, reg, 0, 0, 0, 0, 0, 0, 5, 0, mv))                           # out = reg[5]
-    f.write(data_movement_instruction(comp_ib, in_instr, 0, 0, 0, 0, 0, 0, 0, 0, mv))                       # ir[0] = in
+    f.write(data_movement_instruction(comp_ib, in_port, 0, 0, 0, 0, 0, 0, 0, 0, mv))                        # ir[0] = in (legacy in_instr migrated to in_port; see header)
     f.write(data_movement_instruction(out_port, gr, 0, 0, 0, 0, 0, 0, 5, 0, mv))                            # out = gr[1]                   
 
     f.close()
