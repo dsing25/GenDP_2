@@ -2658,57 +2658,188 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             gwfa_set_score(
                 (int16_t)(main_addressing_register[12] & 0xFFFF));
         } else if (magic_id == 34) {
-            // Sort bin-count tile load: MM → SPM TILE_BUF for all 4 PEs.
-            // gr[1]=pass, gr[2]=cursor, gr[3]=src MM base, gr[24]=n_a.
-            // mask bit 0 = ping/pong (0=TILE_BUF0, 1=TILE_BUF1).
-            // Advances gr[2] by SORT_TILE. If cursor==0, zeros bin_counts.
-            // Interleaved mvdq across PEs at 4-diag (8-word) granularity.
+            // Sort bin-count tile load (Plan 3c l6c): ISA-lowered per
+            // Codex R2 plan (use m24-style s1c slot layout; recompute
+            // pe_start/mm_src/spm_dst on demand).
+            //
+            // Arch state slots (magic-local, sort-phase internal --
+            // shared convention with m24; both magics recompute them
+            // at entry so cross-magic aliasing is safe):
+            //   s1c[169+pe] = tile_n[pe]   per-PE tile size
+            //   s1c[173]    = max_words    pass-1 reduction, pass-2 bound
+            //   s1c[174]    = shift        gr[1]*4
+            //   s1c[175]    = n_a_per_pe   (gr[24]+3)/4
+            //
+            // Live-in: gr[1]=pass, gr[2]=cursor, gr[3]=src MM base,
+            //          gr[24]=n_a. gr[2] advances by SORT_TILE on exit.
+            // Scratch: gr[5] max_words acc / mvdq j; gr[7..11] per-PE
+            //   temps. gr[1]/gr[3]/gr[24] THROUGH.
             {
                 int (&gr)[MAIN_ADDR_REGISTER_NUM] = main_addressing_register;
                 int *mm = gwfa_get_mm();
                 int *spm = SPM_unit->buffer;
+                // magic_mask is caller-fixed per invocation (compile-time
+                // from dispatcher perspective; same convention as m24).
                 int tile_buf_off = (magic_mask & 1)
                     ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
-                int n_a = gr[24];
-                int cursor = gr[2];
-                int shift = gr[1] * 4;
-                int n_a_per_pe = (n_a + 3) / 4;
-                bool first_tile = (cursor == 0);
-                // Phase 1: compute tile_n, write metadata
-                int tile_ns[4], mm_srcs[4], spm_dsts[4];
+                // shift = gr[1] << 2 -> s1c[174].
+                gr[11] = gr[1] << 2;                      // shifti_l
+                //NOP                                      // pair break RAW
+                s1c[174] = gr[11];
+                //NOP                                      // s1c gap
+                // n_a_per_pe = (gr[24] + 3) >> 2 -> s1c[175].
+                gr[11] = gr[24] + 3;                      // addi
+                //NOP                                      // pair break RAW
+                gr[11] = (unsigned)gr[11] >> 2;           // shifti_r
+                //NOP                                      // pair break RAW
+                s1c[175] = gr[11];
+                //NOP                                      // s1c gap
+                gr[5] = 0;                                // max_words acc
+                //NOP
+                // Phase 1: per-PE tile_n + SPM metadata + max reduce.
                 for (int pe = 0; pe < 4; pe++) {
-                    int pe_spm = pe * SPM_BANK_GROUP_SIZE;
-                    int pe_start = pe * n_a_per_pe;
-                    int pe_remain = n_a_per_pe;
-                    if (pe_remain > n_a - pe_start) pe_remain = n_a - pe_start;
-                    int remaining = pe_remain - cursor;
-                    if (remaining < 0) remaining = 0;
-                    tile_ns[pe] = remaining;
-                    if (tile_ns[pe] > SORT_TILE) tile_ns[pe] = SORT_TILE;
-                    mm_srcs[pe] = gr[3] + (pe_start + cursor) * 2;
-                    spm_dsts[pe] = pe_spm + tile_buf_off;
-                    spm[pe_spm + SORT_META + 32] = tile_ns[pe];
-                    spm[pe_spm + SORT_META + 33] = shift;
-                    if (first_tile)
-                        for (int b = 0; b < SORT_RADIX_BINS; b++)
-                            spm[pe_spm + SORT_META + b] = 0;
-                }
-                // Phase 2: interleaved mvdq load (round-robin across PEs)
-                int max_words = 0;
-                for (int pe = 0; pe < 4; pe++) {
-                    int w = tile_ns[pe] * 2;
-                    if (w > max_words) max_words = w;
-                }
-                for (int j = 0; j < max_words; j += 8) {
-                    for (int pe = 0; pe < 4; pe++) {
-                        int words = tile_ns[pe] * 2;
-                        if (j >= words) continue;
-                        int n = words - j; if (n > 8) n = 8;
-                        mvdq_copy(&spm[spm_dsts[pe] + j],
-                                  &mm[mm_srcs[pe] + j], n);
+                    // pe_start into gr[7] via pe-literal-dispatch (same
+                    // m24 pattern: if (pe == 0/1/2/3) specific multiplier).
+                    gr[11] = s1c[175];                    // n_a_per_pe
+                    //NOP                                  // s1c gap
+                    if (pe == 0) {
+                        gr[7] = 0;                        // pe_start = 0
+                        //NOP                              // pair break
+                    } else if (pe == 1) {
+                        gr[7] = gr[11];                   // pe_start = nap
+                        //NOP                              // pair break
+                    } else if (pe == 2) {
+                        gr[7] = gr[11] << 1;              // pe_start = 2*nap
+                        //NOP                              // pair break
+                    } else {
+                        gr[7] = gr[11] << 1;              // 2*nap
+                        //NOP                              // pair break RAW
+                        gr[7] = gr[7] + gr[11];           // 3*nap
+                        //NOP                              // pair break RAW
                     }
+                    // pe_remain_raw = gr[24] - pe_start (gr[8]).
+                    gr[8] = gr[24] - gr[7];
+                    //NOP                                  // pair break RAW
+                    // pe_remain = min(n_a_per_pe, pe_remain_raw).
+                    // gr[11] still holds n_a_per_pe.
+                    if (gr[11] <= gr[8]) goto m34_remain_keep; // bge
+                    //NOP                                  // slot 1 of bge
+                    gr[11] = gr[8];                       // mv
+                    //NOP                                  // slot 1 reserve
+                m34_remain_keep:
+                    // remaining = pe_remain - cursor (gr[8]).
+                    gr[8] = gr[11] - gr[2];
+                    //NOP                                  // pair break RAW
+                    if (gr[8] >= 0) goto m34_remain_low_ok; // bge
+                    //NOP                                  // slot 1 of bge
+                    gr[8] = 0;
+                    //NOP                                  // slot 1 reserve
+                m34_remain_low_ok:
+                    // tile_n = min(remaining, SORT_TILE).
+                    if (gr[8] <= SORT_TILE) goto m34_tile_hi_ok; // bge
+                    //NOP                                  // slot 1 of bge
+                    gr[8] = SORT_TILE;
+                    //NOP                                  // slot 1 reserve
+                m34_tile_hi_ok:
+                    // Publish tile_n to SPM[SORT_META+32] and s1c[169+pe].
+                    spm[pe * SPM_BANK_GROUP_SIZE + SORT_META + 32] = gr[8];
+                    s1c[169 + pe] = gr[8];
+                    // Load shift and publish to SPM[SORT_META+33].
+                    gr[11] = s1c[174];
+                    //NOP                                  // s1c gap
+                    spm[pe * SPM_BANK_GROUP_SIZE + SORT_META + 33] = gr[11];
+                    // words = tile_n*2 (gr[9]); update max_words in gr[5].
+                    gr[9] = gr[8] + gr[8];                // add (= *2)
+                    //NOP                                  // pair break RAW
+                    if (gr[9] <= gr[5]) goto m34_max_skip; // bge
+                    //NOP                                  // slot 1 of bge
+                    gr[5] = gr[9];                        // mv
+                    //NOP                                  // slot 1 reserve
+                m34_max_skip:
+                    // first_tile (cursor == 0) zeroing: labeled branch
+                    // skip + macro unroll of SORT_RADIX_BINS stores.
+                    if (gr[2] != 0) goto m34_skip_zero;   // bne
+                    //NOP                                  // slot 1 of bne
+                    for (int b = 0; b < SORT_RADIX_BINS; b++) {
+                        spm[pe * SPM_BANK_GROUP_SIZE + SORT_META + b] = 0;
+                    }
+                m34_skip_zero:
+                    (void)0;
                 }
-                gr[2] = cursor + SORT_TILE;
+                // Stash max_words into s1c[173].
+                s1c[173] = gr[5];
+                //NOP                                      // s1c gap
+                // Phase 2: chunk-outer / PE-inner mvdq.
+                // j counter in gr[5] (reusing — max_words is in s1c[173]).
+                gr[5] = 0;                                // j = 0
+                //NOP
+            m34_mvdq_top:
+                // Reload max_words from s1c[173]; compare j >= max_words.
+                gr[11] = s1c[173];
+                //NOP                                      // s1c gap
+                if (gr[5] >= gr[11]) goto m34_mvdq_done;   // bge
+                //NOP                                      // slot 1 of bge
+                for (int pe = 0; pe < 4; pe++) {
+                    // words = tile_n[pe] * 2
+                    gr[11] = s1c[169 + pe];
+                    //NOP                                  // s1c gap
+                    gr[9] = gr[11] + gr[11];              // words
+                    //NOP                                  // pair break
+                    if (gr[5] >= gr[9]) goto m34_mvdq_skip_pe; // bge
+                    //NOP                                  // slot 1 of bge
+                    // n = min(8, words - j).
+                    gr[8] = gr[9] - gr[5];
+                    //NOP                                  // pair break
+                    if (gr[8] <= 8) goto m34_n_ok;        // bge
+                    //NOP                                  // slot 1 of bge
+                    gr[8] = 8;
+                    //NOP                                  // slot 1 reserve
+                m34_n_ok:
+                    // Recompute mm_src = gr[3] + (pe_start + cursor)*2 + j.
+                    // pe_start via pe-literal dispatch (same as Phase 1).
+                    gr[11] = s1c[175];                    // n_a_per_pe
+                    //NOP                                  // s1c gap
+                    if (pe == 0) {
+                        gr[7] = 0;
+                        //NOP
+                    } else if (pe == 1) {
+                        gr[7] = gr[11];
+                        //NOP
+                    } else if (pe == 2) {
+                        gr[7] = gr[11] << 1;
+                        //NOP
+                    } else {
+                        gr[7] = gr[11] << 1;
+                        //NOP
+                        gr[7] = gr[7] + gr[11];
+                        //NOP
+                    }
+                    gr[7] = gr[7] + gr[2];                // + cursor
+                    //NOP
+                    gr[7] = gr[7] << 1;                   // * 2
+                    //NOP
+                    gr[7] = gr[7] + gr[3];                // + src MM base
+                    //NOP
+                    gr[7] = gr[7] + gr[5];                // + j
+                    //NOP
+                    // spm_dst = pe*SPM_BANK_GROUP_SIZE + tile_buf_off + j.
+                    gr[9] = pe * SPM_BANK_GROUP_SIZE + tile_buf_off;
+                    gr[9] = gr[9] + gr[5];                // + j
+                    //NOP
+                    mvdq_copy(&spm[gr[9]], &mm[gr[7]], gr[8]);
+                    // waitLSQ
+                m34_mvdq_skip_pe:
+                    (void)0;
+                }
+                // j += 8.
+                gr[5] = gr[5] + 8;
+                //NOP
+                goto m34_mvdq_top;
+                //NOP                                      // slot 1 of goto
+            m34_mvdq_done:
+                // gr[2] = cursor + SORT_TILE.
+                gr[2] = gr[2] + SORT_TILE;
+                //NOP
             }
         } else if (magic_id == 19) {
             // Sort prefix-sum: ISA-lowered, gr[7]-gr[10] for temp
