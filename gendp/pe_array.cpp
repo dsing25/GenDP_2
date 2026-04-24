@@ -3679,17 +3679,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         gr[11] = s1c[76] + pb_s*2;         // bbase via s1c[76]
                         //NOP
                         s1c[70+pe] = gr[11];
-                        int *spm2 = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
-                        spm2[MERGE_META+0]=0; spm2[MERGE_META+1]=0; spm2[MERGE_META+4]=0;
-                        spm2[MERGE_META+5]=(pa_n<=a0+a1)?1:0;
-                        spm2[MERGE_META+6]=(pb_n<=b0+b1)?1:0;
-                        spm2[MERGE_META+7]=0; spm2[MERGE_META+8]=0;
-                        spm2[MERGE_META+9]=a0; spm2[MERGE_META+10]=a1;
-                        spm2[MERGE_META+11]=b0; spm2[MERGE_META+12]=b1;
+                        // SPM MERGE_META writes via direct computed addr
+                        // (no spm2 alias). Constants 0/1 via gr[11] stage.
+                        SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+0]=0;
+                        SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+1]=0;
+                        SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+4]=0;
+                        SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+5]=(pa_n<=a0+a1)?1:0;
+                        SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+6]=(pb_n<=b0+b1)?1:0;
+                        SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+7]=0;
+                        SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+8]=0;
+                        SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+9]=a0;
+                        SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+10]=a1;
+                        SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+11]=b0;
+                        SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_META+12]=b1;
                     }
-                    // Chunk-outer / PE-inner mvdq for 4 tiles (AC-5 updated:
-                    // tile sizes/sources re-read from s1c via gr[11]).
-                    int *spm_all = SPM_unit->buffer;
+                    // Chunk-outer / PE-inner mvdq for 4 tiles. spm_all
+                    // alias eliminated; direct SPM_unit->buffer indexing.
                     // A_BUF0
                     { int mw = 0;
                       for (int pe=0; pe<4; pe++) {
@@ -3703,7 +3708,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                               if (j >= w) continue;
                               int cnt = w-j; if (cnt > 8) cnt = 8;
                               gr[11] = s1c[66+pe]; //NOP
-                              mvdq_copy(&spm_all[pe*SPM_BANK_GROUP_SIZE+MERGE_A_BUF0+j],
+                              mvdq_copy(&SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_A_BUF0+j],
                                         &mm[gr[11]+j], cnt);
                           }
                     }
@@ -3722,7 +3727,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                               gr[11] = s1c[50+pe]; //NOP    // a0
                               int a0_scaled = gr[11]*2;
                               gr[11] = s1c[66+pe]; //NOP    // a_src
-                              mvdq_copy(&spm_all[pe*SPM_BANK_GROUP_SIZE+MERGE_A_BUF1+j],
+                              mvdq_copy(&SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_A_BUF1+j],
                                         &mm[gr[11]+a0_scaled+j], cnt);
                           }
                     }
@@ -3739,7 +3744,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                               if (j >= w) continue;
                               int cnt = w-j; if (cnt > 8) cnt = 8;
                               gr[11] = s1c[70+pe]; //NOP
-                              mvdq_copy(&spm_all[pe*SPM_BANK_GROUP_SIZE+MERGE_B_BUF0+j],
+                              mvdq_copy(&SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_B_BUF0+j],
                                         &mm[gr[11]+j], cnt);
                           }
                     }
@@ -3758,7 +3763,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                               gr[11] = s1c[58+pe]; //NOP    // b0
                               int b0_scaled = gr[11]*2;
                               gr[11] = s1c[70+pe]; //NOP    // b_src
-                              mvdq_copy(&spm_all[pe*SPM_BANK_GROUP_SIZE+MERGE_B_BUF1+j],
+                              mvdq_copy(&SPM_unit->buffer[pe*SPM_BANK_GROUP_SIZE+MERGE_B_BUF1+j],
                                         &mm[gr[11]+b0_scaled+j], cnt);
                           }
                     }
