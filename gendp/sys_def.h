@@ -290,7 +290,11 @@ inline int get_base_opcode(int opcode) {
 // Apply address swizzling for mvi instruction
 // Keeps bit[0] as line offset, moves bits[2:1] to top
 inline int apply_address_swizzle(int addr) {
-    if (addr < 0 || addr > SPM_ADDR_NUM) {
+    // Bounds: valid addresses are [0, SPM_ADDR_NUM - 1]. SPM_ADDR_NUM
+    // itself is one past the end and must be rejected — otherwise the
+    // mask below turns it into 0 and silently corrupts SPM address 0.
+    // (Codex R9 P3.)
+    if (addr < 0 || addr >= SPM_ADDR_NUM) {
         fprintf(stderr, "Error: address %d out of bound for swizzling (max %d)\n",
             addr, SPM_ADDR_NUM);
         exit(-1);

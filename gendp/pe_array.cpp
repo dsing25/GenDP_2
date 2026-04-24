@@ -1092,6 +1092,27 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //                   gr[18]=lo:n_arc, hi:arc_off_s2
                 //                   gr[16]=lo:ql, hi:n_vtx
                 //                   gr[12]=lo:s, hi:s_term
+                // Each packed lane is consumed via CTRL_GR_LO / CTRL_GR_HI
+                // which sign-extends a 16-bit subregister. If any lane's
+                // source value exceeds the int16_t range, the read-back
+                // would silently truncate/mis-sign-extend and produce
+                // negative loop bounds or wrong S2 addresses even though
+                // the S2 buffer itself is much larger than 64K words.
+                // Codex R9 P2: assert each packed lane fits before the
+                // store so larger GWFA dumps fail loudly instead of
+                // silently mis-executing.
+                assert((int)sub.n_vtx >= 0 && (int)sub.n_vtx <= 0x7FFF
+                       && "gr[16] hi lane (n_vtx) overflows int16 lane");
+                assert((int)sub.n_arc >= 0 && (int)sub.n_arc <= 0xFFFF
+                       && "gr[18] lo lane (n_arc) overflows u16 lane");
+                assert(seq_off_s2 >= 0 && seq_off_s2 <= 0xFFFF
+                       && "gr[29] lo lane (seq_off_s2) overflows u16 lane");
+                assert(seq_len_s2 >= 0 && seq_len_s2 <= 0x7FFF
+                       && "gr[29] hi lane (seq_len_s2) overflows int16 lane");
+                assert(arc_off_s2 >= 0 && arc_off_s2 <= 0x7FFF
+                       && "gr[18] hi lane (arc_off_s2) overflows int16 lane");
+                assert(ql >= 0 && ql <= 0xFFFF
+                       && "gr[16] lo lane (ql) overflows u16 lane");
                 main_addressing_register[12] =
                     (main_addressing_register[23] & 0xFFFF) << 16; // s=0, s_term in hi
                 main_addressing_register[29] =
