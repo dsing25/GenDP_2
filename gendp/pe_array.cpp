@@ -9209,20 +9209,40 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                 MAIN_INSTRUCTION_1);
 
             // Branch-as-group: if slot 0 branched, it
-            // must agree with slot 1
-            int op0 = main_instruction_buffer[old_PC][0]
-                & ((1 << CTRL_OPCODE_WIDTH) - 1);
-            int op1 = main_instruction_buffer[old_PC][1]
-                & ((1 << CTRL_OPCODE_WIDTH) - 1);
+            // must agree with slot 1. Magic instructions
+            // (bit 63 set) encode the magic ID in the low
+            // bits where a real opcode would live, so the
+            // raw-opcode extract below would misclassify a
+            // magic slot as e.g. CTRL_BNE (opcode 8) or
+            // CTRL_JUMP (opcode 12). Skip magic slots by
+            // treating their opcode as a non-control-flow
+            // sentinel. GWFA's controller trace legally pairs
+            // `magic(N) + bne` and `magic(M) + jump` -- see
+            // scripts/gwfa_instruction_generator.py.
+            // Codex R12 P1.
+            constexpr unsigned long MAGIC_BIT =
+                1ul << 63;
+            unsigned long raw0 =
+                main_instruction_buffer[old_PC][0];
+            unsigned long raw1 =
+                main_instruction_buffer[old_PC][1];
+            bool is_magic_slot0 = (raw0 & MAGIC_BIT) != 0;
+            bool is_magic_slot1 = (raw1 & MAGIC_BIT) != 0;
+            int op0 = is_magic_slot0 ? -1 :
+                (int)(raw0 & ((1 << CTRL_OPCODE_WIDTH) - 1));
+            int op1 = is_magic_slot1 ? -1 :
+                (int)(raw1 & ((1 << CTRL_OPCODE_WIDTH) - 1));
             auto is_cf = [](int op) {
-                return (op >= CTRL_BNE && op <= CTRL_JUMP)
-                    || op == CTRL_CALL || op == CTRL_RET
-                    || op == CTRL_RETNE;
+                return op >= 0 &&
+                    ((op >= CTRL_BNE && op <= CTRL_JUMP)
+                     || op == CTRL_CALL || op == CTRL_RET
+                     || op == CTRL_RETNE);
             };
             // Call/ret must be paired in both slots
             auto is_call_ret = [](int op) {
-                return op == CTRL_CALL || op == CTRL_RET
-                    || op == CTRL_RETNE;
+                return op >= 0 &&
+                    (op == CTRL_CALL || op == CTRL_RET
+                     || op == CTRL_RETNE);
             };
             if (is_call_ret(op0) != is_call_ret(op1)) {
                 fprintf(stderr,

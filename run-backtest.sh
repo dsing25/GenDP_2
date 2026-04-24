@@ -70,6 +70,14 @@ run_wfa() {
 
 run_gwfa() {
   cd "$GenDP_WORK_DIR/gendp"
+  # Mirror Makefile gate: skip GWFA when the kernel/Gwfa submodule
+  # is absent. Otherwise ./sim is built without -DGWFA_BUILD and
+  # `-k 7` exits non-zero, failing the backtest on fresh clones.
+  if [ ! -f kernel/Gwfa/gwfa.c ]; then
+    echo "run_gwfa: kernel/Gwfa submodule absent; skipping GWFA backtest."
+    echo "GWFA: skipped (submodule absent)" >> "$GenDP_WORK_DIR/success.txt"
+    return 0
+  fi
   python3 scripts/gwfa_instruction_generator.py
   make -j ADDRESS_SANITIZER=0
   python3 scripts/gwfa_check_correctness.py 1
