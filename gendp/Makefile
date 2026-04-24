@@ -21,7 +21,17 @@ ifeq ($(ADDRESS_SANITIZER),1)
     LINKFLAGS += -fsanitize=address
 endif
 
-OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o simulator.o gwfa_sim.o
+# Core kernels (always built).
+OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o simulator.o
+
+# GWFA kernel is optional: only included when kernel/Gwfa/gwfa.c is present
+# (submodule initialized). Users who have not fetched that submodule can
+# still build sim for the legacy kernels without the Gwfa sources.
+ifneq ($(wildcard kernel/Gwfa/gwfa.c),)
+OBJECT 	+= 	gwfa_sim.o
+CXXFLAGS += -DGWFA_BUILD
+WITH_GWFA := 1
+endif
 
 ifeq ($(debug),1)
 CXXFLAGS+= -DDEBUG
@@ -35,6 +45,13 @@ ifeq ($(plan3c_snap),1)
 CXXFLAGS+= -DPLAN3C_TRACE_SNAPSHOT
 endif
 
+# GWFA seam / clamp tracing. Off by default (otherwise thousands of
+# stderr lines dominate routine -k 7 runs). Enable with
+# `make gwfa_seam_trace=1` for debugging the m29/m31 seam handshake.
+ifeq ($(gwfa_seam_trace),1)
+CXXFLAGS+= -DGWFA_SEAM_TRACE
+endif
+
 LIB_SIMULATOR_OBJECTS= \
 			alu_32.o \
 			compute_unit_32.o \
@@ -44,8 +61,13 @@ LIB_SIMULATOR_OBJECTS= \
 			data_buffer.o \
 			pe.o \
 			FIFO.o \
-			pe_array.o \
-			gwfa_kernel.o
+			pe_array.o
+
+# gwfa_kernel.o mirrors the OBJECT-level gate: only build it when the
+# Gwfa submodule is present.
+ifeq ($(WITH_GWFA),1)
+LIB_SIMULATOR_OBJECTS += gwfa_kernel.o
+endif
 
 BIN_PATH = ./
 

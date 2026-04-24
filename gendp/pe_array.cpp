@@ -59,18 +59,30 @@ PerfCounter fin0DupDiags = 0;
 // gwfa_check_correctness.py parallel harness), each subprocess gets
 // its own fresh statics; the AC-10 acceptance run is the single-
 // process `-n 15` command documented in the evidence artifact.
+// GWFA seam / clamp traces. Off by default (Codex R10 P2 -- these
+// fired thousands of times per run and dominated stderr I/O).
+// Enable with `make gwfa_seam_trace=1` (adds -DGWFA_SEAM_TRACE) when
+// debugging the seam-producer / consumer handshake.
 static void m31_trace_first_seam_once(int pe) {
+#ifdef GWFA_SEAM_TRACE
     static bool fired[4] = { false, false, false, false };
     if (fired[pe]) return;
     fprintf(stderr, "[M31_TRACE_FIRST_SEAM] pe=%d\n", pe);
     fired[pe] = true;
+#else
+    (void)pe;
+#endif
 }
 
 static void m31_trace_zero_nis_once(int pe) {
+#ifdef GWFA_SEAM_TRACE
     static bool fired[4] = { false, false, false, false };
     if (fired[pe]) return;
     fprintf(stderr, "[M31_TRACE_ZERO_NIS] pe=%d\n", pe);
     fired[pe] = true;
+#else
+    (void)pe;
+#endif
 }
 
 pe_array::pe_array(int input_size, int output_size) {
@@ -6150,8 +6162,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //     when the guard skip fires (arm coverage per AC-10).
                 if (gr[28] > 0) goto m29_intv_guard_on;      // bgt
                 //NOP                                          // slot 1 of bgt
+#ifdef GWFA_SEAM_TRACE
                 fprintf(stderr, "[M29_TRACE] intv_n==0 guard\n");
                 //NOP                                          // slot 1 reserve
+#endif
                 goto m29_intv_guard_done;
                 //NOP                                          // slot 1 of goto
             m29_intv_guard_on:
@@ -6209,8 +6223,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     //NOP                                       // slot 1 of bge
                     gr[9] = gr[11];                           // iv_s = intv_hi
                     //NOP                                       // slot 1 reserve
+#ifdef GWFA_SEAM_TRACE
                     fprintf(stderr, "[M29_TRACE] iv_s>intv_hi clamp pe=%d\n", pe);
                     //NOP                                       // slot 1 reserve
+#endif
                 m29_iv_s_ok:
                     // iv_e = intv_lo[pe]; if (iv_e < intv_hi[pe]) iv_e = intv_hi[pe]
                     gr[11] = s1c[40 + pe]; //NOP              // intv_lo[pe]
@@ -6221,8 +6237,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     //NOP                                       // slot 1 of bge
                     gr[10] = gr[11];                          // iv_e = intv_hi
                     //NOP                                       // slot 1 reserve
+#ifdef GWFA_SEAM_TRACE
                     fprintf(stderr, "[M29_TRACE] iv_e<intv_hi clamp pe=%d\n", pe);
                     //NOP                                       // slot 1 reserve
+#endif
                 m29_iv_e_ok:
                     // iv_n = iv_e - iv_s -> gr[11]
                     gr[11] = gr[10] - gr[9];
@@ -7385,8 +7403,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     gr[11] = s1c[200 + pe]; //NOP            // nis
                     if (gr[11] == 0) goto m31_seam_zero_nis; // beq
                     //NOP                                     // slot 1 of beq
+#ifdef GWFA_SEAM_TRACE
                     fprintf(stderr, "[M31_TRACE_LAST_SEAM] pe=%d\n", pe);
                     //NOP                                     // slot 1 reserve
+#endif
                     // first_src = s1c[220+pe] = pe_spm + i_off (computed
                     //   in prologue; eliminates the magic_mask ternary)
                     // last_src  = first_src + (nis - 1) * 2
