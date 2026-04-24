@@ -3319,41 +3319,86 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //NOP                                      // slot 1 of goto
             m37_merge:
                 {
-                    // Merge: inlined interleaved binary search + load.
-                    // out_buf = (active_intv == MM_INTV) ? MM_SWAP : MM_INTV.
-                    int out_buf = (s1c[76] == MM_INTV) ? MM_SWAP : MM_INTV;
-                    int abase = MM_NEXT_INTV, bbase = s1c[76];
-                    int n_total2 = s1c[74] + s1c[75];     // n_new + intv_n
-                    int nape = (n_total2 + 3) / 4;
-                    int n_new = s1c[74];                  // alias for legacy body
-                    int intv_n = s1c[75];                 // alias for legacy body
-                    (void)abase; (void)bbase;             // used below
-                    // AC-5 Stage B (Round 16): a_sp[0..4] → s1c[40..44],
-                    // b_sp[0..4] → s1c[45..49]. Layout matches m28.
-                    // Lifetime: post-bs → per-PE compute loop end.
-                    // gr[4] caller contract (gr[4] = out_buf at m37 exit,
-                    // consumed by m33/m35) is preserved — this migration
-                    // uses gr[3]/gr[5]/gr[11] as scratch only; gr[4] is
-                    // assigned `out_buf` at the end of this merge block
-                    // and not touched after until m37 exits.
-                    // AC-5/AC-9 architectural state migration (Round 12):
-                    // bs_lo → s1c[0..2], bs_hi → s1c[3..5],
-                    // bs_tgt → s1c[6..8]. Same scheme as m28.
-                    // These slots are overwritten at end of m37 by
-                    // per-PE metadata writes (s1c[pe]=pt, etc.).
+                    // Merge: interleaved BS + load. Architectural state:
+                    //   s1c[74] = n_new (also live in gr[24])
+                    //   s1c[75] = intv_n
+                    //   s1c[76] = active_intv (== bbase)
+                    //   s1c[77] = out_buf (computed below via labeled branch)
+                    //   s1c[78] = n_total (== n_total2)
+                    //   s1c[79] = nape (computed below)
+                    // abase == MM_NEXT_INTV (constexpr, inline).
+                    // bs_tgt/bs_lo/bs_hi in s1c[0..8] unchanged.
+                    // a_sp/b_sp in s1c[40..49] unchanged (AC-10).
+                    // Top-level C++ locals `out_buf / abase / bbase /
+                    // n_total2 / nape / n_new / intv_n` eliminated.
+
+                    // --- out_buf = (active_intv == MM_INTV) ? MM_SWAP
+                    //     : MM_INTV  (labeled two-arm store).
+                    gr[11] = s1c[76]; //NOP                   // active_intv
+                    gr[5]  = MM_INTV; //NOP
+                    if (gr[11] == gr[5]) goto m37_ob_swap;   // beq
+                    //NOP                                      // slot 1 of beq
+                    gr[11] = MM_INTV; //NOP
+                    s1c[77] = gr[11];
+                    //NOP                                      // s1c gap
+                    goto m37_ob_done;
+                    //NOP                                      // slot 1 of goto
+                m37_ob_swap:
+                    gr[11] = MM_SWAP; //NOP
+                    s1c[77] = gr[11];
+                    //NOP                                      // s1c gap
+                m37_ob_done:
+                    // --- nape = (n_total + 3) >> 2 -> s1c[79].
+                    gr[11] = s1c[78]; //NOP                   // n_total
+                    gr[11] = gr[11] + 3;
+                    //NOP                                      // RAW break
+                    gr[11] = (unsigned)gr[11] >> 2;
+                    //NOP                                      // RAW break
+                    s1c[79] = gr[11];                         // nape
+                    //NOP                                      // s1c gap
+                    // --- BS-setup p-loop (eliminate tgt/lo_/hi_ locals).
+                    //     bs_tgt[p] = min((p+1)*nape, n_total)
+                    //     bs_lo[p]  = max(tgt - intv_n, 0)
+                    //     bs_hi[p]  = min(n_new, tgt)
+                    //     Labels m37_tgt_clamp/m37_lo_clamp/m37_hi_pick
+                    //     are reused across p (function-scope positions;
+                    //     no re-definition across iters).
                     for (int p = 0; p < 3; p++) {
-                        int tgt = ((p+1)*nape < n_total2) ? (p+1)*nape : n_total2;
-                        int lo_ = (tgt - intv_n > 0) ? tgt - intv_n : 0;
-                        int hi_ = (n_new < tgt) ? n_new : tgt;
-                        gr[4] = tgt;
-                        //NOP                                     // gr[4] settle
-                        s1c[6 + p] = gr[4];                      // bs_tgt[p]
-                        gr[4] = lo_;
-                        //NOP                                     // gr[4] settle
-                        s1c[0 + p] = gr[4];                      // bs_lo[p]
-                        gr[4] = hi_;
-                        //NOP                                     // gr[4] settle
-                        s1c[3 + p] = gr[4];                      // bs_hi[p]
+                        gr[11] = s1c[79]; //NOP               // nape
+                        gr[3]  = gr[11] * (p + 1);            // tgt candidate
+                        //NOP                                  // RAW break
+                        gr[11] = s1c[78]; //NOP               // n_total
+                        if (gr[3] < gr[11]) goto m37_tgt_clamp; // bge
+                        //NOP                                  // slot 1 of bge
+                        gr[3] = gr[11];                       // clamp tgt
+                        //NOP                                  // RAW break
+                    m37_tgt_clamp:
+                        s1c[6 + p] = gr[3];                   // bs_tgt[p]
+                        //NOP                                  // s1c gap
+                        // bs_lo = max(tgt - intv_n, 0).
+                        gr[11] = s1c[75]; //NOP               // intv_n
+                        gr[4]  = gr[3] - gr[11];              // tgt - intv_n
+                        //NOP                                  // RAW break
+                        if (gr[4] >= 0) goto m37_lo_clamp;    // bge
+                        //NOP                                  // slot 1 of bge
+                        gr[4] = 0;
+                        //NOP                                  // RAW break
+                    m37_lo_clamp:
+                        s1c[0 + p] = gr[4];                   // bs_lo[p]
+                        //NOP                                  // s1c gap
+                        // bs_hi = min(n_new, tgt). n_new == gr[24].
+                        if (gr[24] < gr[3]) goto m37_hi_pick_nn; // bge
+                        //NOP                                  // slot 1 of bge
+                        gr[11] = gr[3];                       // clamp to tgt
+                        //NOP                                  // RAW break
+                        goto m37_hi_store;
+                        //NOP                                  // slot 1 of goto
+                    m37_hi_pick_nn:
+                        gr[11] = gr[24];                      // = n_new
+                        //NOP                                  // RAW break
+                    m37_hi_store:
+                        s1c[3 + p] = gr[11];                  // bs_hi[p]
+                        //NOP                                  // s1c gap
                     }
                 m37_bs_top:
                     gr[11] = s1c[0]; //NOP
@@ -3547,12 +3592,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     s1c[40] = gr[11];                   // a_sp[0]
                     //NOP                               // 1-port s1c gap
                     s1c[45] = gr[11];                   // b_sp[0]
-                    gr[11] = n_new;
-                    //NOP
+                    gr[11] = gr[24];                    // n_new (live-in)
+                    //NOP                                 // RAW break
                     s1c[44] = gr[11];                   // a_sp[4]
-                    gr[11] = intv_n;
-                    //NOP
+                    //NOP                                 // s1c gap
+                    gr[11] = s1c[75]; //NOP             // intv_n
                     s1c[49] = gr[11];                   // b_sp[4]
+                    //NOP                                 // s1c gap
                     // Compute a_sp[p+1]/b_sp[p+1] for p=0,1,2 via
                     // gr[3]=a_sp candidate, gr[4]=b_sp candidate,
                     // gr[5]=prior a_sp[p]/b_sp[p] stage. (Note gr[4]
@@ -3604,9 +3650,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         int a1 = (pa_n-a0 < MERGE_TILE) ? (pa_n-a0>0?pa_n-a0:0) : MERGE_TILE;
                         int b0 = (pb_n < MERGE_TILE) ? pb_n : MERGE_TILE;
                         int b1 = (pb_n-b0 < MERGE_TILE) ? (pb_n-b0>0?pb_n-b0:0) : MERGE_TILE;
-                        s1c[8+pe] = abase + (pa_s+a0+a1)*2;
+                        // abase == MM_NEXT_INTV (constexpr); bbase via s1c[76].
+                        s1c[8+pe] = MM_NEXT_INTV + (pa_s+a0+a1)*2;
                         s1c[12+pe] = (pa_n-a0-a1 > 0) ? pa_n-a0-a1 : 0;
-                        s1c[16+pe] = bbase + (pb_s+b0+b1)*2;
+                        s1c[16+pe] = s1c[76] + (pb_s+b0+b1)*2;
                         s1c[20+pe] = (pb_n-b0-b1 > 0) ? pb_n-b0-b1 : 0;
                         // AC-5: tile sizes/sources → s1c scratch
                         gr[11] = a0;
@@ -3625,11 +3672,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         //NOP
                         s1c[62+pe] = gr[11];
                         //NOP
-                        gr[11] = abase + pa_s*2;
+                        gr[11] = MM_NEXT_INTV + pa_s*2;   // abase == MM_NEXT_INTV
                         //NOP
                         s1c[66+pe] = gr[11];
                         //NOP
-                        gr[11] = bbase + pb_s*2;
+                        gr[11] = s1c[76] + pb_s*2;         // bbase via s1c[76]
                         //NOP
                         s1c[70+pe] = gr[11];
                         int *spm2 = &SPM_unit->buffer[pe * SPM_BANK_GROUP_SIZE];
@@ -3717,9 +3764,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     }
                     int niter = ((max_pt+MERGE_STEP-1)/MERGE_STEP)*MERGE_STEP;
                     gr[6] = (niter == 0) ? 0 : niter;
-                    gr[4] = out_buf;
-                    s1c[152] = out_buf;
-                    s1c[149] = 0;
+                    // out_buf staged through s1c[77] (merge-arm arch state).
+                    gr[11] = s1c[77]; //NOP                   // out_buf
+                    gr[4]  = gr[11];                          // publish
+                    //NOP                                      // RAW break
+                    s1c[152] = gr[11];
+                    //NOP                                      // s1c gap
+                    gr[11] = 0; //NOP
+                    s1c[149] = gr[11];
+                    //NOP                                      // s1c gap
                 }                                          // end merge arm
             m37_done:
                 // Shared post-split: publish n_total -> s1c[148]
