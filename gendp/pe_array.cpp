@@ -4680,105 +4680,285 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //NOP
             }
         } else if (magic_id == 33) {
-            // Merge tile reload (overlapped with PE compute).
-            // Chunk-outer / PE-inner round-robin (AC-9 R9 close).
-            // 3-pass restructure: (1) determine per-(pe,buf) reload
-            // params monotonically consuming s1c rem counters through
-            // gr[11]; (2) four chunk-outer mvdq passes (A0, A1, B0,
-            // B1) round-robined across PEs; (3) update SPM meta +
-            // drain flags.
-            // BL-20260416-m32-gather-dep applies to m32 GATHER (MM->
-            // MM with cross-PE skip dependencies), NOT to m30/m33
-            // RELOAD (MM->per-PE-SPM with no cross-PE state).
+            // Merge tile reload (Plan 3c l6b): 3-pass ISA-lowered.
+            // AC-2/3/5/9. Chunk-outer/PE-inner mvdq preserved.
+            //
+            // s1c scratch (m33-local; all within s1c[100..139] band):
+            //   s1c[100..103] = a_tile[0][pe]
+            //   s1c[104..107] = a_tile[1][pe]
+            //   s1c[108..111] = a_src[0][pe]
+            //   s1c[112..115] = a_src[1][pe]
+            //   s1c[116..119] = b_tile[0][pe]
+            //   s1c[120..123] = b_tile[1][pe]
+            //   s1c[124..127] = b_src[0][pe]
+            //   s1c[128..131] = b_src[1][pe]
+            //   s1c[132]      = per-iter rem_a
+            //   s1c[133]      = per-iter src_a
+            //   s1c[134]      = per-iter rem_b
+            //   s1c[135]      = per-iter src_b
+            //   s1c[136]      = mvdq mw (per pass)
+            //   s1c[137]      = mvdq j counter
+            //   s1c[138]      = mvdq cur_spm stage
+            //   s1c[139]      = mvdq cur_mm stage
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
                 int *spm = SPM_unit->buffer;
-                int a_tile[2][4] = {};
-                int a_src[2][4]  = {};
-                int b_tile[2][4] = {};
-                int b_src[2][4]  = {};
-                // Pass 1: reload-param gather through gr[11]/gr[1]
-                for (int pe = 0; pe < 4; pe++) {
-                    int *s = &spm[pe * SPM_BANK_GROUP_SIZE];
-                    gr[11] = s1c[12+pe];                  // s1c rem_a
-                    //NOP                                  // s1c gap
-                    int rem_a = gr[11];
-                    gr[1]  = s1c[8+pe];                   // s1c src_a
-                    //NOP                                  // s1c gap
-                    int src_a = gr[1];
-                    for (int buf = 0; buf < 2; buf++) {
-                        gr[11] = s[MERGE_META+9+buf];     // SPM flag_a
-                        //NOP                              // SPM 1/3
-                        //NOP                              // SPM 2/3
-                        //NOP                              // SPM 3/3
-                        if (gr[11] == 0 && rem_a > 0) {
-                            int tile = rem_a;
-                            if (tile > MERGE_TILE) tile = MERGE_TILE;
-                            a_tile[buf][pe] = tile;
-                            a_src[buf][pe]  = src_a;
-                            src_a += tile * 2;
-                            rem_a -= tile;
-                        }
-                    }
-                    s1c[8+pe]  = src_a;
-                    s1c[12+pe] = rem_a;
-                    gr[11] = s1c[20+pe];                  // s1c rem_b
-                    //NOP                                  // s1c gap
-                    int rem_b = gr[11];
-                    gr[1]  = s1c[16+pe];                  // s1c src_b
-                    //NOP                                  // s1c gap
-                    int src_b = gr[1];
-                    for (int buf = 0; buf < 2; buf++) {
-                        gr[11] = s[MERGE_META+11+buf];    // SPM flag_b
-                        //NOP                              // SPM 1/3
-                        //NOP                              // SPM 2/3
-                        //NOP                              // SPM 3/3
-                        if (gr[11] == 0 && rem_b > 0) {
-                            int tile = rem_b;
-                            if (tile > MERGE_TILE) tile = MERGE_TILE;
-                            b_tile[buf][pe] = tile;
-                            b_src[buf][pe]  = src_b;
-                            src_b += tile * 2;
-                            rem_b -= tile;
-                        }
-                    }
-                    s1c[16+pe] = src_b;
-                    s1c[20+pe] = rem_b;
+                // Pass 1: per-PE reload-param gather.
+                // Zero-init all 8 tile/src slots to preserve "no reload
+                // if gated" semantics.
+                for (int i = 0; i < 8; i++) {
+                    s1c[100 + i] = 0;
+                    s1c[116 + i] = 0;
                 }
-                // Pass 2: chunk-outer round-robin mvdq
-                #define M33_MVDQ(buf_off, tile_arr, src_arr) do { \
-                    int mw = 0; \
-                    for (int pe = 0; pe < 4; pe++) { \
-                        int w = tile_arr[pe]*2; if (w > mw) mw = w; } \
-                    for (int j = 0; j < mw; j += 8) \
-                        for (int pe = 0; pe < 4; pe++) { \
-                            int w = tile_arr[pe]*2; \
-                            if (j >= w) continue; \
-                            int cnt = w-j; if (cnt>8) cnt=8; \
-                            mvdq_copy(&spm[pe*SPM_BANK_GROUP_SIZE+buf_off+j], \
-                                      &mm[src_arr[pe]+j], cnt); \
-                        } \
-                } while(0)
-                M33_MVDQ(MERGE_A_BUF0, a_tile[0], a_src[0]);
-                M33_MVDQ(MERGE_A_BUF1, a_tile[1], a_src[1]);
-                M33_MVDQ(MERGE_B_BUF0, b_tile[0], b_src[0]);
-                M33_MVDQ(MERGE_B_BUF1, b_tile[1], b_src[1]);
-                #undef M33_MVDQ
-                // Pass 3: update SPM meta + drain flags
+                // (Zero a_src/b_src too: s1c[108..115] and [124..131].)
+                for (int i = 0; i < 8; i++) {
+                    s1c[108 + i] = 0;
+                    s1c[124 + i] = 0;
+                }
                 for (int pe = 0; pe < 4; pe++) {
-                    int *s = &spm[pe * SPM_BANK_GROUP_SIZE];
+                    // Stage rem_a, src_a into s1c scratch.
+                    gr[11] = s1c[12 + pe]; //NOP           // rem_a
+                    s1c[132] = gr[11];
+                    //NOP                                   // s1c gap
+                    gr[11] = s1c[8 + pe]; //NOP            // src_a
+                    s1c[133] = gr[11];
+                    //NOP                                   // s1c gap
                     for (int buf = 0; buf < 2; buf++) {
-                        if (a_tile[buf][pe] > 0)
-                            s[MERGE_META+9+buf] = a_tile[buf][pe];
-                        if (b_tile[buf][pe] > 0)
-                            s[MERGE_META+11+buf] = b_tile[buf][pe];
+                        // Load SPM flag_a.
+                        gr[11] = spm[pe * SPM_BANK_GROUP_SIZE
+                                     + MERGE_META + 9 + buf];
+                        //NOP                               // SPM 1/3
+                        //NOP                               // SPM 2/3
+                        //NOP                               // SPM 3/3
+                        // Skip if flag != 0 (already loaded).
+                        if (gr[11] != 0) goto m33_a_skip;  // bne
+                        //NOP                               // slot 1 of bne
+                        gr[11] = s1c[132]; //NOP           // rem_a
+                        // Skip if rem_a <= 0.
+                        if (gr[11] <= 0) goto m33_a_skip;  // bge
+                        //NOP                               // slot 1 of bge
+                        // tile = min(rem_a, MERGE_TILE).
+                        gr[5]  = MERGE_TILE; //NOP
+                        if (gr[11] <= gr[5]) goto m33_a_tile_ok; // bge
+                        //NOP                               // slot 1 of bge
+                        gr[11] = gr[5];                    // clamp
+                        //NOP                               // RAW break
+                    m33_a_tile_ok:
+                        // a_tile[buf][pe] = tile. Use compile-time
+                        // slot select: buf=0 -> s1c[100+pe], buf=1 ->
+                        // s1c[104+pe]. Inline via buf*4 offset.
+                        s1c[100 + buf * 4 + pe] = gr[11];
+                        //NOP                               // s1c gap
+                        // a_src[buf][pe] = src_a.
+                        gr[5]  = s1c[133]; //NOP
+                        s1c[108 + buf * 4 + pe] = gr[5];
+                        //NOP                               // s1c gap
+                        // src_a += tile * 2.
+                        gr[5]  = gr[11] << 1;              // tile*2
+                        //NOP                               // RAW break
+                        gr[3]  = s1c[133]; //NOP           // src_a
+                        gr[3]  = gr[3] + gr[5];
+                        //NOP                               // RAW break
+                        s1c[133] = gr[3];
+                        //NOP                               // s1c gap
+                        // rem_a -= tile.
+                        gr[5]  = s1c[132]; //NOP           // rem_a
+                        gr[5]  = gr[5] - gr[11];           // rem_a - tile
+                        //NOP                               // RAW break
+                        s1c[132] = gr[5];
+                        //NOP                               // s1c gap
+                    m33_a_skip:
+                        (void)0;
                     }
-                    // Drain flags (post-buf-loop)
-                    if (s1c[12+pe] <= 0 && s[MERGE_META+9]==0
-                        && s[MERGE_META+10]==0) s[MERGE_META+5] = 1;
-                    if (s1c[20+pe] <= 0 && s[MERGE_META+11]==0
-                        && s[MERGE_META+12]==0) s[MERGE_META+6] = 1;
+                    // Commit: s1c[8+pe] = src_a; s1c[12+pe] = rem_a.
+                    gr[11] = s1c[133]; //NOP
+                    s1c[8 + pe] = gr[11];
+                    //NOP                                   // s1c gap
+                    gr[11] = s1c[132]; //NOP
+                    s1c[12 + pe] = gr[11];
+                    //NOP                                   // s1c gap
+                    // Same for B side.
+                    gr[11] = s1c[20 + pe]; //NOP           // rem_b
+                    s1c[134] = gr[11];
+                    //NOP                                   // s1c gap
+                    gr[11] = s1c[16 + pe]; //NOP           // src_b
+                    s1c[135] = gr[11];
+                    //NOP                                   // s1c gap
+                    for (int buf = 0; buf < 2; buf++) {
+                        gr[11] = spm[pe * SPM_BANK_GROUP_SIZE
+                                     + MERGE_META + 11 + buf];
+                        //NOP                               // SPM 1/3
+                        //NOP                               // SPM 2/3
+                        //NOP                               // SPM 3/3
+                        if (gr[11] != 0) goto m33_b_skip;  // bne
+                        //NOP                               // slot 1 of bne
+                        gr[11] = s1c[134]; //NOP           // rem_b
+                        if (gr[11] <= 0) goto m33_b_skip;  // bge
+                        //NOP                               // slot 1 of bge
+                        gr[5]  = MERGE_TILE; //NOP
+                        if (gr[11] <= gr[5]) goto m33_b_tile_ok;
+                        //NOP
+                        gr[11] = gr[5];
+                        //NOP                               // RAW break
+                    m33_b_tile_ok:
+                        s1c[116 + buf * 4 + pe] = gr[11];  // b_tile
+                        //NOP                               // s1c gap
+                        gr[5]  = s1c[135]; //NOP           // src_b
+                        s1c[124 + buf * 4 + pe] = gr[5];   // b_src
+                        //NOP                               // s1c gap
+                        gr[5]  = gr[11] << 1;
+                        //NOP
+                        gr[3]  = s1c[135]; //NOP
+                        gr[3]  = gr[3] + gr[5];
+                        //NOP
+                        s1c[135] = gr[3];
+                        //NOP
+                        gr[5]  = s1c[134]; //NOP
+                        gr[5]  = gr[5] - gr[11];
+                        //NOP
+                        s1c[134] = gr[5];
+                        //NOP
+                    m33_b_skip:
+                        (void)0;
+                    }
+                    gr[11] = s1c[135]; //NOP
+                    s1c[16 + pe] = gr[11];
+                    //NOP
+                    gr[11] = s1c[134]; //NOP
+                    s1c[20 + pe] = gr[11];
+                    //NOP
+                }
+                // Pass 2: four chunk-outer mvdq passes (A0, A1, B0, B1).
+                // Emitted via the M33_MVDQ_PASS macro below so the four
+                // passes share one ISA sequence; helper-macro state lives
+                // entirely in s1c[136..139].
+                #define M33_MVDQ_PASS(TILE_BASE, SRC_BASE, BUF_OFF, TAG) \
+                    /* Compute mw = max_pe(tile[pe]*2). */             \
+                    gr[11] = 0; s1c[136] = gr[11]; /*NOP; s1c gap*/    \
+                    for (int pe = 0; pe < 4; pe++) {                   \
+                        gr[11] = s1c[TILE_BASE + pe]; /*NOP*/          \
+                        gr[5]  = gr[11] << 1; /*NOP*/                  \
+                        gr[11] = s1c[136]; /*NOP*/                     \
+                        if (gr[5] <= gr[11]) goto m33_##TAG##_mw_ok;   \
+                        /*NOP*/                                        \
+                        s1c[136] = gr[5]; /*NOP*/                      \
+                    m33_##TAG##_mw_ok:                                 \
+                        (void)0;                                       \
+                    }                                                  \
+                    gr[11] = 0; s1c[137] = gr[11]; /*NOP; s1c gap*/    \
+                m33_##TAG##_top:                                       \
+                    gr[11] = s1c[137]; /*NOP*/                         \
+                    gr[5]  = s1c[136]; /*NOP*/                         \
+                    if (gr[11] >= gr[5]) goto m33_##TAG##_done;        \
+                    /*NOP*/                                            \
+                    for (int pe = 0; pe < 4; pe++) {                   \
+                        gr[5]  = s1c[TILE_BASE + pe]; /*NOP*/          \
+                        gr[5]  = gr[5] << 1; /*NOP*/                   \
+                        gr[11] = s1c[137]; /*NOP*/                     \
+                        if (gr[11] >= gr[5]) goto m33_##TAG##_skip;    \
+                        /*NOP*/                                        \
+                        gr[3]  = gr[5] - gr[11]; /*NOP*/               \
+                        gr[5]  = 8; /*NOP*/                            \
+                        if (gr[3] <= gr[5]) goto m33_##TAG##_cnt_ok;   \
+                        /*NOP*/                                        \
+                        gr[3]  = gr[5]; /*NOP*/                        \
+                    m33_##TAG##_cnt_ok:                                \
+                        gr[5]  = s1c[137]; /*NOP*/                     \
+                        gr[11] = pe * SPM_BANK_GROUP_SIZE + BUF_OFF;   \
+                        gr[11] = gr[11] + gr[5]; /*NOP*/               \
+                        s1c[138] = gr[11]; /*NOP; s1c gap*/            \
+                        gr[11] = s1c[SRC_BASE + pe]; /*NOP*/           \
+                        gr[11] = gr[11] + gr[5]; /*NOP*/               \
+                        s1c[139] = gr[11]; /*NOP; s1c gap*/            \
+                        gr[5]  = s1c[138]; /*NOP*/                     \
+                        gr[11] = s1c[139]; /*NOP*/                     \
+                        mvdq_copy(&spm[gr[5]], &mm[gr[11]], gr[3]);    \
+                    m33_##TAG##_skip:                                  \
+                        (void)0;                                       \
+                    }                                                  \
+                    gr[11] = s1c[137]; /*NOP*/                         \
+                    gr[11] = gr[11] + 8; /*NOP*/                       \
+                    s1c[137] = gr[11]; /*NOP; s1c gap*/                \
+                    goto m33_##TAG##_top;                              \
+                m33_##TAG##_done:                                      \
+                    (void)0
+                M33_MVDQ_PASS(100, 108, MERGE_A_BUF0, a0);
+                M33_MVDQ_PASS(104, 112, MERGE_A_BUF1, a1);
+                M33_MVDQ_PASS(116, 124, MERGE_B_BUF0, b0);
+                M33_MVDQ_PASS(120, 128, MERGE_B_BUF1, b1);
+                #undef M33_MVDQ_PASS
+                // Pass 3: update SPM meta + drain flags (per PE).
+                for (int pe = 0; pe < 4; pe++) {
+                    for (int buf = 0; buf < 2; buf++) {
+                        // a_tile write
+                        gr[11] = s1c[100 + buf * 4 + pe]; //NOP
+                        if (gr[11] <= 0) goto m33_aw_skip; // bge
+                        //NOP                               // slot 1
+                        spm[pe * SPM_BANK_GROUP_SIZE
+                            + MERGE_META + 9 + buf] = gr[11];
+                        //NOP                               // SPM 1/3
+                        //NOP                               // SPM 2/3
+                        //NOP                               // SPM 3/3
+                    m33_aw_skip:
+                        // b_tile write
+                        gr[11] = s1c[116 + buf * 4 + pe]; //NOP
+                        if (gr[11] <= 0) goto m33_bw_skip;
+                        //NOP
+                        spm[pe * SPM_BANK_GROUP_SIZE
+                            + MERGE_META + 11 + buf] = gr[11];
+                        //NOP
+                        //NOP
+                        //NOP
+                    m33_bw_skip:
+                        (void)0;
+                    }
+                    // Drain flag A: if rem_a<=0 && MM[9]==0 && MM[10]==0
+                    //               then MM[5] = 1.
+                    gr[11] = s1c[12 + pe]; //NOP           // rem_a
+                    if (gr[11] > 0) goto m33_da_skip;      // bgt
+                    //NOP
+                    gr[11] = spm[pe * SPM_BANK_GROUP_SIZE + MERGE_META + 9];
+                    //NOP
+                    //NOP
+                    //NOP
+                    if (gr[11] != 0) goto m33_da_skip;     // bne
+                    //NOP
+                    gr[11] = spm[pe * SPM_BANK_GROUP_SIZE + MERGE_META + 10];
+                    //NOP
+                    //NOP
+                    //NOP
+                    if (gr[11] != 0) goto m33_da_skip;
+                    //NOP
+                    gr[11] = 1; //NOP
+                    spm[pe * SPM_BANK_GROUP_SIZE + MERGE_META + 5] = gr[11];
+                    //NOP
+                    //NOP
+                    //NOP
+                m33_da_skip:
+                    // Drain flag B: same pattern with 20+pe / 11 / 12 / 6.
+                    gr[11] = s1c[20 + pe]; //NOP           // rem_b
+                    if (gr[11] > 0) goto m33_db_skip;
+                    //NOP
+                    gr[11] = spm[pe * SPM_BANK_GROUP_SIZE + MERGE_META + 11];
+                    //NOP
+                    //NOP
+                    //NOP
+                    if (gr[11] != 0) goto m33_db_skip;
+                    //NOP
+                    gr[11] = spm[pe * SPM_BANK_GROUP_SIZE + MERGE_META + 12];
+                    //NOP
+                    //NOP
+                    //NOP
+                    if (gr[11] != 0) goto m33_db_skip;
+                    //NOP
+                    gr[11] = 1; //NOP
+                    spm[pe * SPM_BANK_GROUP_SIZE + MERGE_META + 6] = gr[11];
+                    //NOP
+                    //NOP
+                    //NOP
+                m33_db_skip:
+                    (void)0;
                 }
 #ifdef PLAN3C_TRACE_SNAPSHOT
                 // AC-9 Plan 3c frozen observable dump (m33 exit).
@@ -4795,14 +4975,14 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 for (int i = 8; i <= 23; i++) snap33 << s1c[i] << ",";
                 snap33 << "\n";
                 for (int pe = 0; pe < 4; pe++) {
-                    snap33 << "m33 a_src[" << pe << "]=" << a_src[0][pe]
-                           << "," << a_src[1][pe]
-                           << " a_tile=" << a_tile[0][pe] << ","
-                           << a_tile[1][pe]
-                           << " b_src=" << b_src[0][pe] << ","
-                           << b_src[1][pe]
-                           << " b_tile=" << b_tile[0][pe] << ","
-                           << b_tile[1][pe] << "\n";
+                    snap33 << "m33 a_src[" << pe << "]="
+                           << s1c[108 + pe] << "," << s1c[112 + pe]
+                           << " a_tile=" << s1c[100 + pe] << ","
+                           << s1c[104 + pe]
+                           << " b_src=" << s1c[124 + pe] << ","
+                           << s1c[128 + pe]
+                           << " b_tile=" << s1c[116 + pe] << ","
+                           << s1c[120 + pe] << "\n";
                 }
 #endif
             }
