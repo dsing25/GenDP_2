@@ -6397,176 +6397,373 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //NOP                                         // RAW break
             }
         } else if (magic_id == 32) {
-            // Dedup finalize: gather diag+intv outputs from MM to
-            // diag_base / MM_INTV. Boundary merge-adjacent for intv.
-            // gr[4]=MM_SORT_BUF, gr[7]=MM_DEDUP_INTV_OUT.
-            // s1c: [16..19]=diag_out_base, [20..23]=diag_out_cursor,
-            //   [24..27]=intv_out_base, [28..31]=intv_out_cursor.
+            // Dedup finalize (ISA-lowered per Plan 3c l6a).
+            // Gathers diag+intv outputs from MM to diag_base / MM_INTV2
+            // with PE-serial boundary-merge seams. Cross-PE architectural
+            // state is carried in gr[]/s1c[] only — no C++ locals survive
+            // across ISA lines in the lowered body.
             //
-            // Magic 32 has zero SPM loads: it reads only mm[]
-            // (waitLSQ-disciplined) and s1c[] (1-cycle rule-8
-            // latency). AC-7 compliant by construction. See
-            // .humanize/rlcr/2026-04-20_20-46-30/ac11-audit-table.md.
+            // Register/s1c allocation:
+            //   gr[3]   : MM address scratch (caller-dead at m32 entry)
+            //   gr[4]   : mm_sort_buf (live-in; read-only)
+            //   gr[5]   : arithmetic scratch
+            //   gr[7]   : mm_intv_out (live-in; read-only)
+            //   gr[11]  : CLAUDE-safe scratch for all SPM/s1c loads
+            //   gr[15]  : n_a_final accumulator (published on exit)
+            //   gr[28]  : intv_n accumulator (published on exit)
+            // s1c scratch (all in s1c[0..143], cleared on epilogue):
+            //   s1c[120]: diag_base (staged from s1c[144] at entry)
+            //   s1c[121]: last_vd seam (uint32 as int; -1 sentinel)
+            //   s1c[122]: last_intv_hi seam (uint32 as int; 0 init)
+            //   s1c[123]: per-iter base
+            //   s1c[124]: per-iter cnt
+            //   s1c[125]: per-iter skip flag
+            //   s1c[126]: per-iter scratch (k0 / hi0 / lo0)
+            //   s1c[127]: per-iter mvdq src address
+            //   s1c[128]: per-iter mvdq dst address
+            //   s1c[129]: per-iter words = (cnt - skip) * 2
+            //   s1c[130]: per-iter mvdq j counter
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
                 constexpr int DIAG_CAP_V2 = (16 << 20);
                 constexpr int MM_INTV2 = DIAG_CAP_V2 * 6;
-                // s1c[144] stages through gr[11] with 1-NOP gap.
-                gr[11] = s1c[144];
-                //NOP                                       // s1c gap
-                int diag_base   = gr[11]; // original diag_base
-                int mm_sort_buf = gr[4];
-                int mm_intv_out = gr[7];
+                // Prologue: stage diag_base + init architectural acc.
+                gr[11] = s1c[144]; //NOP                      // diag_base raw
+                s1c[120] = gr[11];                            // diag_base
+                //NOP                                          // s1c gap
+                gr[15] = 0;                                   // n_a_final = 0
+                //NOP                                          // RAW break
+                gr[28] = 0;                                   // intv_n = 0
+                //NOP                                          // RAW break
+                gr[11] = -1; //NOP                            // sentinel 0xFFFFFFFF
+                s1c[121] = gr[11];                            // last_vd
+                //NOP                                          // s1c gap
+                gr[11] = 0; //NOP
+                s1c[122] = gr[11];                            // last_intv_hi
+                //NOP                                          // s1c gap
 
-                // Gather deduped diags → diag_base
-                // Bulk mvdq per PE, boundary max-merge at PE seams only.
-                // Within each PE, output is already unique (no dup vd).
-                // ISA lowering: s1c loads route through gr[11] with
-                // 1-NOP gap; MM boundary reads route through gr[11]
-                // with // waitLSQ + //NOP settle before consumer.
-                int n_a_final = 0;
-                uint32_t last_vd = 0xFFFFFFFF;
+                // --- DIAG GATHER: PE-serial, bulk mvdq + boundary merge.
                 for (int pe = 0; pe < 4; pe++) {
-                    gr[11] = s1c[16 + pe];                   // s1c base
-                    //NOP                                     // s1c 1-cycle gap
-                    int base = gr[11];
-                    gr[11] = s1c[20 + pe];                   // s1c cnt
-                    //NOP                                     // s1c 1-cycle gap
-                    int cnt = gr[11];
-                    if (cnt <= 0) continue;
-                    int skip = 0;
-                    // Boundary check: first element vs last output
-                    if (n_a_final > 0) {
-                        gr[11] = mm[mm_sort_buf + base*2];   // MM load vd0
-                        // waitLSQ
-                        //NOP                                 // LSQ settle
-                        if ((uint32_t)gr[11] == last_vd) {
-                            gr[11] = mm[mm_sort_buf + base*2 + 1];  // MM k0
-                            // waitLSQ
-                            //NOP                             // LSQ settle
-                            int k0 = gr[11];
-                            gr[11] = mm[diag_base+(n_a_final-1)*2+1]; // MM pk
-                            // waitLSQ
-                            //NOP                             // LSQ settle
-                            if (k0 > gr[11])
-                                mm[diag_base+(n_a_final-1)*2+1] = k0;
-                            skip = 1; // skip merged element
-                        }
-                    }
-                    // Bulk mvdq copy interior (skip boundary element)
-                    int src = mm_sort_buf + (base + skip) * 2;
-                    int dst = diag_base + n_a_final * 2;
-                    int words = (cnt - skip) * 2;
-                    for (int j = 0; j < words; j += 8) {
-                        int c = words - j; if (c > 8) c = 8;
-                        mvdq_copy(&mm[dst + j], &mm[src + j], c);
-                    }
-                    n_a_final += cnt - skip;
-                    if (cnt > skip) {
-                        gr[11] = mm[mm_sort_buf
-                            + (base + cnt - 1) * 2];         // MM load last_vd
-                        // waitLSQ
-                        //NOP                                 // LSQ settle
-                        last_vd = (uint32_t)gr[11];
-                    }
-                }
-                // Gather intv from MM_DEDUP_INTV_OUT → MM_INTV
-                // Gather intv: bulk mvdq per PE interior, s1c-based
-                // seam merge at PE boundaries only. PE 23 already
-                // merges adjacent intvs within each PE's output.
-                // Boundary compare uses s1c[176..191] (written by
-                // magic 31 during writeback): first intv lo/hi at
-                // s1c[176+pe]/s1c[180+pe], last intv lo/hi at
-                // s1c[184+pe]/s1c[188+pe]. S1c rule-8 latency is
-                // 1 cycle, vs MM waitLSQ; no MM reads in merge.
-                int intv_n = 0;
-                uint32_t last_intv_hi = 0;
-                for (int pe = 0; pe < 4; pe++) {
-                    gr[11] = s1c[24 + pe];                   // s1c base
-                    //NOP                                     // s1c 1-cycle gap
-                    int base = gr[11];
-                    gr[11] = s1c[28 + pe];                   // s1c cnt
-                    //NOP                                     // s1c 1-cycle gap
-                    int cnt = gr[11];
-                    if (cnt <= 0) continue;
-                    int skip = 0;
-#ifdef PLAN2A_SEAM_ASSERT
-                    // AC-9 evidence hook: confirm the s1c first/last
-                    // seam values written by magic 31 match the
-                    // first/last intv observed in MM for this PE's
-                    // cumulative output region. Enable with
-                    // `-DPLAN2A_SEAM_ASSERT` and re-run mode 1.
-                    {
-                        int mm_first_lo = mm[mm_intv_out + base*2];
-                        int mm_first_hi = mm[mm_intv_out + base*2 + 1];
-                        int mm_last_lo  = mm[mm_intv_out
-                            + (base + cnt - 1) * 2];
-                        int mm_last_hi  = mm[mm_intv_out
-                            + (base + cnt - 1) * 2 + 1];
-                        assert(s1c[176+pe] == mm_first_lo
-                               && "AC-9 first-lo mismatch");
-                        assert(s1c[180+pe] == mm_first_hi
-                               && "AC-9 first-hi mismatch");
-                        assert(s1c[184+pe] == mm_last_lo
-                               && "AC-9 last-lo mismatch");
-                        assert(s1c[188+pe] == mm_last_hi
-                               && "AC-9 last-hi mismatch");
-                        fprintf(stderr,
-                            "[SEAM pe=%d] s1c_first=0x%x/0x%x "
-                            "mm_first=0x%x/0x%x s1c_last=0x%x/0x%x "
-                            "mm_last=0x%x/0x%x cnt=%d base=%d\n",
-                            pe, (unsigned)s1c[176+pe],
-                            (unsigned)s1c[180+pe],
-                            (unsigned)mm_first_lo,
-                            (unsigned)mm_first_hi,
-                            (unsigned)s1c[184+pe],
-                            (unsigned)s1c[188+pe],
-                            (unsigned)mm_last_lo,
-                            (unsigned)mm_last_hi, cnt, base);
-                    }
-#endif
-                    // Boundary merge: use s1c first intv of this PE.
-                    // s1c reads stage through gr[11] with 1-NOP gap.
-                    if (intv_n > 0) {
-                        gr[11] = s1c[176 + pe];              // s1c lo0
-                        //NOP                                 // s1c 1-cycle gap
-                        uint32_t lo0 = (uint32_t)gr[11];
-                        gr[11] = s1c[180 + pe];              // s1c hi0
-                        //NOP                                 // s1c 1-cycle gap
-                        uint32_t hi0 = (uint32_t)gr[11];
-                        if (lo0 <= last_intv_hi) {
-                            // Merge into last output's hi
-                            if (hi0 > last_intv_hi) {
-                                last_intv_hi = hi0;
-                                mm[MM_INTV2+(intv_n-1)*2+1]
-                                    = (int)hi0;
-                            }
-                            skip = 1;
-                        }
-                    }
-                    // Bulk mvdq copy PE interior (skip first if merged)
-                    int src = mm_intv_out + (base + skip) * 2;
-                    int dst = MM_INTV2 + intv_n * 2;
-                    int words = (cnt - skip) * 2;
-                    for (int j = 0; j < words; j += 8) {
-                        int c = words - j; if (c > 8) c = 8;
-                        mvdq_copy(&mm[dst + j], &mm[src + j], c);
-                    }
-                    intv_n += cnt - skip;
-                    // Last hi for next PE seam compare: s1c, not MM.
-                    // cnt==skip (single-element merged away) path:
-                    // last_intv_hi already reflects the merged tail
-                    // (possibly bumped to hi0 at the merge branch),
-                    // so no further update is needed here.
-                    if (cnt > skip) {
-                        gr[11] = s1c[188 + pe];
-                        //NOP                                 // s1c 1-cycle gap
-                        last_intv_hi = (uint32_t)gr[11];
-                    }
+                    // Load base, cnt via gr[11].
+                    gr[11] = s1c[16 + pe]; //NOP
+                    s1c[123] = gr[11];                        // base
+                    //NOP                                      // s1c gap
+                    gr[11] = s1c[20 + pe]; //NOP
+                    s1c[124] = gr[11];                        // cnt
+                    //NOP                                      // s1c gap
+                    // Skip if cnt <= 0.
+                    gr[11] = s1c[124]; //NOP
+                    if (gr[11] <= 0) goto m32_diag_pe_skip;   // bge
+                    //NOP                                      // slot 1 of bge
+                    // skip = 0.
+                    gr[11] = 0; //NOP
+                    s1c[125] = gr[11];                        // skip
+                    //NOP                                      // s1c gap
+                    // Boundary test: only if n_a_final > 0.
+                    if (gr[15] <= 0) goto m32_diag_boundary_done; // bge
+                    //NOP                                      // slot 1 of bge
+                    // vd0 = mm[mm_sort_buf + base*2].
+                    gr[11] = s1c[123]; //NOP                  // base
+                    gr[3]  = gr[11] << 1;                     // 2*base
+                    //NOP                                      // RAW break
+                    gr[3]  = gr[3] + gr[4];                   // + mm_sort_buf
+                    //NOP                                      // RAW break
+                    gr[11] = mm[gr[3]];                       // vd0
+                    // waitLSQ
+                    //NOP                                      // LSQ settle
+                    gr[5]  = s1c[121]; //NOP                  // last_vd
+                    if (gr[11] != gr[5]) goto m32_diag_boundary_done; // bne
+                    //NOP                                      // slot 1 of bne
+                    // k0 = mm[mm_sort_buf + base*2 + 1].
+                    gr[3]  = gr[3] + 1;
+                    //NOP                                      // RAW break
+                    gr[11] = mm[gr[3]];                       // k0
+                    // waitLSQ
+                    //NOP                                      // LSQ settle
+                    s1c[126] = gr[11];                        // k0
+                    //NOP                                      // s1c gap
+                    // pk = mm[diag_base + (n_a_final-1)*2 + 1].
+                    gr[5]  = gr[15] - 1;                      // n_a_final-1
+                    //NOP                                      // RAW break
+                    gr[5]  = gr[5] << 1;                      // *2
+                    //NOP                                      // RAW break
+                    gr[5]  = gr[5] + 1;                       // +1
+                    //NOP                                      // RAW break
+                    gr[3]  = s1c[120]; //NOP                  // diag_base
+                    gr[3]  = gr[3] + gr[5];
+                    //NOP                                      // RAW break
+                    gr[11] = mm[gr[3]];                       // pk
+                    // waitLSQ
+                    //NOP                                      // LSQ settle
+                    gr[5]  = s1c[126]; //NOP                  // k0
+                    if (gr[5] <= gr[11]) goto m32_diag_no_kupdate; // bge
+                    //NOP                                      // slot 1 of bge
+                    mm[gr[3]] = gr[5];                        // mm[pk] = k0
+                    // waitLSQ
+                m32_diag_no_kupdate:
+                    gr[11] = 1; //NOP
+                    s1c[125] = gr[11];                        // skip = 1
+                    //NOP                                      // s1c gap
+                m32_diag_boundary_done:
+                    // Compute src = mm_sort_buf + (base + skip) * 2.
+                    gr[11] = s1c[123]; //NOP                  // base
+                    gr[3]  = gr[11];
+                    //NOP                                      // RAW break
+                    gr[11] = s1c[125]; //NOP                  // skip
+                    gr[3]  = gr[3] + gr[11];                  // base + skip
+                    //NOP                                      // RAW break
+                    gr[3]  = gr[3] << 1;                      // * 2
+                    //NOP                                      // RAW break
+                    gr[3]  = gr[3] + gr[4];                   // + mm_sort_buf
+                    //NOP                                      // RAW break
+                    s1c[127] = gr[3];                         // src
+                    //NOP                                      // s1c gap
+                    // Compute dst = diag_base + n_a_final * 2.
+                    gr[5]  = gr[15] << 1;                     // n_a_final * 2
+                    //NOP                                      // RAW break
+                    gr[3]  = s1c[120]; //NOP                  // diag_base
+                    gr[3]  = gr[3] + gr[5];
+                    //NOP                                      // RAW break
+                    s1c[128] = gr[3];                         // dst
+                    //NOP                                      // s1c gap
+                    // Compute words = (cnt - skip) * 2.
+                    gr[11] = s1c[124]; //NOP                  // cnt
+                    gr[3]  = gr[11];
+                    //NOP                                      // RAW break
+                    gr[11] = s1c[125]; //NOP                  // skip
+                    gr[3]  = gr[3] - gr[11];                  // cnt - skip
+                    //NOP                                      // RAW break
+                    gr[3]  = gr[3] << 1;                      // * 2
+                    //NOP                                      // RAW break
+                    s1c[129] = gr[3];                         // words
+                    //NOP                                      // s1c gap
+                    // j = 0.
+                    gr[11] = 0; //NOP
+                    s1c[130] = gr[11];                        // j
+                    //NOP                                      // s1c gap
+                m32_diag_mvdq_top:
+                    gr[11] = s1c[130]; //NOP                  // j
+                    gr[5]  = s1c[129]; //NOP                  // words
+                    if (gr[11] >= gr[5]) goto m32_diag_mvdq_done; // bge
+                    //NOP                                      // slot 1 of bge
+                    // c = min(8, words - j).
+                    gr[3]  = gr[5] - gr[11];                  // words - j
+                    //NOP                                      // RAW break
+                    gr[5]  = 8; //NOP
+                    if (gr[3] <= gr[5]) goto m32_diag_c_ok;   // bge
+                    //NOP                                      // slot 1 of bge
+                    gr[3]  = gr[5];                           // clamp to 8
+                    //NOP                                      // RAW break
+                m32_diag_c_ok:
+                    // cur_src = src + j; cur_dst = dst + j; mvdq_copy.
+                    gr[5]  = s1c[127]; //NOP                  // src
+                    gr[5]  = gr[5] + gr[11];                  // src + j
+                    //NOP                                      // RAW break
+                    s1c[131] = gr[5];                         // cur_src
+                    //NOP                                      // s1c gap
+                    gr[5]  = s1c[128]; //NOP                  // dst
+                    gr[5]  = gr[5] + gr[11];                  // dst + j
+                    //NOP                                      // RAW break
+                    gr[11] = s1c[131]; //NOP                  // cur_src
+                    mvdq_copy(&mm[gr[5]], &mm[gr[11]], gr[3]);
+                    // waitLSQ
+                    // j += 8.
+                    gr[11] = s1c[130]; //NOP                  // j
+                    gr[11] = gr[11] + 8;
+                    //NOP                                      // RAW break
+                    s1c[130] = gr[11];                        // j
+                    //NOP                                      // s1c gap
+                    goto m32_diag_mvdq_top;
+                    //NOP                                      // slot 1 of goto
+                m32_diag_mvdq_done:
+                    // n_a_final += cnt - skip.
+                    gr[11] = s1c[124]; //NOP                  // cnt
+                    gr[5]  = gr[11];
+                    //NOP                                      // RAW break
+                    gr[11] = s1c[125]; //NOP                  // skip
+                    gr[5]  = gr[5] - gr[11];                  // cnt - skip
+                    //NOP                                      // RAW break
+                    gr[15] = gr[15] + gr[5];
+                    //NOP                                      // RAW break
+                    // If cnt > skip, update last_vd.
+                    gr[11] = s1c[124]; //NOP                  // cnt
+                    gr[5]  = gr[11];
+                    //NOP                                      // RAW break
+                    gr[11] = s1c[125]; //NOP                  // skip
+                    if (gr[5] <= gr[11]) goto m32_diag_pe_skip; // bge
+                    //NOP                                      // slot 1 of bge
+                    // last_vd = mm[mm_sort_buf + (base + cnt - 1) * 2].
+                    gr[11] = s1c[123]; //NOP                  // base
+                    gr[3]  = gr[11];
+                    //NOP                                      // RAW break
+                    gr[11] = s1c[124]; //NOP                  // cnt
+                    gr[3]  = gr[3] + gr[11];                  // base + cnt
+                    //NOP                                      // RAW break
+                    gr[3]  = gr[3] - 1;                       // -1
+                    //NOP                                      // RAW break
+                    gr[3]  = gr[3] << 1;                      // * 2
+                    //NOP                                      // RAW break
+                    gr[3]  = gr[3] + gr[4];                   // + mm_sort_buf
+                    //NOP                                      // RAW break
+                    gr[11] = mm[gr[3]];
+                    // waitLSQ
+                    //NOP                                      // LSQ settle
+                    s1c[121] = gr[11];                        // last_vd
+                    //NOP                                      // s1c gap
+                m32_diag_pe_skip:
+                    (void)0;
                 }
 
-                // Clear sort/dedup SPM region per PE
+                // --- INTV GATHER: PE-serial, seam via s1c[176..191].
+                // AC-6 seam contract: reads s1c[176+pe]/s1c[180+pe] only
+                // under intv_n > 0; reads s1c[188+pe] only under
+                // cnt > skip. m31 producer semantics untouched.
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[11] = s1c[24 + pe]; //NOP
+                    s1c[123] = gr[11];                        // base
+                    //NOP                                      // s1c gap
+                    gr[11] = s1c[28 + pe]; //NOP
+                    s1c[124] = gr[11];                        // cnt
+                    //NOP                                      // s1c gap
+                    gr[11] = s1c[124]; //NOP
+                    if (gr[11] <= 0) goto m32_intv_pe_skip;   // bge
+                    //NOP                                      // slot 1 of bge
+                    gr[11] = 0; //NOP
+                    s1c[125] = gr[11];                        // skip
+                    //NOP                                      // s1c gap
+                    // Boundary merge: only if intv_n > 0.
+                    if (gr[28] <= 0) goto m32_intv_boundary_done; // bge
+                    //NOP                                      // slot 1 of bge
+                    // lo0 = s1c[176 + pe] (AC-6 guarded read).
+                    gr[11] = s1c[176 + pe]; //NOP             // lo0
+                    s1c[126] = gr[11];                        // lo0
+                    //NOP                                      // s1c gap
+                    // hi0 = s1c[180 + pe] (AC-6 guarded read).
+                    gr[11] = s1c[180 + pe]; //NOP             // hi0 raw
+                    gr[3]  = gr[11];                          // stage hi0
+                    //NOP                                      // RAW break
+                    // If lo0 > last_intv_hi: skip merge.
+                    gr[11] = s1c[126]; //NOP                  // lo0
+                    gr[5]  = s1c[122]; //NOP                  // last_intv_hi
+                    if (gr[11] > gr[5]) goto m32_intv_boundary_done; // bgt
+                    //NOP                                      // slot 1 of bgt
+                    // lo0 <= last_intv_hi: merge arm.
+                    // If hi0 > last_intv_hi, bump last_intv_hi + MM store.
+                    if (gr[3] <= gr[5]) goto m32_intv_no_bump; // bge
+                    //NOP                                      // slot 1 of bge
+                    s1c[122] = gr[3];                         // last_intv_hi = hi0
+                    //NOP                                      // s1c gap
+                    // mm[MM_INTV2 + (intv_n-1)*2 + 1] = hi0.
+                    gr[5]  = gr[28] - 1;                      // intv_n-1
+                    //NOP                                      // RAW break
+                    gr[5]  = gr[5] << 1;                      // *2
+                    //NOP                                      // RAW break
+                    gr[5]  = gr[5] + 1;                       // +1
+                    //NOP                                      // RAW break
+                    gr[5]  = gr[5] + MM_INTV2;                // + MM_INTV2
+                    //NOP                                      // RAW break
+                    mm[gr[5]] = gr[3];                        // mm store hi0
+                    // waitLSQ
+                m32_intv_no_bump:
+                    gr[11] = 1; //NOP
+                    s1c[125] = gr[11];                        // skip = 1
+                    //NOP                                      // s1c gap
+                m32_intv_boundary_done:
+                    // Compute src = mm_intv_out + (base + skip) * 2.
+                    gr[11] = s1c[123]; //NOP                  // base
+                    gr[3]  = gr[11];
+                    //NOP                                      // RAW break
+                    gr[11] = s1c[125]; //NOP                  // skip
+                    gr[3]  = gr[3] + gr[11];                  // base + skip
+                    //NOP                                      // RAW break
+                    gr[3]  = gr[3] << 1;                      // * 2
+                    //NOP                                      // RAW break
+                    gr[3]  = gr[3] + gr[7];                   // + mm_intv_out
+                    //NOP                                      // RAW break
+                    s1c[127] = gr[3];                         // src
+                    //NOP                                      // s1c gap
+                    // Compute dst = MM_INTV2 + intv_n * 2.
+                    gr[5]  = gr[28] << 1;                     // intv_n * 2
+                    //NOP                                      // RAW break
+                    gr[3]  = gr[5] + MM_INTV2;                // + MM_INTV2
+                    //NOP                                      // RAW break
+                    s1c[128] = gr[3];                         // dst
+                    //NOP                                      // s1c gap
+                    // Compute words = (cnt - skip) * 2.
+                    gr[11] = s1c[124]; //NOP                  // cnt
+                    gr[3]  = gr[11];
+                    //NOP                                      // RAW break
+                    gr[11] = s1c[125]; //NOP                  // skip
+                    gr[3]  = gr[3] - gr[11];                  // cnt - skip
+                    //NOP                                      // RAW break
+                    gr[3]  = gr[3] << 1;                      // * 2
+                    //NOP                                      // RAW break
+                    s1c[129] = gr[3];                         // words
+                    //NOP                                      // s1c gap
+                    // j = 0.
+                    gr[11] = 0; //NOP
+                    s1c[130] = gr[11];                        // j
+                    //NOP                                      // s1c gap
+                m32_intv_mvdq_top:
+                    gr[11] = s1c[130]; //NOP                  // j
+                    gr[5]  = s1c[129]; //NOP                  // words
+                    if (gr[11] >= gr[5]) goto m32_intv_mvdq_done; // bge
+                    //NOP                                      // slot 1 of bge
+                    gr[3]  = gr[5] - gr[11];                  // words - j
+                    //NOP                                      // RAW break
+                    gr[5]  = 8; //NOP
+                    if (gr[3] <= gr[5]) goto m32_intv_c_ok;   // bge
+                    //NOP                                      // slot 1 of bge
+                    gr[3]  = gr[5];                           // clamp to 8
+                    //NOP                                      // RAW break
+                m32_intv_c_ok:
+                    gr[5]  = s1c[127]; //NOP                  // src
+                    gr[5]  = gr[5] + gr[11];                  // src + j
+                    //NOP                                      // RAW break
+                    s1c[131] = gr[5];                         // cur_src
+                    //NOP                                      // s1c gap
+                    gr[5]  = s1c[128]; //NOP                  // dst
+                    gr[5]  = gr[5] + gr[11];                  // dst + j
+                    //NOP                                      // RAW break
+                    gr[11] = s1c[131]; //NOP                  // cur_src
+                    mvdq_copy(&mm[gr[5]], &mm[gr[11]], gr[3]);
+                    // waitLSQ
+                    gr[11] = s1c[130]; //NOP                  // j
+                    gr[11] = gr[11] + 8;
+                    //NOP                                      // RAW break
+                    s1c[130] = gr[11];                        // j
+                    //NOP                                      // s1c gap
+                    goto m32_intv_mvdq_top;
+                    //NOP                                      // slot 1 of goto
+                m32_intv_mvdq_done:
+                    // intv_n += cnt - skip.
+                    gr[11] = s1c[124]; //NOP                  // cnt
+                    gr[5]  = gr[11];
+                    //NOP                                      // RAW break
+                    gr[11] = s1c[125]; //NOP                  // skip
+                    gr[5]  = gr[5] - gr[11];                  // cnt - skip
+                    //NOP                                      // RAW break
+                    gr[28] = gr[28] + gr[5];
+                    //NOP                                      // RAW break
+                    // If cnt > skip: update last_intv_hi via s1c[188+pe].
+                    gr[11] = s1c[124]; //NOP                  // cnt
+                    gr[5]  = gr[11];
+                    //NOP                                      // RAW break
+                    gr[11] = s1c[125]; //NOP                  // skip
+                    if (gr[5] <= gr[11]) goto m32_intv_pe_skip; // bge
+                    //NOP                                      // slot 1 of bge
+                    // AC-6 guarded read of s1c[188 + pe].
+                    gr[11] = s1c[188 + pe]; //NOP
+                    s1c[122] = gr[11];                        // last_intv_hi
+                    //NOP                                      // s1c gap
+                m32_intv_pe_skip:
+                    (void)0;
+                }
+
+                // Epilogue: clear SPM per PE (ISA memset equivalent);
+                // clear s1c[0..143]; clear seam band s1c[176..191];
+                // publish s1c[152]=MM_INTV2, s1c[153]=diag_base.
                 for (int pe = 0; pe < 4; pe++) {
                     int *s = &SPM_unit->buffer[
                         pe * SPM_BANK_GROUP_SIZE];
@@ -6574,15 +6771,18 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         (GWFA_Q_START / 4) * sizeof(int));
                 }
                 memset(s1c, 0, 144 * sizeof(int));
-                // Clear seam metadata band (plan 2a AC-8)
                 memset(&s1c[176], 0, 16 * sizeof(int));
-                // Reset active bases after dedup gather
-                s1c[152] = MM_INTV2;    // intv gathered to MM_INTV
-                s1c[153] = diag_base;   // diags gathered to diag_base
-                gwfa_finalize_sync(n_a_final, (size_t)intv_n);
-                gr[15] = n_a_final;
-                gr[28] = intv_n;
-                if (n_a_final == 0) write_spm_magic(32767, 1);
+                // s1c[152] = MM_INTV2 (scalar ISA store, constexpr src).
+                gr[11] = MM_INTV2; //NOP
+                s1c[152] = gr[11];
+                //NOP                                          // s1c gap
+                // s1c[153] = diag_base (re-read through gr[11]).
+                gr[11] = s1c[144]; //NOP                      // diag_base raw
+                s1c[153] = gr[11];
+                //NOP                                          // s1c gap
+                // Publish gr[15]=n_a_final, gr[28]=intv_n already in regs.
+                gwfa_finalize_sync(gr[15], (size_t)gr[28]);
+                if (gr[15] == 0) write_spm_magic(32767, 1);
             }
         } else if (magic_id == 6) {
             //WFA initializations
