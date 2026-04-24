@@ -162,6 +162,12 @@ void pe::run(int simd) {
     // Compute
     instruction[0] = comp_instr_buffer_unit->buffer[comp_PC][0];
     instruction[1] = comp_instr_buffer_unit->buffer[comp_PC][1];
+    // Perf counters: compute NOPs (per-slot) and dual-slot HALT cycles
+    if (instruction[0] == COMP_NOP_INSTRUCTION) peComputeNops++;
+    if (instruction[1] == COMP_NOP_INSTRUCTION) peComputeNops++;
+    if (instruction[0] == COMP_HALT_INSTRUCTION
+        && instruction[1] == COMP_HALT_INSTRUCTION)
+        peComputeHaltCycles++;
 #ifdef PROFILE
     printf("comp_PC = %d\t", comp_PC);
 #endif
@@ -301,6 +307,10 @@ void pe::run(int simd) {
 
     // Track if PE is halted (both slots executing halt instruction)
     halted = (ctrl_op[0] == CTRL_HALT && ctrl_op[1] == CTRL_HALT);
+
+    // Perf counter: control-slot NOPs (CTRL_NOP_INSTRUCTION opcode = 14)
+    if (ctrl_op[0] == (int)CTRL_NOP_INSTRUCTION) peCtrlNops++;
+    if (ctrl_op[1] == (int)CTRL_NOP_INSTRUCTION) peCtrlNops++;
 
     addr_regfile_unit->write(ctrl_write_addrs, ctrl_write_data, CTRL_REGFILE_WRITE_PORTS);
 

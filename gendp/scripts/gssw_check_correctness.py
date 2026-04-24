@@ -9,7 +9,7 @@ Usage: python3 scripts/gssw_check_correctness.py <mode> [-t N]
 Prereqs:
   - Build sim: make clean && make -j
   - Generate instructions: python3 scripts/gssw_instruction_generator.py
-  - Golden scores at kernel/Gssw/src/Dataset/trueScores.txt
+  - Golden scores at /data4/kaplannp/GenDP2/kernel/Gssw/Dataset/trueScores.txt
 """
 
 import sys
@@ -22,8 +22,8 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent  # gendp/
-KERNEL_DIR = REPO_ROOT / 'kernel' / 'Gssw'
-DUMP_DIR = KERNEL_DIR / 'src' / 'Dataset'
+KERNEL_DIR = Path('/data4/kaplannp/GenDP2/kernel/Gssw')
+DUMP_DIR = KERNEL_DIR / 'Dataset'
 GOLDEN_SCORES = DUMP_DIR / 'trueScores.txt'
 SIM_PATH = REPO_ROOT / 'sim'
 

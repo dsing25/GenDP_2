@@ -19,8 +19,8 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-KERNEL_DIR = REPO_ROOT / 'kernel' / 'Gssw'
-DUMP_DIR = KERNEL_DIR / 'src' / 'Dataset'
+KERNEL_DIR = Path('/data4/kaplannp/GenDP2/kernel/Gssw')
+DUMP_DIR = KERNEL_DIR / 'Dataset'
 GOLDEN_SCORES = DUMP_DIR / 'trueScores.txt'
 SIM_PATH = REPO_ROOT / 'sim'
 

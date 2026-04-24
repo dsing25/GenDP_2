@@ -473,6 +473,9 @@ void gssw_simulation(
             gssw_profile_destroy(prof);
             continue;
         }
+        // Skip if too large to fit in a single PE's SPM bank group.
+        // spm_size is in BYTES; SPM_BANK_GROUP_SIZE is in 4-byte words,
+        // so the capacity in bytes is SPM_BANK_GROUP_SIZE * 4.
         if (spm_size > (uint64_t)SPM_BANK_GROUP_SIZE * 4) {
             printf("qqq -2 qqq\n");  // too large
             gssw_soa_graph_destroy(graph);

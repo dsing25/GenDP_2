@@ -34,6 +34,9 @@ PerfCounter peHalted = 0;
 PerfCounter forwardableBankConflict = 0;
 PerfCounter controllerSpinCycles = 0;
 PerfCounter fin0DupDiags = 0;
+PerfCounter peComputeHaltCycles = 0;
+PerfCounter peComputeNops = 0;
+PerfCounter peCtrlNops = 0;
 
 pe_array::pe_array(int input_size, int output_size) {
 
@@ -4316,6 +4319,18 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     int i, j, flag, old_PC;
     cycle = 0;
 
+    // Reset per-case perf counters so each pa->run() reports its own case
+    totalSpmRequests = 0;
+    bankConflictStalls = 0;
+    lsqFullStalls = 0;
+    peHalted = 0;
+    forwardableBankConflict = 0;
+    controllerSpinCycles = 0;
+    fin0DupDiags = 0;
+    peComputeHaltCycles = 0;
+    peComputeNops = 0;
+    peCtrlNops = 0;
+
     while (1) {
         cycle++;
         old_PC = main_PC;
@@ -4534,12 +4549,16 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         }
     }
 
-    printf("=== Performance Counters ===\n");
+    printf("=== Case Performance Counters ===\n");
+    printf("CaseCycles: %d\n", cycle);
     printf("TotalSpmRequests: %d\n", totalSpmRequests);
+    printf("PeCtrlHalted: %d\n", peHalted);
+    printf("PeComputeHalted: %d\n", peComputeHaltCycles);
+    printf("PeCtrlNops: %d\n", peCtrlNops);
+    printf("PeComputeNops: %d\n", peComputeNops);
     printf("BankConflictStalls: %d\n", bankConflictStalls);
     printf("ForwardableBankConflict: %d\n", forwardableBankConflict);
     printf("LsqFullStalls: %d\n", lsqFullStalls);
-    printf("PeHalted: %d\n", peHalted);
     printf("SyncSpinBNEs: %d\n", controllerSpinCycles);
     printf("Fin0DupDiags: %d\n", fin0DupDiags);
 
