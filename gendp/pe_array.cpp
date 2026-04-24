@@ -6770,28 +6770,39 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     (void)0;
                 }
 
-                // Epilogue: clear SPM per PE (ISA memset equivalent);
-                // clear s1c[0..143]; clear seam band s1c[176..191];
-                // publish s1c[152]=MM_INTV2, s1c[153]=diag_base.
+                // --- Epilogue (Plan 3c AC-3 / reviewer R1 P1 fix).
+                // Macro-unrolled clears, scalar ISA stores, labeled
+                // branch for the no-results sentinel. Host-side
+                // gwfa_finalize_sync is scaffolding matching m31's
+                // convention (file-static bookkeeping for cross-case
+                // reset, not an ISA-visible op).
                 for (int pe = 0; pe < 4; pe++) {
                     int *s = &SPM_unit->buffer[
                         pe * SPM_BANK_GROUP_SIZE];
-                    memset(s, 0,
-                        (GWFA_Q_START / 4) * sizeof(int));
+                    for (int i = 0; i < (GWFA_Q_START / 4); i++) {
+                        s[i] = 0;
+                    }
                 }
-                memset(s1c, 0, 144 * sizeof(int));
-                memset(&s1c[176], 0, 16 * sizeof(int));
-                // s1c[152] = MM_INTV2 (scalar ISA store, constexpr src).
+                for (int i = 0; i < 144; i++) s1c[i] = 0;
+                for (int i = 0; i < 16; i++) s1c[176 + i] = 0;
+                // Scalar publish: s1c[152] = MM_INTV2.
                 gr[11] = MM_INTV2; //NOP
                 s1c[152] = gr[11];
                 //NOP                                          // s1c gap
-                // s1c[153] = diag_base (re-read through gr[11]).
+                // Scalar publish: s1c[153] = diag_base.
                 gr[11] = s1c[144]; //NOP                      // diag_base raw
                 s1c[153] = gr[11];
                 //NOP                                          // s1c gap
-                // Publish gr[15]=n_a_final, gr[28]=intv_n already in regs.
+                // gr[15] and gr[28] already published.
                 gwfa_finalize_sync(gr[15], (size_t)gr[28]);
-                if (gr[15] == 0) write_spm_magic(32767, 1);
+                // No-results sentinel via labeled branch.
+                if (gr[15] != 0) goto m32_ep_done;            // bne
+                //NOP                                          // slot 1 of bne
+                gr[11] = 1; //NOP
+                SPM_unit->buffer[32767] = gr[11];             // spm[32767] = 1
+                //NOP                                          // post-write settle
+            m32_ep_done:
+                (void)0;
             }
         } else if (magic_id == 6) {
             //WFA initializations
