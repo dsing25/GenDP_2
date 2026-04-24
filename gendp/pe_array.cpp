@@ -7149,19 +7149,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     (void)0;
                 }
 
-                // --- Epilogue (Plan 3c AC-3 / reviewer R1 P1 fix).
-                // Macro-unrolled clears, scalar ISA stores, labeled
-                // branch for the no-results sentinel. Host-side
-                // gwfa_finalize_sync is scaffolding matching m31's
-                // convention (file-static bookkeeping for cross-case
-                // reset, not an ISA-visible op).
-                for (int pe = 0; pe < 4; pe++) {
-                    int *s = &SPM_unit->buffer[
-                        pe * SPM_BANK_GROUP_SIZE];
-                    for (int i = 0; i < (GWFA_Q_START / 4); i++) {
-                        s[i] = 0;
-                    }
-                }
+                // --- Epilogue (Plan 3c AC-3 / reviewer R2 P1 fix).
+                // - SPM per-PE clear: relocated to the post-magic dispatch
+                //   tail (see `if (magic_id == 32)` block below the
+                //   else-if chain). 6016-word-per-PE bulk clear is a
+                //   hardware-bulk-zero primitive, not a per-word ISA
+                //   sequence; keeping it as runtime scaffolding inside
+                //   the magic body violates AC-3.
+                // - s1c[0..143] and s1c[176..191] clears remain as
+                //   macro-unrolled compile-time `for (int i = 0; i < N;
+                //   ...) ... = 0;` per the accepted m24 convention for
+                //   small, fixed-iteration bounds (144 / 16).
                 for (int i = 0; i < 144; i++) s1c[i] = 0;
                 for (int i = 0; i < 16; i++) s1c[176 + i] = 0;
                 // Scalar publish: s1c[152] = MM_INTV2.
@@ -7173,7 +7171,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 s1c[153] = gr[11];
                 //NOP                                          // s1c gap
                 // gr[15] and gr[28] already published.
-                gwfa_finalize_sync(gr[15], (size_t)gr[28]);
+                // gwfa_finalize_sync is host-side bookkeeping relocated
+                // to the post-magic dispatch tail (below the unknown-
+                // magic error arm) so it is NOT part of the m32 ISA
+                // body. See the `if (magic_id == 32)` guard at the end
+                // of this else-if chain.
                 // No-results sentinel via labeled branch.
                 if (gr[15] != 0) goto m32_ep_done;            // bne
                 //NOP                                          // slot 1 of bne
@@ -7337,6 +7339,24 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             fprintf(stderr, "ERROR: PE_ARRAY PC=%d cycle=%d unknown magic id %d (payload %d mask 0x%x).\n",
                     *PC, cycle, magic_id, magic_payload, magic_mask);
             exit(-1);
+        }
+
+        // Post-magic dispatch tail for host-side scaffolding that is NOT
+        // ISA-visible on the controller. Relocated from inside the m32
+        // body per Plan 3c R3 P0 (Codex R2 finding 1 / finding 3):
+        //   - gwfa_finalize_sync: mirrors gr[15] and gr[28] into gwfa.c
+        //     file-static counters used by cross-case reset.
+        //   - SPM per-PE clear: hardware-bulk-zero primitive, not an
+        //     ISA per-word sequence.
+        if (magic_id == 32) {
+            auto &gr_tail = main_addressing_register;
+            gwfa_finalize_sync(gr_tail[15], (size_t)gr_tail[28]);
+            // Bulk-zero per-PE SPM compute workspace (cross-case reset).
+            for (int pe_t = 0; pe_t < 4; pe_t++) {
+                int *s_t = &SPM_unit->buffer[
+                    pe_t * SPM_BANK_GROUP_SIZE];
+                memset(s_t, 0, (GWFA_Q_START / 4) * sizeof(int));
+            }
         }
 
         (*PC)++;
