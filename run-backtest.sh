@@ -66,6 +66,9 @@ run_wfa() {
   make -j ADDRESS_SANITIZER=0
   python3 scripts/wfa_check_correctness.py \
     "$GenDP_WORK_DIR/backtest-datasets/wfa/oneSeq.seq" -n 1
+  # set -e kills the script on correctness failure, so reaching
+  # this line means the run passed; record it for the final cat.
+  echo "WFA: PASS (oneSeq.seq)" >> "$GenDP_WORK_DIR/success.txt"
 }
 
 run_gwfa() {
@@ -81,6 +84,7 @@ run_gwfa() {
   python3 scripts/gwfa_instruction_generator.py
   make -j ADDRESS_SANITIZER=0
   python3 scripts/gwfa_check_correctness.py 1
+  echo "GWFA: PASS (mode 1)" >> "$GenDP_WORK_DIR/success.txt"
 }
 
 # Dispatch
