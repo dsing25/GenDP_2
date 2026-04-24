@@ -1,0 +1,81 @@
+This is a working plan, there are some questions I have for you which you will need to research and
+then we will discuss in the planning phase to comnplete the plan.
+# High Level
+   We've gradually moved some pieces of code from straight c++ to dead simple ISA like code in the 
+   pe magic instructions. Now we must do the same for the pe_array code. We will leave the sorting 
+   for now, but the other code should be expanded into magic instructions like for the PE.
+# Context
+   Review batchQueueProcessingPrompt.txt and batchExtendToIsaPrompt.txt which both contain
+   instructions on how to do this kind of mapping. You can also take a look at pe.cpp
+
+# Scope
+   We will rewrite magic 7, magic 8, magic 9, magic 12, magic 14
+
+   magic 15 will also be rewritten, but do the others first
+
+   magic 16 will be left as is for now. That will be another project mapping that.
+   
+   magic 5, 1, 4, 3 can be left as is for now.
+
+# High Level Milestones / steps of the plan:
+   1. I want to implement ping pong buffer tiling. If you look at wfa, you will see that the
+      controller loads one buffer while the pes are operating on another. I would like to do the
+      same here. In the PE this should be done with two duplicated code regions (as in wfa), one of
+      which uses offsets for the first tile, and the other uses offsets for the second tile. Make
+      sure to use constants, and make sure that I can change the tileSize easilly (ideally one
+      constant change).
+   1. We need to make some changes to the simulator. Currently we have a special register file used
+      to keep track of memory pointers. Instead of doing this we will store those pointers in
+      gr registers which will not change after being set for the entire program. How many of these
+      do we need? If we need many, then you may add a reg file as well (32 reg with that special
+      dest) and the data trace will be able to access them. You may store the pointers in reg.
+      There a couple other things of note: Since registers are only 32 bits, we will need to limit
+      ourselves to pointers within a 4GB space.
+      Step 1: I would would like to firstly modify gwfa so all data structures are allocated within
+      a single 4GB block of memory. So in the c++ code we will allocate a 4GB block of memory, and
+      then these data structures will be allocated from that memory. Nothing fancy. Just an void*
+      malloc chunk of memory, and we will have "pointers" really char offsets, into that array. 
+      Step 2: I would like the pe_array itself to have access to a 4GB block of memory called MM.
+      When we run GWFA, all the program data structures (e.g. intv) will be allocated within this 
+      4GB block. You can do this at the initialization perhaps? Wherever we currently allocate the
+      data structures in memory, instead put them here.
+      Step 3: At that time you will allocate gr or reg registers to point to the start of the
+      arrays.
+   2. vertex id can always be expressed as a 16 bit value instead of 32. You must fix this. That
+      means each arc can be 3 16bit values instead. Pad it though so you can leave ow as 32 bit.
+      n_arch can be uint32, and idx can be uint_32
+   3. Unlike the other data structures like intv, and b, and a, the graph should be placed directly
+      into the S2 memory. GRAPH_START will be a constant (set to 0 for now), and GRAPH_START+1 holds
+      n_vtx, GRAPH_START+2 n_arc, and then you may store the pointers and the data for the graph.
+      Make sure all data starts at an aligned address (that is even addr).
+   3. Remap magic magic 7,8,9,12,14. If anything looks particularly difficult for these instructions
+      let me know and we'll discuss. The trick for these, as for WFA, will be that you need to
+      access in a strided manner so as to avoid hitting a single bank group repeatedly. For example,
+      magic 7 right now has this rough structure:
+      ```
+      for each peid:
+         load s_a[cursor: cursor+blockSize] to peid.S1.tile
+      ```
+      This will not do because it loads a consecutive `blockSize` elements to the same bank group.
+      Instead you should refactor to do something like this:
+      ```
+      for i < blockSize:
+         pe0.S1 = s_a[i:i+8];
+         pe1.S1 = s_a[i+blockSize:8+i+blockSize];
+         pe2.S1 = s_a[i+2*blockSize:8+i+2*blockSize];
+         pe3.S1 = s_a[i+3*blockSize:8+i+3*blockSize];
+         i++
+      ```
+      You'll need to be careful of the boundary conditions. Take a look at wfa instruction generator
+      to understand, and/or you can look at code around this commit 5824e88 to see how I did magic
+      for wfa controller.
+      NOTE the 8 that I included. We should be doing mvdq wherever possible. This is very important
+      for performance. Whenever you do a streaming access it should use mvdq. Do not cheat by using
+      mv, except for the loop peeling at the end.
+      This was just one example, but it is the same for most of these magic instructions. Including
+      the A pushing instructions. for instance A_pushp() can't be a function anymore. We'll need to
+      just locate the place in A to write to and then do a write quad to append to it.
+      The exception will be graph accesses which will need to be slower. Not mvq. More like single
+      lookups.
+   4. Remap magic 15. This will be more complicated, involving many lookups to the graph. Do this
+      after you've finished everything else and think very carefully.

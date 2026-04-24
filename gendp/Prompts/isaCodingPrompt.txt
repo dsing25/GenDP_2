@@ -1,0 +1,89 @@
+We are working on the GenDp simulator. You should familiarize yourself with the code in this 
+directory, and be sure to read the docs.md file. docs.md will be especially important as a
+programming guide for your next task.
+
+In pe_array.cpp magic_id == 4 I have a bunch of initialization code. We are going to refactor to
+move this code where it needs to go. It won't change the output. See verification. Essentially:
+1. It writes a few wavefronts (mostly -99) to the S2
+1.5 calculatesthe first extend on text/pattern
+2. It writes the TEXT and PATTERN to offsets within the SPM of the pes
+3. It writes register gr[3] = 3, gr14=text_len-1, gr15=text_len-2, pes:gr113==text_len, 
+    gr8=pattern_len. Note that although we increment gr[3] 3 times, we really only care about the 
+    final state.
+
+I want you to operate in two phases:
+#Phase 1
+1. modify the pe_array class so it has methods to directly write the SPM and the S2.
+2. modify wfa.cpp so it computes the first extend (number of exact matches from the start of
+   text/pattern.
+3. Use the new methods in wfa.cpp to write the text/sequence from the read file to the SPM, and to
+   write the dummy initialized wavefronts including the first extend value to the S2.
+4. At a set location, probably the end of the wavefront region, so MAX_WF*15 or whatever it is. At
+   that location, write the text len and the pattern len
+#Phase 2 (PAUSE! before continuing wait for my approval)
+1. modify the gendp_instruction_generator at the begining of execution. pe_array should execute
+  ```
+  load pattern_len from s2 into gr14
+  load text_len from s2 into gr15
+  set gr3 = 3
+  for S2_LATENCY-2: //S2_LATENCY should be 5. Make it a constant in the code
+    stall
+  pass pattern_len systolically to the pes
+  pass text_len systolically to pes
+  ```
+  pe code
+  ```
+  stall 1+S2 latency
+  recv text len and pass systollically
+  recv pattern_len and pass systollically
+  ```
+  You'll need to be carefull to make sure that they line up appropriately. You can look at other
+  examples of pe_array -> pe communication systollically. bsw or poa would be good examples.
+
+## Hints For coding in gendp isa
+**It is absolutely essential that you always keep these in your context window. If you run out of
+context, compress other things and reload the hints.**
++ Gendp ISA is very verbose and it is easy to make mistakes. Be very careful and run checks whenever
+  possible.
++ You'll note that in wfa_instruction_generator I have an inline function `write_block_code`. You
+  should make similar functions for `loadSpmRegMapped` and `storeSpmToWavefrontStrided`. These
+  should be the only functions you make.
++ Do not use variables or complex control. For small loops, like over num_pes I use for loops, and
+  I very sparingly use functions. These are fine and make the code more readable, but understand
+  that when you create a for loop, you are not looping in the code, you are duplicating the
+  instruction for each iteration of the loop. The loop will essentially be unrolled in the code.
+  Therefore use this very sparingly to minimize instruction footprint
++ You cannot use variables. It is essential that you do not use variables. If you use variables your
+  code will be worthless. You may use the loop counter if doing a for loop as in the previous point.
+  You may also use the arguments of a function, but keep them to a minimum. These will be expanded
+  into constants. You may also use constants enumerated at the top of the file. These in fact should
+  be used to improve readability. Other variables cannot be used.
++ There is no multiply unit in the control trace. When I do a multiply in the magic instrucitons, it
+  is always with a power of 2, therefore, you can shift by the log. When multiplying by 3, I unroll
+  3 additions.
++ Branches in Gendp are very difficult. You should be very careful with them, and always check the
+  branches after each step. The issue is that branches jump by a constant offset. That is, they
+  cannot jump to a LOOP label as in traditional ISA. Instead they jump a hardcoded value like 9. If
+  you add an instruction just below that jump, well now you need to jump 10! So every time you add
+  an instruction, check that there are no branches that cross it from above or that jump backwards
+  over it from below. If there are, you will need to increment their offsets. If your code does not
+  match, the first thing you should check is whether you have broken one of the branches.
++ In many cases, you should be able to move part of a magic instruciton into the instruction
+  generator, and remove it from the magic instruction. This way you can test piece by piece instead
+  of dumping the entire magic instruction into the simulator
++ When writing spm accesses from the pe, you must stall for 2 cycles to make sure the port is free.
+  This is not the case with pe_array. You need not buffer your write/reads. You can have back to
+  back read/writes.
+
+## Verification
+There are different levels of verification
++ quick and dirty: `python scripts/wfa_instruction_generator.py &&make clean && make -j && python scripts/wfa_check_correctness.py ../../kernel/Datasets/oneHundredSeq500Len.seq -n 1`
+  Use this as often as you can. Test every time you make a change.
++ Confident test: `python scripts/wfa_instruction_generator.py &&make clean && make -j && python scripts/wfa_check_correctness.py ../../kernel/Datasets/oneHundredSeq500Len.seq -n 5`
+  Then you diff magic_wfs_out.txt and wfaTrace.txt. They should match except for the first line, and
+  some extra at the end in magic_wfs_out.txt
+  This you should use when you're unsure, or when you've completed a step
++ The whole enchilada: `python scripts/wfa_instruction_generator.py &&make clean && make -j && python scripts/wfa_check_correctness.py ../../kernel/Datasets/oneHundredSeq500Len.seq -n 50`
+  Then you diff magic_wfs_out.txt and wfaTrace.txt. They should match except for the first line, and
+  some extra at the end in magic_wfs_out.txt
+  You should run this test before you show me code for review.

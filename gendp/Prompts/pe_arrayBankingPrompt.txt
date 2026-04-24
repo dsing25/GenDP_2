@@ -1,0 +1,365 @@
+Currently the SPM (here also referred to as S1) has 8 banks is connected to the PEs with banking 
+conflicts modeled. However,
+pe_array writes are instantaneous and magic, including the mvdq instructions. In this project, I
+want you to modify the simulator so the that we model banking conflicts in the pe_array. write/reads
+from the pe_array will go into buffers for each bank, and reads shall come from these in roughly 
+first in first out. Since moves from S2 are always sent directly to the SPM, the and vice versa, we
+will have write queues which wait until they have recieved data from the other location. Once they
+have, they are cleared to write. This technically results in out of order memory accesses, but it's
+much simpler than a load store queue. More details below. Your task will be to implement this:
+
+# Preliminaries
+Familiarize yourself with the code base. Think deeply to make sure you understand how things work
+now. Especially the SPM data paths. Read docs.md and claude.md. docs.md will be especially
+helpful for coding the ISA.
+I will ask you to commit your progress during this run. You may run the following git commands
+```
+git add <file>
+git commit -m "a message"
+git reset --hard //to restore your progress if you don't like the path you've taken
+git diff <a commit> -- optional file
+git status
+```
+You may not run other git commands. Especially DO NOT RUN:
+```
+git rm
+git checkout
+git push
+git pull
+...
+```
+and many other git commands which change the state permanently. DO NOT RUN THESE COMMANDS.
+
+You will need to run almost entirely autonomously. I will generally not be available after the
+planning phase, so ask lots of questions then!
+
+
+# Architecture overview
+The first thing is that we've been cheating the line width. Line width is 64, so when we do a mvd
+from the pe to SPM we have been loading addr and addr+1, but really we need to load (addr>>1) and
+(addr>>1)+1. This change needs to be made within the pes. If a mvdq loads both, then we load both.
+If it's just a single load, then we use the last bit of the load address to determine which of the
+two data elements to use TODO this will involve some changes to simulator code.
+If it is ever a doubledata and the address %2 != 0, then we need to throw an error. Double loads
+must always be aligned.
+
+This is the system we are trying to model. For illustration, assume just two ports, but in reality 
+we will have one for each bank, so 8 for SPM and 4 for S2
+
+
+SPM:
+====================================================================
++ b1 //buffer for port1 which corresponds to first bank
++ b2 //buffer for port2 which corresponds to second bank
+
+S2:
+====================================================================
++ b1 //buffer for port1 which corresponds to first bank
++ b2 //buffer for port2 which corresponds to second bank
+
+These buffers are implemented as queues.
+
+S2_WRITE_LATENCY = 3
+S2_READ_LATENCY = 2*S2_WRITE_LATENCY
+
+Illustration, a single mv instruction comes in going from SPMAddr to S2Addr. S2Addr is sorted
+according to the bank it needs to go to, and is placed in that buffer, say S2.b1. SPMAddr is sorted 
+according to the SPM bank it needs to go to, and is placed in that bank, say SPM.b1. For the S2 this
+is easy. We use a linewidth of 64, i.e. 2 ints, and our memories are int addressable, so the S2 bank
+is (S2Addr >> 1) % NUM_BANKS. For the SPM, it is more complicated. Read the SPM to see how it is
+indexed. High order bits determine the bank group, and the low order bits determine the bank within
+the bank group. Essentially (SPMAddr // BANK_GROUP_SIZE) = BANK_GROUP_INDEX and (SPMAddr >> 1) % 2
+gives the bank index within the BANK_GROUP. 
+
+### cycle 0
+We write into the buffers so that
+These buffers have the following attributes:
+| address | data1 (init -42) | data2 | ready1 (bool init true for read, false for write) | ready 2 (same) | rd/write (enum) | src/dst (enum. currently SPM or S2) | src/dst addr | singleData |
+
+As with  SPM accesses, they can be single or double loads because we load in lines of 64.
+
+in S2.b1
+| S2Addr | -42 | -42 | true | true |read | SPM | SPMAddr| true |
+in SPM.b1, we look at the destination address %2 which gives us the data we're going to use, so
+SPMAddr % 2, in this case lets say that is 0, so ready1 is false, and ready2 is true. You may choose
+to use arrays for these elements instead of data1/2 and ready1/d
+| SPMAddr| -42 | -42 | false| true | write| S2  | S2Addr | true |
+
+
+###cycle 1
+
+S2 can issue up to four requests per cycle, one from each queue. We have a rotating priority which
+starts at b1, and then goes to b2 and back to b1. b1 has something in it and it is ready, so we
+access the S2 at that data location. This will work similar to the way the SPM access works right
+now. The S2 class will have some internal storage which keeps a count of cycles until ready, and the
+class will be tickable. Every cycle we tick and decrement the count. When something is ready, it
+will go to it's dest.
+So we issue the read, and the line entry in b1 is sent into the S2 with a timer equal to 
+S2_READ_LATENCY-1. Data is read from (S2Addr>>1) (two ints) and placed in the data field. We read 
+from shifted 1 because of the line address. The line entry in b1 is 
+then cleared.
+Importantly, S2 can be pipelined. Where S1 has only one slot per bank, and while that slot is busy,
+we cannot put another request there, the S2 can have up to S2_READ_LATENCY requests per bank.
+Although it should be enforced that no two writes in the same bank have the same cycles_remaining,
+and no two reads in the same bank have the same cycles remaining.
+
+Meanwhile, S1 has the same rotating priority. It sees that b1 has something in it, it checks to make
+sure that the SPM is not already using the b1 port, i.e. there is not an outstanding request to the
+scratchpad which uses bank1. These two conditions are met, but the ready bit of the buffer entry is
+false, so we do not write. The priority is incremented.
+
+###cycle 2
+same checks are performed, but there is nothing in s2, so no further action. The entry we inserted
+gets it's cycles_remianing decremented.
+cycles_remaining=S2_READ_LATENCY-2
+
+###cycle 3
+cycles_remaining=S2_READ_LATENCY-3
+
+###cycle 4
+cycles_remaining=S2_READ_LATENCY-4
+
+###cycle 5
+cycles_remaining=S2_READ_LATENCY-5
+
+###cycle 6
+cycles_remaining=S2_READ_LATENCY-6 == 0
+the S2 entry has no more cycles remaining, so in the tick function, it checks the dst, sees that it
+is SPM, goes to SPM and checks the src address of every read entry that has S2 as src. 
+It will really be checking (srcAddr >>1) for single loads because this gives the line address. 
+For double loads we need to check (srcAddr >> 1) and (srcAddr+1 >> 1). See the compl,icated cases
+below.
+If it matches then the data we are carrying
+applies here. Now that we have a match, we set SPM.b1.entry.data[address%2] = data[srcAddr %2].
+Note the srcAddr final bit determines which piece of the read data we use, and the final bit of the
+address gives the index of the data field in the entry we are going to write to. If it was not a
+sinlgeData then we would write both entries into the data.
+Once we've written the data we clear the s2 entry
+
+Now we check for S2 anything in the buffers. See nothing.
+
+We check S1 buffers, see that there is a ready store, and attempt to issue the store. If there was
+already an entry in SPM there, then the pes are already using that slot, so we'll need to wait, but
+if there is not, then we can issue into the slot. 
+
+Note that because it was a singleData we will only write the data[0] to the appropriate address,
+which may not be the first in the line.
+
+This example should clarify the role of the buffers and the overall control flow. A couple points as
+things get more complicated.
+
+### What about many stores in a buffer?
+If there are many stores in the SPM, then you may not bypass a store. the store below has to wait
+for the first store to issue. This will not cause any deadlock because whenever I issue a store I
+allocate slots in both buffers simultaneously. Before allocating slots for any other instructions.
+This avoids situations where s1 is blocking ld2 in S2 and s2 is blocking ld1 in S1 for example 
+
+### What about stores and reads in same buffer?
+There can be both stores and reads in the same buffer. No preference is given for loads over stores.
+
+### How do we handle mvdq (move double quad) instruction?
+A mvdq places 4 loads and 4 stores in the src and dst buffers according to their bank indices. Each
+load/store is a double load/store. The trick is when we have misaligned addresses. If you are doing
+a mvdq from addr 1 say to addr 0 in spm. You will issue 5 reads actually:
+singleData 1
+doubleData 2
+doubleData 4
+doubleData 6
+singleData 8
+
+Note there will only be 4 writes in the SPM however, they will be doubleData stores with odd src
+addrs. because of this they will match two different loads. Each load will match the srcAddr >> 1 of
+one load and the (srcAddr >> 1) + 1 for the other load.
+
+This is a complicated edge case. Please think very deeply about how to handle these and make sure it
+doesn't break anything. Ask many questions if you're confused.
+
+### How large are the buffers?
+To start, infinitely big. Later we'll size them to be 8.
+
+### What if we use up the buffer size?
+The pe_array will immediately stall. If in the middle of a mvdq, none of the loads/stores will be
+issued.
+
+### Is it symetric for S2<-SPM?
+Yes! The only difference is what happens when a entry in the buffer is freed, i.e. does it go to the
+SPM outstanding requests, or does it go to S2 outstandingRequests which have more entries because
+they are pipeleined. Otherwise, it should be the same going to S2 coming from S1.
+
+
+#Implementation Plan
+I've attempted to break things into steps. After each step you should run verification for one 10k
+read and 50 500 reads, and then commit changes if it works.
+
+## Phase 1
+implement double loads for the SPM. Don't worry about S2 yet. This is refactoring. Doesn't change
+behaviour or cycles at all. It just adds assertion to make sure mvd is aligned, and modifies the way
+we handle double loads
+
+## Phase 2
+update the docs (no need to verify this step)
+
+## Phase 3
+Add a data movement instruction for a memory barrier. I've inserted comments #TODO wait lsq
+in the instruction_generator where you'll need to use this memory barrier. It essentially causes the
+pe_array to stall until all loads have completed execution, i.e. waits until there are no more
+entries in any of the buffers.
+Put this instruction in the trace where you need. Review the hints on writing gendp ISA. make sure
+you update branches.
+
+## Phase 4
+Add a buffer to the S2 which we use for S2->SPM movement. As soon as something is popped from the
+buffer, magically write it to SPM.
+Only build this for singleData
+
+
+## Phase 5
+Add in the outstanding requests to S2 and as soon as the tick finishes, then we magically write to
+SPM
+Only build this for singleData
+
+## Phase 6
+duplicate phase 4 but for SPM<-S2. So we have a buffer for the S2 and as soon as it recieves data it
+instantly writes it to the S2 magically.
+PLEASE NOTE we only are storing loads in the buffers right now. No writes
+Only build this for singleData
+
+## Phase 7
+Add writes to the S2. So now instead of recieving from S1 instantly and writing, we mark ready bits
+within the loads waiting in the S2 buffer.
+Only build this for singleData
+
+## Phase 8
+Add in mvdq instructions, but only if both source and dst are aligned. If they are not aligned, just
+do it magically.
+
+## Phase 9
+Add in support for mvdq which is not aligned.
+
+## Phase 10
+decrease the buffer size to 8 and add stalling logic to the pe_array.
+
+## Phase 11
+update the docs (no need to verify this stage)
+
+# Other considerations
++ there is a S2 mv to gr in the trace. Do this magically. Don't worry about it for now. You can use
+  the instant read functionality we currently have
++ Someday I may wish to make these buffers out of order within a buffer, so instead of being a queue
+  it will be a rotating priority based thing. Don't worry about this much, but it would be nice if
+  the implementation could be extended to do this. Only if it's not too complicated. Simplicity is
+  more important
++ simple is better.
++ Ask many questions in the planning phase so I can help explain what I want
++ Make your plan very detailed an thourough including examples of the code you want to write.
++ try to break Phases into steps for yourself and verify frequently with the quick verification
+  test
++ The phases are guidelines to help you keep things manageable. You may stray from them if you feel
+strongly about it
+
+# verification and other tests
++ run this test to verify correctness quickly `python scripts/wfa_instruction_generator.py &&make clean &&
+	make -j && python scripts/wfa_check_correctness.py ../../kernel/Datasets/oneHundredSeq500Len.seq -n
+	1`
++ to be more rigorous run with -n 50 and then review the diffs of magic_wfs_out.txt and
+wfaTrace.txt. These two files should match exactly, except for a trailing wavefront in
+magic_wfs_out.txt. You can also do the same but using seq10k.seq instead of oneHundred... and use
+-n 1 for this because it takes much longer to finish. About a minute. You can then review the diffs
+same as before
++ You are encouraged to write test cases for yourself if you find them useful
+
+
+
+Here I'm including the plan for the previous banking introdced for SPM and pes only
+```
+  I want to add banking to the pe SPM. Right now it has 4 banks, but eventually I want it to have 8. 
+  Each bank will be 4K ints (so half of a current bank). When two PEs try to access the same bank,
+  there will be a bank conflict. In this case one of the PEs will stall, meaning it will not move it's
+  PC or execute any instructions until it is granted access. I will provide more detail and break down
+  the plan.
+
+
+  # milestone 1
+  We will design a new dummy test case called bankThrasher. It will create bank conflicts.
+  + build a new dummy trace in gendp isa including a driver called bankThrasher.cpp. The dummy trace 
+    will be very simple. PE0 reads addr 0, PE1 reads addr 1, PE2 reads addr 2, PE3 reads addr 4.
+    + When we don't model conflicts, this gives no bank conflicts
+    + When we do model, we should see 4X performance degradation
+    + When we add the extra low order interleaved bank we will see 2X performance degradation from
+      original
+    + When we add the performance counter for shared line, we should see that it occurs for half of
+      the stalls
+    Therefore, you will use this test at all stages of your development
+  + When we run bankThrasher before your change we will see the bank counter = the number of cycles +
+    maybe a few differences for setup
+  + After your changes we will see a 4X drop in the counter because of the banking conflicts.
+  + You will use bankThrasher as a test case to evaluate your changes at the end.
+  + write a test harness and run bankThrasher taking note of the count
+
+  # milestone 2
+  Modify the PE so that when it writes/loads from SPM, instead of directly accessing the SPM, it
+  writes to a new variable `spmReqPort`. Then after the loop in pe_array.cpp:1191 when all of the PEs
+  have done their computation for the cycle, the pe_array.cpp will loop through the pes in round robin
+  order and arbitrate which pes get to write.
+  + make OutstandingReq from within the Spm class a public class so that it can be used in PE.
+  + add an OustandingReq spmReqPort to pe
+  + modify the store/load codes when going to SPM to instead go to this `spmReqPort`
+  + after the loop which runs all the pes pe_array.cpp:1191, add a loop which will iterate through pes
+    starting from cycle % 4 and then wrapping around. This will ensure round robin arbitration later.
+    Send each OustandingReq to the SPM, and remove it from the pe
+  + Add a comment on this new loop "SPM bank arbitration" or something like that
+  + Note we haven't introduced bank conflicts yet. All the requests will go through no problem
+  + Verify wfa rigorous
+
+  # milestone 3
+  Add the arbitration.
+  + I want to add some performance counters. Essentially global ints which can be incremented when 
+    events happen. Then, when simulation finishes, these should all be printed out at the end when the
+    simulator exits afer XXX cycles. I
+    believe systemC has something like this. You may choose to use a class to register these, I don't
+    really care, but try to make it somewhat clean, but not complex. I will likely add more counters
+    later.
+  + Modify the SPM so instead of having one available OutstandingReq per PE, it has one OutstandingReq
+    per bank (just 4 for now).
+  + add a "portIsBusy(addr)" function to the SPM. It should use the appropriate bins of the
+    address to determine which bank it goes to, check if there is already a request in that bank, and
+    if there is, then it should return true.
+    NOTE: you may choose to include a argument for virtual/physical addres, or translate to one or the
+    other before and then write. I don't care. Whichever is cleaner
+  + in the arbitration loop, first check if SPM.portIsBusy(addr). If not, then send your request, and
+    clear. If it is busy, do not clear your outstanding request, but increment a performance counter,
+    "BankConflictStall". Also, if the line you are requesting is already in the Outstanding requests 
+    (note that the SPM has lines of 64 but is int addressable, so If I access 0 and 1, that will be 
+    the same line), then you should increment the counter "SameLineBankConflictStall".
+  + in pe_array.cpp:1191 loop, where we iterrate through the pes, you should add a check. 
+    `if (!pe.stalled()) { continue on and run the pe }`. You'll need to add this stalled() method, and
+    for now, all it should do is check if there is an outstanding request. If there is, then stall,
+    else no stall.
+  + At this point you should have implemented bank conflicts, and you should see a 4X drop in
+    performance on bankThrasher. Please verify and debug if necessary.
+  + Also run wfa. You will likely see some bank conflicts here. Please report the number you saw
+  + verify wfa rigorous
+
+  # milestone 4
+  Increase bank count.
+  We have SPM_BANK_SIZE and possibly other references to bank size. For the most part these refer to
+  the BANK_GROUP_SIZE and should be renamed. This BANK_GROUP_SIZE will remain 8k, but we will now
+  also have SPM_BANK_SIZE which will be 4k. Essentially, the bank group refers to a pair of banks.
+  This pair is high order interleaved with the other pairs, so it is "private" to a pe in virtual
+  addressing mode. However, the pair itself is low order bit interleaved. So
+  PE0 has  banks 0/1,
+  PE1 gets banks 2/3,
+  PE2 gets banks 4/5, 
+  PE3 gets banks 6/7,
+  A sequence "abcdef..." would alternate a to bank 0, then b to bank 1, c to bank 0, d to bank 1 and
+  so on until BANK_GROUP_SIZE after which q to bank 2, r to bank 3, s to bank 2, t to bank 3 etc
+  until 2*BANK_GROUP_SIZE
+  + Start by renaming SPM_BANK_SIZE and related variables, and adding BANK_GROUP_SIZE
+  + run a quick verification of wfa
+  + increase the number of outstandingReq ports on the SPM
+  + change the SPM portbusy logic to appropriately route the address to proper port and see if there
+    is a conflict
+  + verify with wfa rigorous
+  + You should see a drop in the number of stalls from before
+```
+

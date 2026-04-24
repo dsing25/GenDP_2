@@ -1,0 +1,52 @@
+# End Goal of the Project
+We are working on the GWFA algorithm. 
+
+The final goal is to make it a kernel like WFA, but just like WFA we will approach this very slowly,
+step by step. These are roughly ordered, but we may bounce around.
++ we'll move everything into magic instructions
++ bit by bit split the magic instructions and move pieces to controller and pe
++ parallelize between pes
++ add new features (specifically we'll need a new memory hierarchy layer, MM for gwfa)
++ tiling between S2, pe, and MM
+
+# Goal for this session/subproject
+We're going to move code from the GWFA kernel into the gendp simulator magic instructions
+
+We want to integrate the gwfa function call as a magic
+instruction. We'll load in the kernel data including graph and query, then we run gwfa all in magic
+1. This is the simplest step. We'll just create a gwfa trace file, and the first 
+instruction in the controller's trace will be magic(1). This will call the gwfa function and it will
+do complete gwfa alignment including printing out scores.
+
+We will need a test script, gwfa_check_correctness.py which will compare to the true scores file,
+but it does not need to measure the speedup. I would like it to also be flexible enough to have all
+three options like run.py, 1,2,3.
+
+# Step by Step
+
+PHASE 1
+We will first double the register file for data movement instructions in the controller. This
+will require some modification to the instruction size as well. Please after completing this step
+run validation with run backtest and wfa_check_correctness.py. Please also integrate
+wfa_check_correctness.py into run backtest and run lightning, but run for just a few 500bp queries
+in run lightning, and run for a single 10k query in run backtest. You may need to change the path
+because Wfa datasets are now in /data4/kaplannp/GenDP2/kernel/Wfa/Datasets
+
+PHASE 2
+Add a new register file with 16 entries to the pe_array, but these entries will be 64 bit. I will
+use this as a cache of pointers to main memory. We will call this the virtual_address_reg, or
+va_regfile
+
+PHASE 3
+This step is essentially about separating the arguments/initialization of gwfa from the computation.
+split the magic instruction into two instructions. magic instruction 1 will load the graph into s2.
+For the other data structures that live in main memory, e.g. s_diag_a, a register should be
+allocated in the va_regfile which points to the the location in memory of that structure.
+We will also need to load ql into a register, initialize the wavefront, probably some other things.
+In magic 2, wherever there was a variable which points to memory, e.g. s_diag_a, I want you to set
+int& s_diag_a = va_regfile[0], or wherever the data is stored. Likewise, int & ql = regfile[1]. In
+the trace you will call magic 1 and then magic 2 from pe_controller trace.
+
+# Resources
++ /data4/kaplannp/GenDP2/kernel/Gwfa contains the kernel code, a test harness for running the 
+  standalone kernel (run.py) and the dataset we'll run on (Gwfa256 bc has 256 inputs)

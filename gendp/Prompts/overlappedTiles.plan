@@ -1,0 +1,164 @@
+# Overlapped Phase 2 Tiling Plan
+
+## Goal
+
+Overlap controller data movement with PE computation in phase 2.
+Three activities can run concurrently because they touch different
+SPM regions:
+
+1. PE P2 compute on P2_BUF_X
+2. Controller magic 15a reading P2_BUF_Y and loading FIN0_T
+3. Controller magic 15b writing back FIN0_U to MM
+
+## SPM Layout (per PE, 8192 words)
+
+```
+[0..1279]    P2 buf A  (P2_BASE)
+[1280..2559] P2 buf B  (P2B_BASE)
+[2560..4287] FIN0 tile X (FIN0_BASE)
+[4288..6015] FIN0 tile Y (FIN0B_BASE)
+[6016..8191] Q + GS sequences (interleaved, read-only)
+```
+
+## Current Non-Overlapped Flow
+
+```
+loop:
+  magic 14 bufA    → load tiles from A queue into P2 bufA
+  PE P2 bufA       → extend wavefront, produce fin0/fin1 diags
+  magic 15 bufA    → writeback pushed/intv/fin1 to MM,
+                     load fin0 data into FIN0 tile X
+  PE FIN0 X        → hash check + char match
+  magic 18 X       → writeback FIN0 results (A/B/HA) to MM
+  [multipass loop if needed]
+
+  magic 14 bufB    → load tiles
+  PE P2 bufB       → extend
+  magic 15 bufB    → writeback + load FIN0 tile X
+  PE FIN0 X        → hash check
+  magic 18 X       → writeback
+  [multipass]
+
+  magic 14 bufA    → load tiles
+  if empty → exit
+  jump loop
+```
+
+Key property: magic 15 runs AFTER PE P2 finishes on the SAME
+buffer. magic 18 writes HA back to MM BEFORE the next magic 15
+loads HA for the next diag. Everything is sequential.
+
+## Overlapped Flow (from phase2TilingPrompt.txt)
+
+Two P2 buffers (A, B) and two FIN0 tiles (X, Y). Each half
+overlaps controller work with PE computation:
+
+```
+HALF_A:
+  set_PC PE_P2 bufA           ← PE computes on bufA
+  magic 15a: read bufB → X    ← reads PREVIOUS P2 results [OVERLAP]
+  sync PE
+  set_PC PE_FIN0 X            ← PE does hash check on X
+  magic 14: load bufB         ← loads NEXT tiles [OVERLAP]
+  magic 15b: writeback Y      ← writes PREVIOUS FIN0 results [OVERLAP]
+  sync PE
+
+HALF_B:
+  set_PC PE_P2 bufB           ← PE computes on bufB
+  magic 15a: read bufA → Y    ← reads PREVIOUS P2 results [OVERLAP]
+  sync PE
+  set_PC PE_FIN0 Y            ← PE does hash check on Y
+  magic 14: load bufA         ← loads NEXT tiles [OVERLAP]
+  magic 15b: writeback X      ← writes PREVIOUS FIN0 results [OVERLAP]
+  sync PE
+
+loop back to HALF_A
+```
+
+### Why overlaps are safe (no SPM conflicts)
+
+- magic 15a reads P2_BUF_Y while PE writes P2_BUF_X → different regions
+- magic 14 writes P2_BUF_Y input while PE reads FIN0_X → different regions
+- magic 15b reads FIN0_Y while PE reads FIN0_X → different regions
+
+### Prologue
+
+Before entering the steady state, one PE P2 must complete so
+the first magic 15a has results to read:
+
+```
+magic 14 bufA      → load first tiles
+magic 14 bufB      → load second tiles
+PE P2 bufB         → compute (provides data for HALF_A m15a)
+```
+
+### Drain
+
+A drain counter tracks consecutive empty magic 14 calls. When
+it reaches 4, exit to P2_END. Reset to 0 whenever tiles are loaded.
+
+### Multipass
+
+When FIN0 has too many arcs for one batch, magic 15a sets a
+multipass flag. After PE FIN0 sync, a loop runs:
+  magic 18 (writeback current pass) → magic 20 (load next batch) →
+  PE FIN0 → spin → check flag → loop
+
+### HA Bucket Consistency
+
+magic 15b (writeback) must complete BEFORE magic 15a (load) runs
+so that HA buckets in MM contain the latest keys. Place magic 15b
+at the START of the PE P2 overlap, before magic 15a:
+
+```
+  set_PC PE_P2 bufA
+  magic 15b: writeback Y      ← ensure MM has latest HA keys
+  magic 15a: read bufB → X    ← loads HA from MM (now up to date)
+```
+
+### Magic Mask Assignments
+
+| Half | PE P2     | m15b (wb prev) | m15a (load)       | PE FIN0   | m14 (load) |
+|------|-----------|----------------|--------------------|-----------|------------|
+| A    | PE_P2_BUF0| MAGIC_18_F0B   | MAGIC_15_BUF1_F0A | PE_FIN0_A | MAGIC_14_BUF1 |
+| B    | PE_P2_BUF1| MAGIC_18_F0A   | MAGIC_15_BUF0_F0B | PE_FIN0_B | MAGIC_14_BUF0 |
+
+Multipass within HALF_A uses MAGIC_18_F0A / MAGIC_20_F0A (current fX).
+Multipass within HALF_B uses MAGIC_18_F0B / MAGIC_20_F0B (current fY).
+
+## Steps to Implement
+
+### 1. Verify non-overlapped baseline
+
+Run `gwfa_check_correctness.py 3` (debug mode) with the current
+non-overlapped code to generate golden wfDebug output. Save it
+for comparison.
+
+### 2. Write overlapped instruction generator
+
+Replace the phase 2 section of `gwfa_instruction_generator.py`.
+Use `f.write_count` to track PCs and `f.patch_imm0()` for all
+forward branch offsets. No manual offset arithmetic.
+
+### 3. Test with wfDebug comparison
+
+Run correctness mode 3. Compare wfDebug.txt against golden. The
+wavefront values at each step must match exactly. If they diverge,
+the first mismatch shows which step/entry is wrong.
+
+### 4. Run full 295
+
+Run `gwfa_check_correctness.py -t 56 2` for all 295 queries.
+
+## Files to Modify
+
+- `scripts/gwfa_instruction_generator.py` — phase 2 section only
+  (phase 1 unchanged, PE instructions unchanged)
+
+## Files NOT to Modify
+
+- `pe_array.cpp` — magic 14/15/18/20 handlers already support
+  all mask combinations
+- `pe.cpp` — PE magic 13/19 already support both P2 and FIN0
+  buffer selections
+- `sys_def.h` — SPM layout constants already defined

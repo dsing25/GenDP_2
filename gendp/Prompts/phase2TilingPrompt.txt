@@ -1,0 +1,53 @@
+I made a few changes to the tiled loading so we can overlap pe compuation with load/st.
+
+
+We currently have flow that runs like this in phase 2
+
+1. magic 14 loads tile i+1 to pes
+2. spin wait for PEs to finish tile i
+3. set PE to magic compute processing tile i+1
+4. magic 15 writeback tile i
+5. i++ goto 1
+
+I want to actually modify this so that we can get better utilization from the PEs. The PEs are going
+to collaborate to work on magic instruction 15 section 6. You'll need to split that instruction so
+the PEs can do some of the work. We will need a 3rd region in the pes, call it FIN_0_TILE, and we'll 
+need it to be a ping pong buffer as well. I hope you have enough storage for this, but if not lets 
+discuss in the planning phase. Your first job is to create the data layout for the s1 per PE and
+evaluate the storage requirement. Get back to me once you've done this. Then we'll continue
+planning.
+
+
+In a bit more detail, refering to magic instructions, first some notes:
+magic 15 does the writeback for fin1 diags and loads information for fin0 diags into FIN_0_TILE. 
+	You'll need to write the HA_buckets, the arc hi/lo, and the arcs themselves. Currently we load 
+	all of these into S1c, but I think this is not efficient because it requires a massive copy at 
+	the end to send everything back to the PE. Instead, I think you should only copy the diags into 
+	S1c. All other things should be loaded into the FIN_0_TILE, and read from there when the 
+	pe_array needs it. Make sure whenever working on pes that you rotate accesses so we are not 
+	hitting the same bank group every time. When we've finished loading everything, then we will 
+	copy the diags back to FIN_0_TILE. We will split magic 15 section 6 into 15a, which does the 
+	above, and 15b which writes the hashtable keys back as well as the diagonals to B/A
+For the pe, we need a new magic which will do the stuff in between magic 15a and 15b. it will 
+	operate on FIN_0_TILE. It will do the hash table iteration to calculate 
+	if absent, and then it will do the character match for the node. At the end, there should be 
+	three outputs, a list of diags to write to A, a list of diags to write to B, a list of keys to 
+	add to HA. You'll need to allocate space in the PE_SPM for all these structures after the second
+	tile. Let me know if you are running low on space.
+
+Now, in terms of magic instructions the high level flow is:
+1. sync PE
+2. set PE compute i
+3. load ha buckets and other info to FIN0 for i+1 (magic 15a)
+4. sync PE
+5. set PE compute FIN0 i+1
+6. ld data for i+1 (magic 14)
+7. writeback data produced in FIN0 i (magic 15b)
+8. sync PE
+9. set PE compute i+1
+10. write from tile i to FIN0 i (magic 15a)
+11. sync PE
+12. set PE compute FIN0 i
+13. ld data for i (magic 14)
+14. writeback from FIN i+1 (magic 15b)
+

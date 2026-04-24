@@ -1,0 +1,24 @@
+Previously we built GWFA into the simulator using magic instructions, but I now want you to use the 
+submodule here instead of the kernel from a few directories up. This change mostly just involves 
+updating the paths for includes/dataset, but there is a small change to the interface as well. No 
+more offsets
+
+After that I want to split the magic instructions up a bit and eventually bring the logic within the
+gwfa function out into the ISA. We will use magic instructions to call gwf_ed_extend.
+It should look something like this:
+Note I want to modify the termination check so that when we would set the terminate variable,
+instead we set SPM[SPM_SIZE] = 1
+```
+   magic(initialization of static variables/va_regfile, s_intv_n, including creation of the first
+      diagonal etc.)
+   set SPM[SPM_SIZE] = 0
+   LOOP
+      magic(reset mem structures, i.e. ha_clear and A clear)
+      magic(call gwfa extend including termination check)
+      gr12++
+      magic(print debug information)
+      load SPM[last word]
+      if SPM[SPM_SIZE] == 1 jmp end
+      jmp LOOP
+   END
+      magic(printScore)

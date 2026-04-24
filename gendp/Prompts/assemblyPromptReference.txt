@@ -1,0 +1,91 @@
+We are working on the GenDp simulator. You should familiarize yourself with the code in this 
+directory, and be sure to read the docs.md file. docs.md will be especially important as a
+programming guide for your next task.
+
+# Overview:
+I am working on writing a trace for wfa in wfa_instruction_generator.py. The trace is written in
+Gendp ISA which is described in docs.md. It uses simple python helpers to construct the desired
+instructions. Right now it uses a bunch of "magic instructions". These are cheats/crutches which
+execute arbitrary c++ code. I want to gradually migrate the c++ code in these magic instructions
+into inline assembly in the instruction_generator. Your task is to perform this migration. Note that
+it is a refactoring excersize and the ouput should not be changed at all. It is therefore easy to
+verify that your changes are correct.
+
+# More detailed plan
+There are a number of magic payloads. You will need to implement 1, 2, 3. Start with 2 because it
+will be the easiest. Then move on to 1
+You should not try to implement 4, 5, 6, or 7 at this time. Leave it magic for now.
+
+## Guidelines for implementation
++ Bit by bit execute the plan. You should always move as little as you can into the instruction
+  trace, then run a quick verification. Then a little more. Another verification. You should make as
+  many small steps within the plan as possible
++ For large milestones, you will wait for my approval. At a large milestone the following will
+  happen:
+  1. you will check the code works with a quick verify
+  2. you will do an indepth verify
+  3. you will do a detailed review of your code and make any changes if necessary
+  4. I will review the code and may give you some feedback to correct. We may loop here a bit
+  5. When I am satisfied, I will commit your code
+  6. I will instruct you to reevaluate your plan and make changes if needed
+  7. You will make the changes and ask questions. I will answer and we loop
+  8. When you're ready, ask for approval before continuing to the next phase
++ The first milestone will be the implementation of magic 2. Implementation of magic 2 and magic 3
+  is more complicated, and should be broken down into a few (2 or 3) milestones each.
++ If you're unsure of something, ask. Especially in the planning phase
++ Efficiency is important. Try to minimize instruction count. Don't do wasted register moves if you
+  can avoid them. Try to get the code working, but then feel free to optimize
+
+## Guidelines for the execPlan
++ The exec plan should be broken into Milestones at which you'll wait for feedback from me. These
+  milestones should be broken into steps 
++ Ask lots of questions if you're unsure
++ Be very verbose.
+
+## Hints
+**It is absolutely essential that you always keep these in your context window. If you run out of
+context, compress other things and reload the hints.**
++ Gendp ISA is very verbose and it is easy to make mistakes. Be very careful and run checks whenever
+  possible.
++ You'll note that in wfa_instruction_generator I have an inline function `write_block_code`. You
+  should make similar functions for `loadSpmRegMapped` and `storeSpmToWavefrontStrided`. These
+  should be the only functions you make.
++ Do not use variables or complex control. For small loops, like over num_pes I use for loops, and
+  I very sparingly use functions. These are fine and make the code more readable, but understand
+  that when you create a for loop, you are not looping in the code, you are duplicating the
+  instruction for each iteration of the loop. The loop will essentially be unrolled in the code.
+  Therefore use this very sparingly to minimize instruction footprint
++ You cannot use variables. It is essential that you do not use variables. If you use variables your
+  code will be worthless. You may use the loop counter if doing a for loop as in the previous point.
+  You may also use the arguments of a function, but keep them to a minimum. These will be expanded
+  into constants. You may also use constants enumerated at the top of the file. These in fact should
+  be used to improve readability. Other variables cannot be used.
++ There is no multiply unit in the control trace. When I do a multiply in the magic instrucitons, it
+  is always with a power of 2, therefore, you can shift by the log. When multiplying by 3, I unroll
+  3 additions.
++ Branches in Gendp are very difficult. You should be very careful with them, and always check the
+  branches after each step. The issue is that branches jump by a constant offset. That is, they
+  cannot jump to a LOOP label as in traditional ISA. Instead they jump a hardcoded value like 9. If
+  you add an instruction just below that jump, well now you need to jump 10! So every time you add
+  an instruction, check that there are no branches that cross it from above or that jump backwards
+  over it from below. If there are, you will need to increment their offsets. If your code does not
+  match, the first thing you should check is whether you have broken one of the branches.
++ In many cases, you should be able to move part of a magic instruciton into the instruction
+  generator, and remove it from the magic instruction. This way you can test piece by piece instead
+  of dumping the entire magic instruction into the simulator
++ When writing spm accesses from the pe, you must stall for 2 cycles to make sure the port is free.
+  This is not the case with pe_array. You need not buffer your write/reads. You can have back to
+  back read/writes.
+
+## Verification
+There are different levels of verification
++ quick and dirty: `python scripts/wfa_instruction_generator.py &&make clean && make -j && python scripts/wfa_check_correctness.py ../../kernel/Datasets/oneHundredSeq500Len.seq -n 1`
+  Use this as often as you can. Test every time you make a change.
++ Confident test: `python scripts/wfa_instruction_generator.py &&make clean && make -j && python scripts/wfa_check_correctness.py ../../kernel/Datasets/oneHundredSeq500Len.seq -n 5`
+  Then you diff magic_wfs_out.txt and wfaTrace.txt. They should match except for the first line, and
+  some extra at the end in magic_wfs_out.txt
+  This you should use when you're unsure, or when you've completed a step
++ The whole enchilada: `python scripts/wfa_instruction_generator.py &&make clean && make -j && python scripts/wfa_check_correctness.py ../../kernel/Datasets/oneHundredSeq500Len.seq -n 50`
+  Then you diff magic_wfs_out.txt and wfaTrace.txt. They should match except for the first line, and
+  some extra at the end in magic_wfs_out.txt
+  You should run this test before you show me code for review.

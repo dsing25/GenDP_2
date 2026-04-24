@@ -38,7 +38,6 @@ wfDebug.txt
 .vscode
 .zprofile
 .zshrc
-*Prompt*
 .profile
 .ripgreprc
 .codex
