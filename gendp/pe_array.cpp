@@ -3501,27 +3501,32 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             {
                 int *mm = gwfa_get_mm();
                 auto &mgr = main_addressing_register;
+                // Plan 3c l6g: remaining runtime `if` statements lowered
+                // to labeled branches. Site-1 (sign test), site-2
+                // (merge/no-merge split), and min-reduction compound
+                // conditions now all use goto-based control flow.
                 // R8: stage s1c[149] through mgr[11] with 1-NOP gap.
                 mgr[11] = s1c[149];
                 //NOP                                    // s1c 1-cycle gap
-                // AC-5 (R3): merge_skipped bool eliminated. The sign
-                // of s1c[149] (negative = merge was skipped) is the
-                // signal. We delay overwriting s1c[149] until inside
-                // each arm of the second decision below, so the
-                // second decision can re-read s1c[149] and re-test
-                // the original sign. intv_n architectural in mgr[5].
-                if (mgr[11] < 0) {                       // site 1 test
-                    mgr[11] = s1c[148];
+                // Site 1 test: if (s1c[149] < 0) take the "skipped"
+                // arm (intv_n = s1c[148]); else take the "merged"
+                // arm (intv_n = sum of s1c[4..7]).
+                if (mgr[11] >= 0) goto m38_site1_else;   // bge
+                //NOP                                    // slot 1 of bge
+                mgr[11] = s1c[148];
+                //NOP                                    // s1c 1-cycle gap
+                mgr[5] = mgr[11];                        // intv_n (skipped arm)
+                goto m38_site1_done;
+                //NOP                                    // slot 1 of goto
+            m38_site1_else:
+                mgr[5] = 0;                              // intv_n acc
+                //NOP                                    // RAW break
+                for (int pe = 0; pe < 4; pe++) {
+                    mgr[11] = s1c[4 + pe];
                     //NOP                                // s1c 1-cycle gap
-                    mgr[5] = mgr[11];                   // intv_n
-                } else {
-                    mgr[5] = 0;                          // intv_n acc
-                    for (int pe = 0; pe < 4; pe++) {
-                        mgr[11] = s1c[4 + pe];
-                        //NOP                            // s1c 1-cycle gap
-                        mgr[5] = mgr[5] + mgr[11];      // intv_n += val
-                    }
+                    mgr[5] = mgr[5] + mgr[11];           // intv_n += val
                 }
+            m38_site1_done:
                 // Shared post-head (does NOT overwrite s1c[149])
                 mgr[11] = s1c[145];                     // n_a
                 //NOP                                    // s1c 1-cycle gap
@@ -3530,7 +3535,14 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 // Re-read s1c[149] for site 2 test (original sign).
                 mgr[11] = s1c[149];
                 //NOP                                    // s1c 1-cycle gap
-                if (mgr[11] >= 0) {                      // !merge_skipped
+                // Site 2 test: merge vs no-merge decision via labeled
+                // branch. Original was `if (mgr[11] >= 0) { merge } else
+                // { no_merge }`; lowered to `blt site2_else; merge;
+                // goto site2_done; site2_else: no_merge; site2_done:`.
+                if (mgr[11] < 0) goto m38_site2_else;    // blt
+                //NOP                                    // slot 1 of blt
+                {                                        // merge arm
+                    // merge-path min-reduction; commit intv_n here.
                     // merge-path min-reduction; commit intv_n here.
                     // AC-5 (R3): best_hi/best_lo/hp/lp C++ locals
                     // eliminated (Round 15). best_hi=mgr[3],
@@ -3548,19 +3560,36 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                             //NOP                              // SPM 1/3
                             //NOP                              // SPM 2/3
                             //NOP                              // SPM 3/3
-                            if (mgr[11] >= 0 && mgr[11] < mgr[3])
-                                mgr[3] = mgr[11];
+                            // Compound condition lowered: if mgr[11] < 0
+                            // or mgr[11] >= mgr[3], skip the update.
+                            if (mgr[11] < 0) goto m38_mr_hp_skip;   // blt
+                            //NOP                                    // slot 1 of blt
+                            if (mgr[11] >= mgr[3]) goto m38_mr_hp_skip; // bge
+                            //NOP                                    // slot 1 of bge
+                            mgr[3] = mgr[11];
+                            //NOP                                    // RAW break
+                        m38_mr_hp_skip:
                             mgr[11] = spm[979+b];            // SPM lp
                             //NOP                              // SPM 1/3
                             //NOP                              // SPM 2/3
                             //NOP                              // SPM 3/3
-                            if (mgr[11] >= 0 && mgr[11] < mgr[4])
-                                mgr[4] = mgr[11];
+                            if (mgr[11] < 0) goto m38_mr_lp_skip;   // blt
+                            //NOP                                    // slot 1 of blt
+                            if (mgr[11] >= mgr[4]) goto m38_mr_lp_skip; // bge
+                            //NOP                                    // slot 1 of bge
+                            mgr[4] = mgr[11];
+                            //NOP                                    // RAW break
+                        m38_mr_lp_skip:
+                            (void)0;
                         }
                         s1c[163+b] = mgr[3]; // intv_lo[pe+1]
                         s1c[166+b] = mgr[4]; // intv_hi[pe]
                     }
-                } else {
+                }                                        // end merge arm
+                goto m38_site2_done;
+                //NOP                                    // slot 1 of goto
+            m38_site2_else:
+                {                                        // no-merge arm
                     // No merge: commit intv_n, then compute
                     // boundaries via fused binary search, lowered
                     // to explicit label/goto state machines per
@@ -3788,7 +3817,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         //NOP
                         if (main_gr[11] < main_gr[4]) goto m38_b2_top;
                     }
-                }
+                }                                        // end no-merge arm
+            m38_site2_done:
+                (void)0;
             }
         } else if (magic_id == 39) {
             // Intv sort setup (Plan 3c l6h, finalized as scalar register
