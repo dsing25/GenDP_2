@@ -4868,56 +4868,109 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #endif
             }
         } else if (magic_id == 36) {
-            // Diag merge finalize (pointer-swap version).
-            // If merge happened, active_diag_base = gr[4] (MM_SORT_BUF).
-            // If merge skipped (gr[6]==0), active_diag_base stays = gr[3].
+            // Diag merge finalize (Plan 3c l6e): ISA-lowered pointer-swap
+            // two-arm + split-index writes + boundary vd loads.
+            // AC-2/3/5 compliant.
+            //
+            // Live-in: gr[3]=original diag_base, gr[4]=MM_SORT_BUF,
+            //          gr[6]=merge_happened flag, gr[24]=n_a.
+            // Live-out: s1c[153]=active_diag_base, s1c[154..158]=5 split
+            //           indices, s1c[159..162]=4 boundary vd values.
+            // s1c scratch: s1c[117]=nape (n_a_per_pe).
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
-                int n_a = gr[24];
-                if (gr[6] != 0) {
-                    s1c[153] = gr[4]; // active_diag_base = MM_SORT_BUF
-                } else {
-                    s1c[153] = gr[3]; // active_diag_base = original diag_base
-                }
-                // Compute diag split metadata for dedup.
-                // Mid-diagonal start: use nominal splits directly.
-                // Boundary fixup happens in magic 32 finalize (max merge).
-                int db = s1c[153];
-                int nape = (n_a + 3) / 4;
-                // 5 split indices in s1c[154..158]: nominal positions
-                s1c[154] = 0;
+                // Pointer-swap two-arm via labeled branch.
+                if (gr[6] == 0) goto m36_swap_else;             // beq
+                //NOP                                            // slot 1 of beq
+                gr[11] = gr[4]; //NOP                           // MM_SORT_BUF
+                s1c[153] = gr[11];                              // active_diag_base
+                //NOP                                            // s1c gap
+                goto m36_swap_done;
+                //NOP                                            // slot 1 of goto
+            m36_swap_else:
+                gr[11] = gr[3]; //NOP                           // original diag_base
+                s1c[153] = gr[11];                              // active_diag_base
+                //NOP                                            // s1c gap
+            m36_swap_done:
+                // nape = (n_a + 3) >> 2  ->  s1c[117]
+                gr[11] = gr[24] + 3;
+                //NOP                                            // RAW break
+                gr[11] = (unsigned)gr[11] >> 2;
+                //NOP                                            // RAW break
+                s1c[117] = gr[11];                              // nape
+                //NOP                                            // s1c gap
+                // Split indices s1c[154..158]. s1c[154]=0, s1c[158]=n_a.
+                gr[11] = 0; //NOP
+                s1c[154] = gr[11];                              // split[0] = 0
+                //NOP                                            // s1c gap
+                gr[11] = gr[24]; //NOP                          // n_a
+                s1c[158] = gr[11];                              // split[4] = n_a
+                //NOP                                            // s1c gap
+                // s1c[155..157] = min(pe*nape, n_a) for pe=1,2,3.
                 for (int pe = 1; pe < 4; pe++) {
-                    int nom = pe * nape;
-                    s1c[154+pe] = (nom < n_a) ? nom : n_a;
+                    gr[11] = s1c[117]; //NOP                    // nape
+                    gr[5]  = gr[11] * pe;                       // nom = pe*nape
+                    //NOP                                        // RAW break
+                    if (gr[5] < gr[24]) goto m36_sp_ok;         // blt
+                    //NOP                                        // slot 1 of blt
+                    gr[5]  = gr[24];                            // clamp to n_a
+                    //NOP                                        // RAW break
+                m36_sp_ok:
+                    s1c[154 + pe] = gr[5];                      // split[pe]
+                    //NOP                                        // s1c gap
                 }
-                s1c[158] = n_a;
-                // 4 boundary vd values in s1c[159..162]
-                // vd at split[1], split[2], split[3] (internal boundaries)
-                // + sentinel for split[4]=n_a (use vd at n_a-1 or max)
-                // ISA lowering: s1c→gr w/ 1-cycle gap; MM→gr w/ waitLSQ+NOP
-                // staging before the s1c store. gr[11] is the CLAUDE-safe
-                // controller scratch (BL-20260417-ctrl-sync-gr).
+                // Boundary vd s1c[159..161]: mm[db + 2*sp] if sp < n_a,
+                // else 0xFFFFFFFF sentinel.
                 for (int pe = 0; pe < 3; pe++) {
-                    gr[11] = s1c[155+pe];              // s1c load sp
-                    //NOP                                // s1c 1-cycle gap
-                    if (gr[11] < n_a) {
-                        gr[11] = mm[db + 2*gr[11]];    // MM load (vd at split)
-                        // waitLSQ
-                        //NOP                            // latency settle
-                        s1c[159+pe] = gr[11];
-                    } else {
-                        s1c[159+pe] = (int)0xFFFFFFFF; // sentinel
-                    }
-                }
-                if (n_a > 0) {
-                    gr[11] = mm[db + 2*(n_a-1)];      // MM load (last vd)
+                    gr[11] = s1c[155 + pe]; //NOP               // sp
+                    gr[5]  = gr[11];                            // save sp
+                    //NOP                                        // RAW break
+                    if (gr[5] >= gr[24]) goto m36_vd_sentinel;  // bge
+                    //NOP                                        // slot 1 of bge
+                    // MM load: gr[11] = mm[db + 2*sp].
+                    gr[5]  = gr[5] << 1;                        // 2*sp
+                    //NOP                                        // RAW break
+                    gr[11] = s1c[153]; //NOP                    // db
+                    gr[5]  = gr[5] + gr[11];                    // db + 2*sp
+                    //NOP                                        // RAW break
+                    gr[11] = mm[gr[5]];                         // MM load
                     // waitLSQ
-                    //NOP                                // latency settle
-                    s1c[162] = gr[11];
-                } else {
-                    s1c[162] = (int)0xFFFFFFFF;
+                    //NOP                                        // LSQ settle
+                    s1c[159 + pe] = gr[11];
+                    //NOP                                        // s1c gap
+                    goto m36_vd_done;
+                    //NOP                                        // slot 1 of goto
+                m36_vd_sentinel:
+                    gr[11] = -1; //NOP                          // si 0xFFFFFFFF
+                    s1c[159 + pe] = gr[11];
+                    //NOP                                        // s1c gap
+                m36_vd_done:
+                    (void)0;
                 }
+                // s1c[162]: if n_a > 0, mm[db + 2*(n_a-1)], else sentinel.
+                if (gr[24] <= 0) goto m36_last_sentinel;        // bge
+                //NOP                                            // slot 1 of bge
+                gr[5]  = gr[24] - 1;                            // n_a - 1
+                //NOP                                            // RAW break
+                gr[5]  = gr[5] << 1;                            // *2
+                //NOP                                            // RAW break
+                gr[11] = s1c[153]; //NOP                        // db
+                gr[5]  = gr[5] + gr[11];                        // db + 2*(n_a-1)
+                //NOP                                            // RAW break
+                gr[11] = mm[gr[5]];                             // MM load
+                // waitLSQ
+                //NOP                                            // LSQ settle
+                s1c[162] = gr[11];
+                //NOP                                            // s1c gap
+                goto m36_last_done;
+                //NOP                                            // slot 1 of goto
+            m36_last_sentinel:
+                gr[11] = -1; //NOP
+                s1c[162] = gr[11];
+                //NOP                                            // s1c gap
+            m36_last_done:
+                (void)0;
             }
         } else if (magic_id == 29) {
             // Tiled dedup: split search + initial tile load.
