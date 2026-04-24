@@ -4807,64 +4807,179 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #endif
             }
         } else if (magic_id == 35) {
-            // Merge writeback: SPM output → MM.
-            // Chunk outer, PE inner: round-robin streaming.
+            // Merge writeback (Plan 3c l6d): SPM -> MM. AC-2/3/5/9.
+            // Chunk-outer/PE-inner round-robin streaming preserved.
+            //
+            // Live-in: gr[4] = mm_out base; s1c[0..7] = prefix-sum arrays.
+            // s1c scratch (m35-local):
+            //   s1c[100..103] = out_ns[pe]
+            //   s1c[104..107] = mm_dsts[pe]
+            //   s1c[108..111] = spm_srcs[pe]
+            //   s1c[112]      = max_words
+            //   s1c[113]      = cum (running prefix)
+            //   s1c[114]      = out_off (from magic_mask & 1)
+            //   s1c[115]      = mvdq j counter
+            //   s1c[118]      = cur_mm (mvdq inner stage)
+            //   s1c[119]      = cur_spm (mvdq inner stage)
             {
                 auto &gr = main_addressing_register;
                 int *mm = gwfa_get_mm();
                 int *spm = SPM_unit->buffer;
-                int out_off = (magic_mask & 1) ? MERGE_OUT1 : MERGE_OUT0;
-                int mm_out = gr[4];
-                // Pre-compute per-PE output info.
-                // ISA lowering: route SPM→gr[11] with 3-NOP settle and
-                // s1c→gr[11] with 1-NOP gap (BL-20260417-ctrl-sync-gr).
-                int out_ns[4], mm_dsts[4], spm_srcs[4];
-                int max_words = 0, cum = 0;
+                // Select out_off via labeled branch on magic_mask.
+                if ((magic_mask & 1) == 0) goto m35_oo_0;       // beq
+                //NOP                                            // slot 1 of beq
+                gr[11] = MERGE_OUT1; //NOP
+                s1c[114] = gr[11];
+                //NOP                                            // s1c gap
+                goto m35_oo_done;
+                //NOP                                            // slot 1 of goto
+            m35_oo_0:
+                gr[11] = MERGE_OUT0; //NOP
+                s1c[114] = gr[11];
+                //NOP                                            // s1c gap
+            m35_oo_done:
+                // Init max_words = 0, cum = 0.
+                gr[11] = 0; //NOP
+                s1c[112] = gr[11];                              // max_words
+                //NOP                                            // s1c gap
+                gr[11] = 0; //NOP
+                s1c[113] = gr[11];                              // cum
+                //NOP                                            // s1c gap
+                // Per-PE pre-compute.
                 for (int pe = 0; pe < 4; pe++) {
-                    int pe_spm = pe * SPM_BANK_GROUP_SIZE;
-                    gr[11] = spm[pe_spm + MERGE_META + 4];   // SPM load out_n
-                    //NOP                                     // SPM lat 1/3
-                    //NOP                                     // SPM lat 2/3
-                    //NOP                                     // SPM lat 3/3
-                    out_ns[pe] = gr[11];
-                    spm_srcs[pe] = pe_spm + out_off;
-                    gr[11] = s1c[4+pe];                      // s1c load
-                    //NOP                                     // s1c 1-cycle gap
-                    mm_dsts[pe] = mm_out + (cum + gr[11]) * 2;
-                    int w = out_ns[pe] * 2;
-                    if (w > max_words) max_words = w;
-                    gr[11] = s1c[pe];                        // s1c load for cum
-                    //NOP                                     // s1c 1-cycle gap
-                    cum += gr[11];
+                    // out_n = spm[pe_spm + MERGE_META + 4].
+                    gr[11] = spm[pe * SPM_BANK_GROUP_SIZE
+                                 + MERGE_META + 4];
+                    //NOP                                        // SPM 1/3
+                    //NOP                                        // SPM 2/3
+                    //NOP                                        // SPM 3/3
+                    s1c[100 + pe] = gr[11];                     // out_ns[pe]
+                    //NOP                                        // s1c gap
+                    // spm_srcs[pe] = pe_spm + out_off.
+                    gr[11] = s1c[114]; //NOP                    // out_off
+                    gr[11] = gr[11] + pe * SPM_BANK_GROUP_SIZE;
+                    //NOP                                        // RAW break
+                    s1c[108 + pe] = gr[11];                     // spm_srcs[pe]
+                    //NOP                                        // s1c gap
+                    // mm_dsts[pe] = mm_out + (cum + s1c[4+pe]) * 2.
+                    gr[11] = s1c[4 + pe]; //NOP                 // s1c_4pe
+                    gr[5]  = s1c[113]; //NOP                    // cum
+                    gr[5]  = gr[5] + gr[11];                    // cum + s1c_4pe
+                    //NOP                                        // RAW break
+                    gr[5]  = gr[5] << 1;                        // * 2
+                    //NOP                                        // RAW break
+                    gr[5]  = gr[5] + gr[4];                     // + mm_out
+                    //NOP                                        // RAW break
+                    s1c[104 + pe] = gr[5];                      // mm_dsts[pe]
+                    //NOP                                        // s1c gap
+                    // max_words = max(max_words, out_n * 2).
+                    gr[11] = s1c[100 + pe]; //NOP               // out_n
+                    gr[5]  = gr[11] << 1;                       // w = out_n*2
+                    //NOP                                        // RAW break
+                    gr[11] = s1c[112]; //NOP                    // max_words
+                    if (gr[5] <= gr[11]) goto m35_mw_ok;        // bge
+                    //NOP                                        // slot 1 of bge
+                    s1c[112] = gr[5];                           // max_words = w
+                    //NOP                                        // s1c gap
+                m35_mw_ok:
+                    // cum += s1c[pe].
+                    gr[11] = s1c[pe]; //NOP                     // s1c[pe]
+                    gr[5]  = s1c[113]; //NOP                    // cum
+                    gr[5]  = gr[5] + gr[11];                    // cum + s1c[pe]
+                    //NOP                                        // RAW break
+                    s1c[113] = gr[5];                           // cum
+                    //NOP                                        // s1c gap
                 }
-                // Interleaved mvdq: chunk outer, PE inner
-                for (int j = 0; j < max_words; j += 8) {
-                    for (int pe = 0; pe < 4; pe++) {
-                        int words = out_ns[pe] * 2;
-                        if (j >= words) continue;
-                        int cnt = words - j;
-                        if (cnt > 8) cnt = 8;
-                        mvdq_copy(&mm[mm_dsts[pe] + j],
-                                  &spm[spm_srcs[pe] + j], cnt);
-                    }
+                // Chunk-outer/PE-inner mvdq: j = 0; j < max_words; j += 8.
+                gr[11] = 0; //NOP
+                s1c[115] = gr[11];                              // j = 0
+                //NOP                                            // s1c gap
+            m35_mvdq_top:
+                gr[11] = s1c[115]; //NOP                        // j
+                gr[5]  = s1c[112]; //NOP                        // max_words
+                if (gr[11] >= gr[5]) goto m35_mvdq_done;        // bge
+                //NOP                                            // slot 1 of bge
+                for (int pe = 0; pe < 4; pe++) {
+                    // words = out_n * 2.
+                    gr[5]  = s1c[100 + pe]; //NOP               // out_n
+                    gr[5]  = gr[5] << 1;                        // words
+                    //NOP                                        // RAW break
+                    gr[11] = s1c[115]; //NOP                    // j
+                    if (gr[11] >= gr[5]) goto m35_mvdq_pe_skip; // bge
+                    //NOP                                        // slot 1 of bge
+                    // cnt = min(8, words - j)  ->  gr[3].
+                    gr[3]  = gr[5] - gr[11];                    // words - j
+                    //NOP                                        // RAW break
+                    gr[5]  = 8; //NOP
+                    if (gr[3] <= gr[5]) goto m35_cnt_ok;        // bge
+                    //NOP                                        // slot 1 of bge
+                    gr[3]  = gr[5];                             // clamp 8
+                    //NOP                                        // RAW break
+                m35_cnt_ok:
+                    // cur_mm = mm_dsts[pe] + j.
+                    gr[5]  = s1c[115]; //NOP                    // j
+                    gr[11] = s1c[104 + pe]; //NOP               // mm_dst
+                    gr[11] = gr[11] + gr[5];                    // + j
+                    //NOP                                        // RAW break
+                    s1c[118] = gr[11];                          // cur_mm
+                    //NOP                                        // s1c gap
+                    // cur_spm = spm_srcs[pe] + j.
+                    gr[11] = s1c[108 + pe]; //NOP               // spm_src
+                    gr[11] = gr[11] + gr[5];                    // + j
+                    //NOP                                        // RAW break
+                    s1c[119] = gr[11];                          // cur_spm
+                    //NOP                                        // s1c gap
+                    // mvdq_copy(&mm[cur_mm], &spm[cur_spm], cnt).
+                    gr[5]  = s1c[118]; //NOP                    // cur_mm
+                    gr[11] = s1c[119]; //NOP                    // cur_spm
+                    mvdq_copy(&mm[gr[5]], &spm[gr[11]], gr[3]);
+                    // waitLSQ
+                m35_mvdq_pe_skip:
+                    (void)0;
                 }
-                for (int pe = 0; pe < 4; pe++)
-                    s1c[4+pe] += out_ns[pe];
-                gr[2] += MERGE_STEP;
+                // j += 8.
+                gr[11] = s1c[115]; //NOP                        // j
+                gr[11] = gr[11] + 8;
+                //NOP                                            // RAW break
+                s1c[115] = gr[11];
+                //NOP                                            // s1c gap
+                goto m35_mvdq_top;
+                //NOP                                            // slot 1 of goto
+            m35_mvdq_done:
+                // s1c[4+pe] += out_ns[pe].
+                for (int pe = 0; pe < 4; pe++) {
+                    gr[11] = s1c[100 + pe]; //NOP               // out_n
+                    gr[5]  = s1c[4 + pe]; //NOP                 // s1c[4+pe]
+                    gr[5]  = gr[5] + gr[11];
+                    //NOP                                        // RAW break
+                    s1c[4 + pe] = gr[5];
+                    //NOP                                        // s1c gap
+                }
+                // gr[2] += MERGE_STEP (addi).
+                gr[2] = gr[2] + MERGE_STEP;
+                //NOP                                            // RAW break
 #ifdef PLAN3C_TRACE_SNAPSHOT
                 // AC-9 Plan 3c frozen observable dump (m35 exit).
+                // Values now in s1c scratch; read back for the dump.
                 static std::ofstream snap35("plan3c_snapshot_m35.txt",
                                              std::ios::app);
                 for (int pe = 0; pe < 4; pe++) {
-                    snap35 << "m35 pe=" << pe << " out_n=" << out_ns[pe]
-                           << " mm_dst=" << mm_dsts[pe]
-                           << " spm_src=" << spm_srcs[pe] << "\n";
+                    // out_ns[pe] was decremented? No — s1c[100+pe]
+                    // still holds the original out_n since we only
+                    // updated s1c[4+pe] afterwards.
+                    int out_n = s1c[100 + pe];
+                    int mm_dst = s1c[104 + pe];
+                    int spm_src = s1c[108 + pe];
+                    snap35 << "m35 pe=" << pe << " out_n=" << out_n
+                           << " mm_dst=" << mm_dst
+                           << " spm_src=" << spm_src << "\n";
                 }
                 snap35 << "m35 s1c[0..7]=";
                 for (int i = 0; i <= 7; i++) snap35 << s1c[i] << ",";
                 snap35 << "\n";
-                snap35 << "m35 mm_out=" << mm_out << " cum_exit=" << cum
-                       << " max_words=" << max_words << "\n";
+                snap35 << "m35 mm_out=" << gr[4]
+                       << " cum_exit=" << s1c[113]
+                       << " max_words=" << s1c[112] << "\n";
 #endif
             }
         } else if (magic_id == 36) {
