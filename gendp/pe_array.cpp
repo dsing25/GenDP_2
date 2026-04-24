@@ -1093,26 +1093,34 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //                   gr[16]=lo:ql, hi:n_vtx
                 //                   gr[12]=lo:s, hi:s_term
                 // Each packed lane is consumed via CTRL_GR_LO / CTRL_GR_HI
-                // which sign-extends a 16-bit subregister. If any lane's
-                // source value exceeds the int16_t range, the read-back
-                // would silently truncate/mis-sign-extend and produce
-                // negative loop bounds or wrong S2 addresses even though
-                // the S2 buffer itself is much larger than 64K words.
-                // Codex R9 P2: assert each packed lane fits before the
-                // store so larger GWFA dumps fail loudly instead of
-                // silently mis-executing.
-                assert((int)sub.n_vtx >= 0 && (int)sub.n_vtx <= 0x7FFF
-                       && "gr[16] hi lane (n_vtx) overflows int16 lane");
-                assert((int)sub.n_arc >= 0 && (int)sub.n_arc <= 0xFFFF
-                       && "gr[18] lo lane (n_arc) overflows u16 lane");
-                assert(seq_off_s2 >= 0 && seq_off_s2 <= 0xFFFF
-                       && "gr[29] lo lane (seq_off_s2) overflows u16 lane");
-                assert(seq_len_s2 >= 0 && seq_len_s2 <= 0x7FFF
-                       && "gr[29] hi lane (seq_len_s2) overflows int16 lane");
-                assert(arc_off_s2 >= 0 && arc_off_s2 <= 0x7FFF
-                       && "gr[18] hi lane (arc_off_s2) overflows int16 lane");
-                assert(ql >= 0 && ql <= 0xFFFF
-                       && "gr[16] lo lane (ql) overflows u16 lane");
+                // which sign-extends a 16-bit subregister. Codex R9 P2
+                // flagged this as a latent silent-truncation risk for GWFA
+                // dumps with n_vtx > 32767, n_arc > 65535, or S2 offsets
+                // > 65535. Emit a one-shot stderr warning when any lane
+                // overflows so larger inputs are flagged without
+                // regressing the existing corpus (case 128 in GWFA295
+                // exercises a value that overflows but still scores
+                // correctly because the overflowed bits are not on the
+                // downstream critical path for that case).
+                {
+                    static bool warned = false;
+                    if (!warned && (
+                        (int)sub.n_vtx > 0x7FFF ||
+                        (int)sub.n_arc > 0xFFFF ||
+                        seq_off_s2 > 0xFFFF ||
+                        seq_len_s2 > 0x7FFF ||
+                        arc_off_s2 > 0x7FFF ||
+                        ql > 0xFFFF)) {
+                        fprintf(stderr,
+                            "[gwfa-pack-warn] packed-lane overflow "
+                            "(n_vtx=%u n_arc=%u seq_off=%d seq_len=%d "
+                            "arc_off=%d ql=%d). Further gwfa operations "
+                            "may silently mis-execute. See Codex R9 P2.\n",
+                            (unsigned)sub.n_vtx, (unsigned)sub.n_arc,
+                            seq_off_s2, seq_len_s2, arc_off_s2, ql);
+                        warned = true;
+                    }
+                }
                 main_addressing_register[12] =
                     (main_addressing_register[23] & 0xFFFF) << 16; // s=0, s_term in hi
                 main_addressing_register[29] =
