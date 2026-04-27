@@ -443,11 +443,10 @@ def wfa_main_instruction():
     f.write(NOP)
     f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, MAX_WF_LEN_LG2, 11, shifti_l))       # gr[11]=gr[11]<<lg2(MAX_WF_LEN)
     f.write(NOP)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                          # gr[2]+=gr[11]
+    # gr[2] += 3*gr[11] via mul (gr[5] scratch). Saves 1 VLIW pair vs 3 cascaded adds.
+    f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 3, 11, mul))                          # gr[5]=3*gr[11]
     f.write(NOP)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                          # gr[2]+=gr[11]
-    f.write(NOP)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                          # gr[2]+=gr[11]
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 5, 2, add))                           # gr[2]+=gr[5]
     f.write(NOP)
     f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 0, 0, MEM_BLOCK_SIZE, 6, bge))                # if MEM_BLOCK_SIZE >= gr[6], skip clamp
     f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 0, 0, MEM_BLOCK_SIZE, 6, bge))                # if MEM_BLOCK_SIZE >= gr[6], skip clamp
@@ -483,11 +482,10 @@ def wfa_main_instruction():
     f.write(NOP)
     f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, MAX_WF_LEN_LG2, 11, shifti_l))       # gr[11]=gr[11]<<lg2(MAX_WF_LEN)
     f.write(NOP)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 12, add))                         # gr[2]=gr[11]+gr[12]
+    # gr[2] = gr[12] + 3*gr[11] via mul (gr[5] scratch). Saves 1 VLIW pair vs 3 cascaded adds.
+    f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 3, 11, mul))                          # gr[5]=3*gr[11]
     f.write(NOP)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                          # gr[2]+=gr[11]
-    f.write(NOP)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                          # gr[2]+=gr[11]
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 5, 12, add))                          # gr[2]=gr[5]+gr[12]
     f.write(NOP)
     f.write(data_movement_instruction(S2, 0, 0, 0, 0, 2, 0, 0, MIN_INT, 0, mvdqi))                    # S2[gr[2]]..=MIN_INT
     f.write(NOP)
@@ -549,11 +547,10 @@ def wfa_main_instruction():
     f.write(NOP)
     f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, MAX_WF_LEN_LG2, 11, shifti_l))       # gr[11]=gr[11]<<lg2(MAX_WF_LEN)
     f.write(NOP)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                          # gr[2]+=gr[11]
+    # gr[2] += 3*gr[11] via mul (gr[5] scratch). Saves 1 VLIW pair vs 3 cascaded adds.
+    f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 3, 11, mul))                          # gr[5]=3*gr[11]
     f.write(NOP)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                          # gr[2]+=gr[11]
-    f.write(NOP)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                          # gr[2]+=gr[11]
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 5, 2, add))                           # gr[2]+=gr[5]
     f.write(NOP)
     f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 0, 0, MEM_BLOCK_SIZE, 6, bge))                # if MEM_BLOCK_SIZE >= gr[6], skip clamp
     f.write(data_movement_instruction(0, 0, 0, 0, 2, 0, 0, 0, MEM_BLOCK_SIZE, 6, bge))                # if MEM_BLOCK_SIZE >= gr[6], skip clamp
@@ -589,11 +586,10 @@ def wfa_main_instruction():
     f.write(NOP)
     f.write(data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, MAX_WF_LEN_LG2, 11, shifti_l))       # gr[11]=gr[11]<<lg2(MAX_WF_LEN)
     f.write(NOP)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 12, add))                         # gr[2]=gr[11]+gr[12]
+    # gr[2] = gr[12] + 3*gr[11] via mul (gr[5] scratch). Saves 1 VLIW pair vs 3 cascaded adds.
+    f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 3, 11, mul))                          # gr[5]=3*gr[11]
     f.write(NOP)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                          # gr[2]+=gr[11]
-    f.write(NOP)
-    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 11, 2, add))                          # gr[2]+=gr[11]
+    f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 5, 12, add))                          # gr[2]=gr[5]+gr[12]
     f.write(NOP)
     f.write(data_movement_instruction(S2, 0, 0, 0, 0, 2, 0, 0, MIN_INT, 0, mvdqi))                    # S2[gr[2]]..=MIN_INT
     f.write(NOP)

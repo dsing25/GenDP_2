@@ -1962,6 +1962,21 @@ m23_end:    ;
         printf("addi gr[%d] %d gr[%d] (%d %d %d)\t", rd, imm, rs2, sum, add_a, add_b);
 #endif
         (*PC)++;
+    } else if (opcode == CTRL_MUL) {       // mul rd rs2 imm/gr[imm]
+        // gr[rd] = op_a * gr[rs2] where op_a is sext_imm_1 (immBar=0)
+        // or gr[imm_1] (immBar=1). Slot-0 only by programmer contract.
+        rd = reg_imm_0;
+        rs2 = reg_1;
+        add_a = reg_immBar_flag_1 ? read_gr_src(src, reg_imm_1) : sext_imm_1;
+        add_b = read_gr_src(src, rs2);
+        sum = add_a * add_b;
+        set_output_dest(dest, rd, sum);
+#ifdef PROFILE
+        printf("mul gr[%d] %s%d gr[%d] (%d %d %d)\t", rd,
+               reg_immBar_flag_1 ? "gr[" : "", reg_immBar_flag_1 ? reg_imm_1 : sext_imm_1,
+               rs2, sum, add_a, add_b);
+#endif
+        (*PC)++;
     } else if (opcode == CTRL_SET_8) {   // set_8 reg[rd]/gr[rd] = imm8 broadcast
         // Writes (imm8 & 0xFF) * 0x01010101 into the destination so one op
         // materializes a 4-lane byte constant for the SIMD compute path

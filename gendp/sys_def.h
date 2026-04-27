@@ -168,6 +168,8 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_RETNE 28
 // mv2: unswizzled, virtual-addressed 2-bit extract (GSSW path).
 #define CTRL_MV2 29
+// gr[rd] = gr[rs2] * (immBar_1 ? gr[imm_1] : sext_imm_1). Slot-0 only.
+#define CTRL_MUL 30
 
 // DEST/SRCS
 #define CTRL_REG 0
