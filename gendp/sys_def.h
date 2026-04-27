@@ -166,6 +166,8 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_CALL 26
 #define CTRL_RET 27
 #define CTRL_RETNE 28
+// mv2: unswizzled, virtual-addressed 2-bit extract (GSSW path).
+#define CTRL_MV2 29
 
 // DEST/SRCS
 #define CTRL_REG 0
