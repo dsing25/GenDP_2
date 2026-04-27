@@ -1,0 +1,9 @@
+=== GWFA fast mode ===
+Loading dataset for 15 cases...
+Running 15 cases with 56 threads...
+  progress: 10/15
+  progress: 15/15
+
+==================================================
+Results: 15 passed, 0 failed out of 15
+==================================================

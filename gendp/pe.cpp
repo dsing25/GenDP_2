@@ -15,6 +15,9 @@ extern "C" {
 #include "gwfa_stub.h"
 #endif
 #include <iostream>
+#ifdef PLAN3D_TRACE_SNAPSHOT
+#include <fstream>
+#endif
 
 bool check_legal_mv(int src, int dest) {
     //TODO come back and add this. Right now some traces (cough cough poa) are illegal
@@ -1634,6 +1637,20 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                     }
                 }
             }
+#ifdef PLAN3D_TRACE_SNAPSHOT
+            // Frozen observable dump: MERGE_META[0..8] + spm[976..983].
+            {
+                static std::ofstream snap22("plan3d_snapshot_pe22.txt",
+                                             std::ios::app);
+                snap22 << "pe22 pe=" << id;
+                for (int i = 0; i <= 8; i++)
+                    snap22 << " MM[" << i << "]=" << spm[MERGE_META + i];
+                snap22 << " spm976_981=";
+                for (int i = 976; i <= 981; i++) snap22 << spm[i] << ",";
+                snap22 << " spm982=" << spm[982]
+                       << " spm983=" << spm[983] << "\n";
+            }
+#endif
         } else if (magic_id == 23) {
             // Tiled dedup: state machine with TILE_SIZE counter,
             // dual input ping-pong, inline intv merge-adjacent.
@@ -1671,6 +1688,21 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             int ib = iw ? DEDUP_INTV_BUF1  : DEDUP_INTV_BUF0;
             int p = 0;  // processed counter
             bool ad = false, ai = false;  // all_diag/intv done
+#ifdef PLAN3D_TRACE_SNAPSHOT
+            {
+                static int dumped_entry[4] = {0, 0, 0, 0};
+                if ((magic_mask & 1) == 0 && !dumped_entry[id]) {
+                    static std::ofstream snap23(
+                        "plan3d_snapshot_pe23.txt", std::ios::app);
+                    snap23 << "pe23 pe=" << id << " phase=entry";
+                    for (int i = 0; i < 20; i++)
+                        snap23 << " dm[" << i << "]="
+                               << spm[DEDUP_META + i];
+                    snap23 << "\n";
+                    dumped_entry[id] = 1;
+                }
+            }
+#endif
 
             // --- Inline helpers (no lambdas for ISA lowering) ---
             // Cycle-accounting convention: each code line = 1 gendp
@@ -1903,6 +1935,21 @@ m23_C_done_all:
 
             M23_SAVE;
 m23_end:    ;
+#ifdef PLAN3D_TRACE_SNAPSHOT
+            {
+                static int dumped_exit[4] = {0, 0, 0, 0};
+                if ((magic_mask & 1) == 0 && !dumped_exit[id]) {
+                    static std::ofstream snap23(
+                        "plan3d_snapshot_pe23.txt", std::ios::app);
+                    snap23 << "pe23 pe=" << id << " phase=exit";
+                    for (int i = 0; i < 20; i++)
+                        snap23 << " dm[" << i << "]="
+                               << spm[DEDUP_META + i];
+                    snap23 << "\n";
+                    dumped_exit[id] = 1;
+                }
+            }
+#endif
             #undef M23_SAVE
             #undef M23_SAVE_LIGHT
             #undef M23_SAVE_OUT
@@ -2086,6 +2133,35 @@ m23_end:    ;
                     }
                 }
             }
+#ifdef PLAN3D_TRACE_SNAPSHOT
+            // Frozen observable dump: FIN0_META + first N words of A/B/HA.
+            {
+                static std::ofstream snap19("plan3d_snapshot_pe19.txt",
+                                             std::ios::app);
+                snap19 << "pe19 pe=" << id;
+                for (int i = 0; i <= 4; i++)
+                    snap19 << " META[" << i << "]=" << fspm[FIN0_META + i];
+                snap19 << "\n";
+                int dA = (n_A < 8) ? n_A : 8;
+                snap19 << "pe19 pe=" << id << " A=";
+                for (int i = 0; i < dA; i++)
+                    snap19 << fspm[FIN0_OUT + 2*i] << ","
+                           << fspm[FIN0_OUT + 2*i + 1] << ";";
+                snap19 << "\n";
+                int dB = (n_B < 8) ? n_B : 8;
+                snap19 << "pe19 pe=" << id << " B=";
+                for (int i = 0; i < dB; i++)
+                    snap19 << fspm[FIN0_OUT_SIZE-2-2*i] << ","
+                           << fspm[FIN0_OUT_SIZE-1-2*i] << ";";
+                snap19 << "\n";
+                int dH = (n_HA < 8) ? n_HA : 8;
+                snap19 << "pe19 pe=" << id << " HA=";
+                for (int i = 0; i < dH; i++)
+                    snap19 << fspm[FIN0_OUT_HA + 2*i] << ","
+                           << fspm[FIN0_OUT_HA + 2*i + 1] << ";";
+                snap19 << "\n";
+            }
+#endif
         m19_done: ;
         }
         (*PC)++;

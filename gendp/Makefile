@@ -44,6 +44,10 @@ ifeq ($(plan3c_snap),1)
 CXXFLAGS+= -DPLAN3C_TRACE_SNAPSHOT
 endif
 
+ifeq ($(plan3d_snap),1)
+CXXFLAGS+= -DPLAN3D_TRACE_SNAPSHOT
+endif
+
 # GWFA seam / clamp tracing. Off by default (otherwise thousands of
 # stderr lines dominate routine -k 7 runs). Enable with
 # `make gwfa_seam_trace=1` for debugging the m29/m31 seam handshake.
@@ -102,6 +106,9 @@ CXXFLAGS_O3 += -DGWFA_SEAM_TRACE
 endif
 ifeq ($(plan3c_snap),1)
 CXXFLAGS_O3 += -DPLAN3C_TRACE_SNAPSHOT
+endif
+ifeq ($(plan3d_snap),1)
+CXXFLAGS_O3 += -DPLAN3D_TRACE_SNAPSHOT
 endif
 TARGET_O3 = sim_o3
 OBJECT_O3 = $(OBJECT:.o=_o3.o)
