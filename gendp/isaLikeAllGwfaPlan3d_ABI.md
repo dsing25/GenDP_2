@@ -255,28 +255,37 @@ controller-visible and controller-handshake subsets remain in SPM.
 
 ### 4.1 Slot disposition
 
+Round 9c amendment relocates the original DEC-1 reg[1..10] mapping to
+`reg[16..27]` because reg[1..11] are clobbered between consecutive PE 23
+dedup phases by PE 8 (frozen ref `pe.cpp:890-891`) and PE 13 (frozen ref
+`pe.cpp:1226-1227`), which fire every multi-step GWFA expansion iteration.
+Half-register packing for dw/iw and state/pdone is dropped (separate
+full-int registers per slot, eliminating bit-packing arithmetic risk).
+Round 9a amendment additionally reserves `reg[12]` as the per-case init
+cookie (see Section 4.3).
+
 | Slot           | Semantic                                  | Disposition under DEC-1                                                            | Persistence evidence              |
 |----------------|-------------------------------------------|------------------------------------------------------------------------------------|-----------------------------------|
-| DEDUP_META+0   | pv (packed prev-vd)                       | **MOVED** to reg[1] register-resident across PING/PONG calls within a single case | gwfa_instruction_generator.py:666-688 envelope only writes gr[10] |
-| DEDUP_META+1   | pk (prev k)                               | **MOVED** to reg[2]                                                                 | (same envelope evidence)          |
+| DEDUP_META+0   | pv (packed prev-vd)                       | **MOVED** to reg[16] register-resident across PING/PONG calls within a single case | gwfa_instruction_generator.py:666-688 envelope only writes gr[10] |
+| DEDUP_META+1   | pk (prev k)                               | **MOVED** to reg[17]                                                                | (same envelope evidence)          |
 | DEDUP_META+2   | n_do (controller-visible diag-out count)  | **UNCHANGED** in SPM                                                                | Read by controller magic 31 at `pe_array.cpp:6282-6302` |
 | DEDUP_META+3   | n_io (controller-visible intv-out count)  | **UNCHANGED** in SPM                                                                | Read by controller magic 31 at `pe_array.cpp:6282-6302` |
-| DEDUP_META+4   | dc (diag cursor)                          | **MOVED** to reg[3]                                                                 | (envelope evidence)               |
-| DEDUP_META+5   | ic (intv cursor)                          | **MOVED** to reg[4]                                                                 | (envelope evidence)               |
-| DEDUP_META+6   | dw (diag ping-pong selector 0/1)          | **MOVED** to reg[5] half-reg lo                                                     | (envelope evidence)               |
-| DEDUP_META+7   | iw (intv ping-pong selector 0/1)          | **MOVED** to reg[5] half-reg hi                                                     | (envelope evidence)               |
+| DEDUP_META+4   | dc (diag cursor)                          | **MOVED** to reg[18]                                                                | (envelope evidence)               |
+| DEDUP_META+5   | ic (intv cursor)                          | **MOVED** to reg[19]                                                                | (envelope evidence)               |
+| DEDUP_META+6   | dw (diag ping-pong selector 0/1)          | **MOVED** to reg[20] full int (no half-pack — Round 9c)                             | (envelope evidence)               |
+| DEDUP_META+7   | iw (intv ping-pong selector 0/1)          | **MOVED** to reg[21] full int (no half-pack — Round 9c)                             | (envelope evidence)               |
 | DEDUP_META+8   | dead (kept zero by magic 32)              | **UNCHANGED** in SPM (dead, kept 0)                                                 | Plan 2b Milestone B               |
 | DEDUP_META+9   | dead (kept zero by magic 32)              | **UNCHANGED** in SPM (dead, kept 0)                                                 | Plan 2b Milestone B               |
 | DEDUP_META+10  | dtn (diag tile current count)             | **UNCHANGED** in SPM                                                                | Read/write by controller magics 30/31 at `pe_array.cpp:5817-5916, 6163-6184` |
 | DEDUP_META+11  | don_ (diag tile other-buffer count)       | **UNCHANGED** in SPM                                                                | (same controller refill evidence) |
 | DEDUP_META+12  | itn (intv tile current count)             | **UNCHANGED** in SPM                                                                | (same controller refill evidence) |
 | DEDUP_META+13  | ion (intv tile other-buffer count)        | **UNCHANGED** in SPM                                                                | (same controller refill evidence) |
-| DEDUP_META+14  | clo (current intv lo)                     | **MOVED** to reg[6]                                                                 | (envelope evidence)               |
-| DEDUP_META+15  | chi (current intv hi)                     | **MOVED** to reg[7]                                                                 | (envelope evidence)               |
-| DEDUP_META+16  | state (0=X, 1=B, 2=C)                     | **MOVED** to reg[8] half-reg lo                                                     | (envelope evidence)               |
-| DEDUP_META+17  | pdone (1=done across all calls)           | **MOVED** to reg[8] half-reg hi                                                     | (envelope evidence)               |
-| DEDUP_META+18  | nv (next vd)                              | **MOVED** to reg[9]                                                                 | (envelope evidence)               |
-| DEDUP_META+19  | nk (next k)                               | **MOVED** to reg[10]                                                                | (envelope evidence)               |
+| DEDUP_META+14  | clo (current intv lo)                     | **MOVED** to reg[22]                                                                | (envelope evidence)               |
+| DEDUP_META+15  | chi (current intv hi)                     | **MOVED** to reg[23]                                                                | (envelope evidence)               |
+| DEDUP_META+16  | state (0=X, 1=B, 2=C)                     | **MOVED** to reg[24] full int (no half-pack — Round 9c)                             | (envelope evidence)               |
+| DEDUP_META+17  | pdone (1=done across all calls)           | **MOVED** to reg[25] full int (no half-pack — Round 9c)                             | (envelope evidence)               |
+| DEDUP_META+18  | nv (next vd)                              | **MOVED** to reg[26]                                                                | (envelope evidence)               |
+| DEDUP_META+19  | nk (next k)                               | **MOVED** to reg[27]                                                                | (envelope evidence)               |
 
 ### 4.2 Persistence evidence (mandatory citation)
 
@@ -306,18 +315,35 @@ single test case — rests on:
 ### 4.3 Constraints and invariants
 
 - `gr[10]` excluded from any DEC-1 reservation. RESERVED for sync.
-- The PE 23 magic body MUST initialize the register-resident state
-  on the first call within a case. The plan's lowering pattern is:
-  `pe::reset()` clears regs to 0 → first PE 23 call sees pv=0 (treat
-  as 0xFFFFFFFFU sentinel via constant load), state=0 (X), pdone=0,
-  cursors=0, selectors=0. All values are valid initial states. No
-  separate "first call" gating is required; the constant-load on
-  every entry is overwritten by the SAVE writes near the labels
-  `m23_X / m23_B / m23_C` only on subsequent calls within the case
-  by virtue of register persistence. This contract is the inverse
-  of the SPM-resident pattern (SPM persists across calls AND across
-  cases until magic 32 zeroes it; registers persist only across
-  calls within a case).
+- **First-call init cookie (Round 9a amendment).** `reg[12]` gates
+  the entry sequence:
+  - `pe::reset()` at case boundary clears all regs to 0, so on the
+    first PE 23 call within a case `reg[12] == 0`.
+  - First-call entry path (`reg[12] == 0`): seed `reg[16..27]` from
+    `spm[DEDUP_META+0/+1/+4/+5/+6/+7/+14..+19]` (the moved-slot SPM
+    copy that magic 29 / magic 32 maintain at case boundaries — pv
+    seeded to 0xFFFFFFFFU sentinel by magic 29, the rest seeded to
+    0). Then write `reg[12] = 1` to mark the cookie consumed.
+  - Subsequent-call entry path (`reg[12] == 1`): use the
+    register-resident `reg[16..27]` directly; do NOT re-load from
+    SPM. The SPM moved-slot copy is stale on subsequent calls
+    because the SAVE path no longer writes back to SPM for the
+    moved slots.
+  - The cookie is required because `pv == 0` is a legitimate diag
+    value (vd=0 in the packed encoding) and cannot itself be used
+    as a sentinel for "first call this case"; only `reg[12]` can
+    distinguish the magic-29 sentinel-load case from a register
+    value that has been overwritten by prior PE 23 SAVE writes.
+- **Save path semantics under DEC-1.** Every PE 23 yield (every
+  `goto m23_end`) MUST funnel through a single SAVE label that
+  updates `reg[16..27]` (the moved-slot register copy) and writes
+  `DEDUP_META+2/+3` (controller-visible counts) plus
+  `DEDUP_META+10..+13` (controller refill/writeback) to SPM. The
+  moved slots `+0/+1/+4/+5/+6/+7/+14..+19` are NOT written back to
+  SPM on yield — register-resident only. This contract is the
+  inverse of the SPM-resident pattern (SPM persists across calls
+  AND across cases until magic 32 zeroes it; registers persist
+  only across calls within a case).
 - `DEDUP_META+2/+3` writes (n_do, n_io publish) MUST land in the
   PE 23 magic body epilogue in EVERY call (PING and PONG). These
   are controller-visible and required by magic 31 read.
