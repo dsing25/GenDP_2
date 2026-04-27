@@ -2120,12 +2120,12 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // are the correct values for the next entry.
             #define M23_SAVE_LIGHT do { M23_SAVE_OUT; } while(0)
 
-            if (pdone) { M23_SAVE_LIGHT; goto m23_end; }
+            if (pdone) goto m23_save_light_and_exit;
             if (state == 1) goto m23_B;
             if (state == 2) goto m23_C;
 
             // --- State X: merge same-vd diags ---
-m23_X:      if (p >= DEDUP_TILE) { state = 0; M23_SAVE; goto m23_end; }
+m23_X:      if (p >= DEDUP_TILE) { state = 0; goto m23_save_full_and_exit; }
             { uint32_t vd; int k;
               M23_RD(vd, k, m23_X_diags_done);
               if (pv == 0xFFFFFFFFU) { pv = vd; pk = k; goto m23_X; }
@@ -2145,7 +2145,7 @@ m23_B_loop:
                 { uint32_t lo, hi;
                   M23_RI(lo, hi, m23_B_done);
                   if (p >= DEDUP_TILE) {
-                      clo = lo; chi = hi; M23_SAVE; goto m23_end;
+                      clo = lo; chi = hi; goto m23_save_full_and_exit;
                   }
                   clo = lo; chi = hi;
                 }
@@ -2158,7 +2158,7 @@ m23_B_peek:
                   uint32_t d1, d2;
                   M23_RI(d1, d2, m23_B_peek_done);
                   if (h2 > chi) chi = h2;
-                  if (p >= DEDUP_TILE) { M23_SAVE; goto m23_end; }
+                  if (p >= DEDUP_TILE) { goto m23_save_full_and_exit; }
                   goto m23_B_peek;
               }
             }
@@ -2190,12 +2190,12 @@ m23_B_done:
 
             // --- State C: drain remaining intervals ---
 m23_C:      state = 2;
-m23_C_loop: if (p >= DEDUP_TILE) { M23_SAVE; goto m23_end; }
+m23_C_loop: if (p >= DEDUP_TILE) { goto m23_save_full_and_exit; }
             if (clo == 0xFFFFFFFFU) {
                 { uint32_t lo, hi;
                   M23_RI(lo, hi, m23_C_done_all);
                   if (p >= DEDUP_TILE) {
-                      clo = lo; chi = hi; M23_SAVE; goto m23_end;
+                      clo = lo; chi = hi; goto m23_save_full_and_exit;
                   }
                   clo = lo; chi = hi;
                 }
@@ -2207,7 +2207,7 @@ m23_C_peek:
                   uint32_t d1, d2;
                   M23_RI(d1, d2, m23_C_flush_last);
                   if (hi > chi) chi = hi;
-                  if (p >= DEDUP_TILE) { M23_SAVE; goto m23_end; }
+                  if (p >= DEDUP_TILE) { goto m23_save_full_and_exit; }
                   goto m23_C_peek;
               }
               // Disjoint: flush cur_intv, start new. AC-8 mvd site:
@@ -2220,7 +2220,7 @@ m23_C_peek:
               { uint32_t d1, d2;
                 M23_RI(d1, d2, m23_C_done_all);
                 clo = d1; chi = d2;
-                if (p >= DEDUP_TILE) { M23_SAVE; goto m23_end; }
+                if (p >= DEDUP_TILE) { goto m23_save_full_and_exit; }
               }
               goto m23_C_peek;
             }
@@ -2233,9 +2233,17 @@ m23_C_flush_last:
                 n_io++; clo = 0xFFFFFFFFU;
             }
 m23_C_done_all:
-            pdone = 1; M23_SAVE; goto m23_end;
+            pdone = 1; goto m23_save_full_and_exit;
 
+            // Single-exit save funnels (Plan 3d Round 1). Every yield
+            // path must funnel through one of these two labels so the
+            // SAVE semantics are not duplicated inline at each goto
+            // site. Prepares for DEC-1 register-residency rewrite.
+m23_save_full_and_exit:
             M23_SAVE;
+            goto m23_end;
+m23_save_light_and_exit:
+            M23_SAVE_LIGHT;
 m23_end:    ;
 #ifdef PLAN3D_TRACE_SNAPSHOT
             {
