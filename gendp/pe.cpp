@@ -1555,12 +1555,41 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //NOP                                          // SPM settle
 
             // bin_cursors[b] = 0 (SPM) + tile_bin_counts[b] = 0 (SPM)
-            // (constexpr macro unroll over compile-time SORT_RADIX_BINS=16)
-            for (int b = 0; b < SORT_RADIX_BINS; b++) {
-                spm[SORT_META + 16 + b] = 0;       // tile_bin_counts[b]
-                spm[SORT_META + BIN_CUR_OFF + b] = 0;  // bin_cursors[b]
-                //NOP
-            }
+            // Round 4 fix: literal-unrolled 16-store init (no runtime
+            // for-loop in lowered magic body per AC-4). Pairs of stores
+            // separated by `//NOP` to keep SPM port utilization sane.
+            spm[SORT_META + 16] = 0;             spm[SORT_META + BIN_CUR_OFF +  0] = 0;
+            //NOP
+            spm[SORT_META + 17] = 0;             spm[SORT_META + BIN_CUR_OFF +  1] = 0;
+            //NOP
+            spm[SORT_META + 18] = 0;             spm[SORT_META + BIN_CUR_OFF +  2] = 0;
+            //NOP
+            spm[SORT_META + 19] = 0;             spm[SORT_META + BIN_CUR_OFF +  3] = 0;
+            //NOP
+            spm[SORT_META + 20] = 0;             spm[SORT_META + BIN_CUR_OFF +  4] = 0;
+            //NOP
+            spm[SORT_META + 21] = 0;             spm[SORT_META + BIN_CUR_OFF +  5] = 0;
+            //NOP
+            spm[SORT_META + 22] = 0;             spm[SORT_META + BIN_CUR_OFF +  6] = 0;
+            //NOP
+            spm[SORT_META + 23] = 0;             spm[SORT_META + BIN_CUR_OFF +  7] = 0;
+            //NOP
+            spm[SORT_META + 24] = 0;             spm[SORT_META + BIN_CUR_OFF +  8] = 0;
+            //NOP
+            spm[SORT_META + 25] = 0;             spm[SORT_META + BIN_CUR_OFF +  9] = 0;
+            //NOP
+            spm[SORT_META + 26] = 0;             spm[SORT_META + BIN_CUR_OFF + 10] = 0;
+            //NOP
+            spm[SORT_META + 27] = 0;             spm[SORT_META + BIN_CUR_OFF + 11] = 0;
+            //NOP
+            spm[SORT_META + 28] = 0;             spm[SORT_META + BIN_CUR_OFF + 12] = 0;
+            //NOP
+            spm[SORT_META + 29] = 0;             spm[SORT_META + BIN_CUR_OFF + 13] = 0;
+            //NOP
+            spm[SORT_META + 30] = 0;             spm[SORT_META + BIN_CUR_OFF + 14] = 0;
+            //NOP
+            spm[SORT_META + 31] = 0;             spm[SORT_META + BIN_CUR_OFF + 15] = 0;
+            //NOP
 
             gr.st(1, 0, CTRL_GR_LO);
 

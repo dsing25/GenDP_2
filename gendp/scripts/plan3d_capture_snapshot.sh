@@ -23,7 +23,7 @@ mkdir -p "$FROZEN_DIR"
 
 echo "[plan3d-snap] make clean + rebuild with plan3d_snap=1"
 make clean > /dev/null 2>&1
-make -j ADDRESS_SANITIZER=0 plan3d_snap=1 > ${TMPDIR:-/tmp}/plan3d_snap_build.log 2>&1
+make -j ADDRESS_SANITIZER=0 WITH_GWFA=1 plan3d_snap=1 sim > ${TMPDIR:-/tmp}/plan3d_snap_build.log 2>&1
 if [ $? -ne 0 ]; then
     echo "BUILD FAILED (see ${TMPDIR:-/tmp}/plan3d_snap_build.log)"
     exit 1
@@ -48,7 +48,7 @@ done
 
 echo "[plan3d-snap] rebuilding without snapshot flag (restore default sim)"
 make clean > /dev/null 2>&1
-make -j ADDRESS_SANITIZER=0 > ${TMPDIR:-/tmp}/plan3d_snap_restore.log 2>&1
+make -j ADDRESS_SANITIZER=0 WITH_GWFA=1 sim > ${TMPDIR:-/tmp}/plan3d_snap_restore.log 2>&1
 
 echo "[plan3d-snap] done. Files in $FROZEN_DIR:"
 ls -la "$FROZEN_DIR" | grep plan3d_snapshot
