@@ -156,12 +156,29 @@ Notes on table:
 ### 3.2 PE `reg[]` slots
 
 `reg[]` is the PE compute-side register file (32 slots,
-`reg[0..31]`). Plan 3d uses two disjoint regions of this file:
-- **`reg[0..15]`** for cross-magic state that must persist across ISA
-  lines and survive M23_RD / M23_RI / M23_PI macro boundaries (PE 23
-  DEC-1 register-residency state).
-- **`reg[16..31]`** as the PE 21 sort-cursor band (Section 3.3); not
-  used by any other Plan 3d magic.
+`reg[0..31]`). Plan 3d (post Round 9c + Round 3 amendments) uses
+three disjoint regions:
+- **`reg[16..27]`** for PE 23 cross-call DEC-1 register-residency
+  state (pv/pk/dc/ic/dw/iw/clo/chi/state/pdone/nv/nk; persists across
+  PE 23 PING/PONG calls within a per-step dedup phase, gated by the
+  `spm[DEDUP_META+8]` cookie protocol of Section 4.3).
+- **`reg[1..15]`** and **`reg[28..31]`** for PE 23 within-call state
+  (M23_RD/RI/PI macro outputs + PI temps + body locals
+  p/n_do/n_io/dtn/don_/itn/ion/db/ib/ad/ai). PE 23 always writes
+  these slots at entry before reading on each call, so cross-magic
+  clobber by PE 8/13/19 is safe.
+- **`reg[0]`** is the hardwired-zero slot (preserved across all
+  magics).
+
+PE 21 sort cursors do NOT occupy any reg[] slot post Round 3 — they
+moved to SPM (see Section 3.3 below). The original `reg[16..31]` PE
+21 bin_cursors allocation was superseded by Round 3, freeing the
+band first for PE 23 DEC-1 (reg[16..27], Round 9c) and then for PE
+23 within-call body locals (reg[28..31], Round 3).
+
+Compute instructions are deferred per rule 12; this artifact only
+reserves `reg[]` slots for addressing-trace state used by lowered
+magic bodies (loads / stores / scalar arithmetic on `reg[]`).
 
 Compute instructions are deferred per rule 12; this artifact only
 reserves `reg[]` slots for addressing-trace state used by lowered
@@ -171,8 +188,7 @@ magic bodies (loads / stores / scalar arithmetic on `reg[]`).
 |---------------|-------|--------------------------------------------------------------|--------|
 | reg[0]        | -     | hardwired 0                                                  | PRESERVED |
 | reg[1..15]    | (frozen reference m8/m13 cross-call; m23 within-call macro temp + body-local scratch — Round 3 amendment) | reg[1..11] are written by PE 8 (frozen ref pe.cpp:890-891 sets reg[10]=gs_base, reg[11]=q_base; m8_outer_loop body sets reg[1, 2, 6, 7, 8, 9]) and PE 13 (frozen ref pe.cpp:1226-1227 sets reg[10]=gs_base, reg[11]=q_base; m13 body sets reg[1, 6, 7]). DEC-1 cross-call state therefore CANNOT use reg[1..10] (clobbered between PE 23 calls). Round 9c amendment relocates DEC-1 state to reg[16..27]. Round 3 amendment claims reg[1..15] (and reg[28..31]) for m23 WITHIN-CALL state: reg[1]=M23_RI lo, reg[2]=M23_RI hi, reg[3]=M23_PI lo, reg[4]=M23_PI hi, reg[5]=M23_PI tc_, reg[6]=M23_PI tw_, reg[7]=M23_PI tt_, reg[8]=M23_PI tb_, reg[9]=p, reg[10]=n_do, reg[11]=n_io, reg[12]=dtn, reg[13]=don_, reg[14]=itn, reg[15]=ion. Within-call use is safe because PE 23 always writes these slots at entry before reading. | EXTENDED  |
-| reg[11]       | m8/m13 | q_base (gwfa frozen reference; not used by m22/m23)         | PRESERVED |
-| reg[12..15]   | -     | reserved; available for waiver-driven temp expansion. (Round 2 amendment supersedes the Round 9a `reg[12]` per-case init cookie: DEC-1 now uses the SPM-resident `DEDUP_META+8` per-step phase cookie set by controller magic 29 — see Section 4.3 — so a per-case PE-side cookie is redundant and reg[12] is freed.) | NEW       |
+| reg[11]       | m8/m13 | q_base (gwfa frozen reference; not used by m22/m23) — m23 within-call: see reg[1..15] row | PRESERVED |
 | reg[16]       | m23   | pv (DEDUP_META+0), DEC-1 register-resident — Round 9c       | NEW       |
 | reg[17]       | m23   | pk (DEDUP_META+1), DEC-1 register-resident — Round 9c       | NEW       |
 | reg[18]       | m23   | dc (DEDUP_META+4), DEC-1 register-resident — Round 9c       | NEW       |
