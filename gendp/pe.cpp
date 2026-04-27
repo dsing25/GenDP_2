@@ -1827,13 +1827,41 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // order as the original (b=0 hi → b=0 lo → b=1 hi → b=1 lo
             // → b=2 hi → b=2 lo). Uses bvd_0 / bvd_1 / bvd_2 register
             // homes (post-AC-3 elimination of bvd[3]).
+            // Round 4 reviewer P0 fix: each `if (spm[...] < 0 && ...)`
+            // line packs SPM load + cmp + cond-store; without explicit
+            // settle the SPM 2-cycle latency is violated. Restructured:
+            // load `probe_X` into a local, settle 2 cycles, compare,
+            // conditional store, port-gap NOP between adjacent SPM ops.
             { int gpos = pe_global_base + cum_oi + oi - 1;
-              if (spm[976] < 0 && out_hi >  bvd_0) spm[976] = gpos;
-              if (spm[979] < 0 && out_lo >= bvd_0) spm[979] = gpos;
-              if (spm[977] < 0 && out_hi >  bvd_1) spm[977] = gpos;
-              if (spm[980] < 0 && out_lo >= bvd_1) spm[980] = gpos;
-              if (spm[978] < 0 && out_hi >  bvd_2) spm[978] = gpos;
-              if (spm[981] < 0 && out_lo >= bvd_2) spm[981] = gpos;
+              int probe_h0 = spm[976];
+              //NOP                                       // SPM settle
+              //NOP                                       // SPM settle
+              if (probe_h0 < 0 && out_hi >  bvd_0) spm[976] = gpos;
+              //NOP                                       // SPM port gap
+              int probe_l0 = spm[979];
+              //NOP
+              //NOP
+              if (probe_l0 < 0 && out_lo >= bvd_0) spm[979] = gpos;
+              //NOP                                       // SPM port gap
+              int probe_h1 = spm[977];
+              //NOP
+              //NOP
+              if (probe_h1 < 0 && out_hi >  bvd_1) spm[977] = gpos;
+              //NOP                                       // SPM port gap
+              int probe_l1 = spm[980];
+              //NOP
+              //NOP
+              if (probe_l1 < 0 && out_lo >= bvd_1) spm[980] = gpos;
+              //NOP                                       // SPM port gap
+              int probe_h2 = spm[978];
+              //NOP
+              //NOP
+              if (probe_h2 < 0 && out_hi >  bvd_2) spm[978] = gpos;
+              //NOP                                       // SPM port gap
+              int probe_l2 = spm[981];
+              //NOP
+              //NOP
+              if (probe_l2 < 0 && out_lo >= bvd_2) spm[981] = gpos;
             }
             // Post-emit exhaustion check (rare path).
             if (ai >= a_n) goto m22_switch_a;
@@ -2256,6 +2284,8 @@ m23_end:    ;
                     int packed_vw = fspm[arc_off];
                     int ow = fspm[arc_off + 1];
                     int ts_off = fspm[arc_off + 2];
+                    //NOP                                          // SPM 2-cycle settle (Round 4 reviewer P0)
+                    //NOP                                          // SPM 2-cycle settle (Round 4 reviewer P0)
                     uint32_t w = (uint32_t)packed_vw >> 16;   // half-reg hi
 
                     // Hash check: scan bucket for key
@@ -2264,15 +2294,24 @@ m23_end:    ;
                     int *bkt = &fspm[FIN0_HA + 4*arc_idx];
                     int absent = -1;
                     // Bucket 4-slot probe: macro-unrolled (AC-4).
+                    // Each `bkt[i]` SPM read is followed by 2-cycle
+                    // SPM settle NOPs before the compare/branch consumer
+                    // (Round 4 reviewer P0). Insertion writes are
+                    // separated by SPM port-gap NOPs.
                     // i = 0
-                    if ((uint32_t)bkt[0] == hkey) {
+                    int probe0 = bkt[0];
+                    //NOP                                          // SPM settle
+                    //NOP                                          // SPM settle
+                    if ((uint32_t)probe0 == hkey) {
                         absent = 0; goto m19_bkt_done;
                     }
-                    if (bkt[0] != (int)0xFFFFFFFF) goto m19_bkt_1;
+                    if (probe0 != (int)0xFFFFFFFF) goto m19_bkt_1;
                     {
                         bkt[0] = (int)hkey;
+                        //NOP                                      // SPM port gap
                         absent = 1;
                         fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
+                        //NOP                                      // SPM port gap
                         uint32_t h2 = hkey * 2654435769U >> (32 - 22);
                         uint32_t b = (h2 >> 2) & 0xFFFFF;
                         b |= (1u << 20);   // bucket-0 = new-bucket flag
@@ -2281,30 +2320,40 @@ m23_end:    ;
                         goto m19_bkt_done;
                     }
                 m19_bkt_1:
-                    if ((uint32_t)bkt[1] == hkey) {
+                    {
+                    int probe1 = bkt[1];
+                    //NOP                                          // SPM settle
+                    //NOP                                          // SPM settle
+                    if ((uint32_t)probe1 == hkey) {
                         absent = 0; goto m19_bkt_done;
                     }
-                    if (bkt[1] != (int)0xFFFFFFFF) goto m19_bkt_2;
-                    {
-                        bkt[1] = (int)hkey;
-                        absent = 1;
-                        fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
-                        uint32_t h2 = hkey * 2654435769U >> (32 - 22);
-                        uint32_t b = (h2 >> 2) & 0xFFFFF;
-                        // i != 0: no new-bucket flag
-                        fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
-                        n_HA++;
-                        goto m19_bkt_done;
+                    if (probe1 != (int)0xFFFFFFFF) goto m19_bkt_2;
+                    bkt[1] = (int)hkey;
+                    //NOP                                          // SPM port gap
+                    absent = 1;
+                    fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
+                    //NOP                                          // SPM port gap
+                    uint32_t h2 = hkey * 2654435769U >> (32 - 22);
+                    uint32_t b = (h2 >> 2) & 0xFFFFF;
+                    // i != 0: no new-bucket flag
+                    fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
+                    n_HA++;
+                    goto m19_bkt_done;
                     }
                 m19_bkt_2:
-                    if ((uint32_t)bkt[2] == hkey) {
+                    {
+                    int probe2 = bkt[2];
+                    //NOP                                          // SPM settle
+                    //NOP                                          // SPM settle
+                    if ((uint32_t)probe2 == hkey) {
                         absent = 0; goto m19_bkt_done;
                     }
-                    if (bkt[2] != (int)0xFFFFFFFF) goto m19_bkt_3;
-                    {
-                        bkt[2] = (int)hkey;
-                        absent = 1;
-                        fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
+                    if (probe2 != (int)0xFFFFFFFF) goto m19_bkt_3;
+                    bkt[2] = (int)hkey;
+                    //NOP                                          // SPM port gap
+                    absent = 1;
+                    fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
+                    //NOP                                          // SPM port gap
                         uint32_t h2 = hkey * 2654435769U >> (32 - 22);
                         uint32_t b = (h2 >> 2) & 0xFFFFF;
                         fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
