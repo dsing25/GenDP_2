@@ -219,15 +219,15 @@ inline int get_base_opcode(int opcode) {
 //   [160..319]  TILE_BUF1  pong tile
 //   [320..2879] BIN_SPM0   ping scatter bins (SORT_RADIX_BINS * SORT_BIN_REGION_SIZE * 2)
 //   [2880..5439] BIN_SPM1  pong scatter bins
-//   [5440..5473] SORT_META  metadata (bin_counts[16], tile_bin_counts[16], tile_n, shift)
-//   Total: 5474 < GWFA_Q_START/4 = 6016 ✓
+//   [5440..5489] SORT_META  metadata (bin_counts[16], tile_bin_counts[16], tile_n, shift, bin_cursors[16])
+//   Total: 5490 < GWFA_Q_START/4 = 6016 ✓
 #define SORT_TILE_BUF0  0
 #define SORT_TILE_BUF1  (SORT_TILE * 2)
 #define SORT_BIN_SPM0   (SORT_TILE * 4)
 #define SORT_BIN_SPM1   (SORT_TILE * 4 + SORT_RADIX_BINS * SORT_BIN_REGION_SIZE * 2)
 #define SORT_META       (SORT_TILE * 4 + 2 * SORT_RADIX_BINS * SORT_BIN_REGION_SIZE * 2)
 // SORT_META sub-offsets: [0..15]=bin_counts (accumulated), [16..31]=tile_bin_counts (per-tile),
-//                        [32]=tile_n, [33]=shift
+//                        [32]=tile_n, [33]=shift, [34..49]=bin_cursors (per-tile, PE 21)
 
 // GWFA dedup phase SPM layout (per-PE, reuses stale sort/merge buffers)
 // Tiled dedup with ping-pong input AND output buffers.

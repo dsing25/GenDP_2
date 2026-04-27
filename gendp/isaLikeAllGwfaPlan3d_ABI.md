@@ -182,23 +182,64 @@ magic bodies (loads / stores / scalar arithmetic on `reg[]`).
 | reg[10]       | m23   | nk (next k), DEC-1 register-resident                         | NEW       |
 | reg[11]       | m23   | M23_RD/RI/PI macro intermediate temp (caller-dead on m23 magic boundary; reusable by m19/m20/m21/m22 as scratch since PE 23 is dead-on-entry to those magics) | NEW       |
 | reg[12..15]   | -     | reserved; available for waiver-driven temp expansion         | NEW       |
-| reg[16..31]   | m21   | bin_cursors[0..15] — per-PE 16-entry SORT_RADIX_BINS cursor band (see Section 3.3) | NEW       |
+| reg[16..31]   | (none, post-amendment) | Reserved-but-unused after Round 3 amendment that moved PE 21 bin_cursors out of this band into SPM. Reason: runtime-indexed `reg[16 + bin]` access is not a real ISA op (gendp-isa-reviewer P1, l8cv-rev). PE 21 cursors now live at `spm[SORT_META + 34..49]` (see Section 3.3). | EXTENDED  |
 
-### 3.3 PE 21 `bin_cursors[16]` band
+### 3.3 PE 21 `bin_cursors[16]` band — Round 3 amendment (SPM-resident)
 
-PE 21 sort scatter requires a 16-entry per-PE cursor array (one
-per radix bin). 16 entries does NOT fit in `gr[]` headroom (only
-~16 total slots, 7+ already in use within m21). The band is
-allocated as `reg[16..31]`:
+**Original allocation (superseded):** `reg[16..31]` register band, one
+slot per radix bin. Indirect access via `reg[16 + gr.at(6)]` where
+`gr[6]` is the runtime-computed bin index.
 
+**Post-amendment allocation:** SPM-resident at `spm[SORT_META + 34..49]`
+(per-PE; 16 contiguous slots immediately after `tile_n` / `shift` in
+the SORT_META region). Each access (read, RMW) is an explicit SPM
+load with 2-cycle settle and one explicit RAW-break NOP after the
+arithmetic before the matching store.
+
+**Reason for amendment:** `gendp-isa-reviewer` (Round 3, l8cv-rev)
+P1 finding — the runtime-indexed `reg[base + runtime_index]` form
+is not a real GenDP ISA op. The control instruction set encodes
+register addresses as immediate fields (see `data_movement_instruction`
+in `scripts/utils.py`); there is no opcode that takes a register-file
+index from another register. The PE 8 frozen-reference parallel at
+`pe.cpp:680-685` is a false positive: `mvi2_ld(int base_reg, ...)` is
+a lambda parameter that is bound to a constant at every call site
+(`mvi2_ld(10, 4)` and `mvi2_ld(11, 7)`), so after inlining each call
+reduces to a constant-immediate `reg[10]` / `reg[11]` access. PE 21's
+cursor index is data-dependent.
+
+**Alternatives considered:**
+- 16-way macro-unrolled `if (bin == 0) reg[16] = ...` chain at every
+  cursor access: AC-4 legal but ~32 ISA ops per cursor read and
+  ~64 ops per RMW; with 4 cursor accesses per scatter element and 80
+  elements per tile, the unroll cost is roughly 25 600 ops per PE 21
+  invocation. Rejected on performance grounds.
+- SPM-resident cursors with 2-cycle settle: ~10 ops per scatter
+  cursor access (load + 2 NOPs settle + RMW + store + RAW-break NOPs)
+  = ~3200 ops per PE 21 invocation. Selected.
+
+**Layout under amendment:**
 ```
-reg[16 + b]  = bin_cursors[b]  for b in 0..15
+spm[SORT_META + 0..15]  : final bin_counts (untouched by PE 21)
+spm[SORT_META + 16..31] : tile_bin_counts (init + per-element inc)
+spm[SORT_META + 32]     : tile_n (read-only)
+spm[SORT_META + 33]     : shift (read-only)
+spm[SORT_META + 34..49] : bin_cursors[0..15] (init + per-element RMW)
+                          NEW slots; previously unused per-PE bank space
 ```
 
-The compile-time loop `for (int b = 0; b < SORT_RADIX_BINS; b++)`
-unrolls to 16 explicit `reg[16+b]` accesses (rule 4: macro unrolls
-over compile-time constants). The cursor band is INITIALIZED to 0
-at m21 entry and is dead at m21 exit.
+`reg[16..31]` reserved-but-unused under the amendment (kept open for
+future re-allocation if a hardware spec adds a runtime-indexed
+register access opcode). The compile-time `for (int b = 0; b <
+SORT_RADIX_BINS; b++)` initialization loop in PE 21 (rule 4 macro
+unroll) writes both `tile_bin_counts[b] = 0` and `bin_cursors[b] = 0`
+at magic entry; both regions are dead at magic exit.
+
+**Controlled-change rule compliance (AC-2):** This amendment is
+documented in this Section 3.3 (and the `reg[16..31]` row of Section
+3.2). The PE 20 (l8b) and PE 21 (l8c) lowerings are re-validated in
+the same Round 3 commit that lands the amendment, so no orphan
+state results.
 
 ## 4. DEC-1 Register-Residency Contract for `DEDUP_META`
 

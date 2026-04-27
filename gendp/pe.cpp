@@ -1440,62 +1440,80 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
         m20_loop:
             gr.st(4, gr.at(1, CTRL_GR_LO) + 1);          // i+1
+            //NOP                                          // RAW break for branch reading gr[4]
             if (gr.at(4) >= gr.at(1, CTRL_GR_HI)) goto m20_tail;
+            //NOP                                          // post-branch slot1 guard
             gr.st(4, gr.at(1, CTRL_GR_LO) << 1);         // 2*i
             //NOP
 
-            // mvd: 4 contiguous words (vd0,k0,vd1,k1) — k0/k1 dropped
-            reg[1] = spm[gr.at(3) + gr.at(4)];           // vd0
-            reg[2] = spm[gr.at(3) + gr.at(4) + 2];       // vd1
+            // 4-word mvd-pair-correct load: (vd0,k0,vd1,k1). k0/k1 are
+            // unused at compute time but loaded so the SPM pair reads
+            // are contiguous mvd-eligible. Two mvd 2-word loads, each
+            // followed by 2-cycle SPM settle.
+            reg[1] = spm[gr.at(3) + gr.at(4)];           // mvd: vd0
+            reg[2] = spm[gr.at(3) + gr.at(4) + 1];       // mvd: k0 (unused)
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+            reg[3] = spm[gr.at(3) + gr.at(4) + 2];       // mvd: vd1
+            reg[4] = spm[gr.at(3) + gr.at(4) + 3];       // mvd: k1 (unused)
             //NOP                                          // SPM settle
             //NOP                                          // SPM settle
 
             gr.st(5, ((uint32_t)reg[1] >> gr.at(2)) & 0xF);   // bin0
-            gr.st(6, ((uint32_t)reg[2] >> gr.at(2)) & 0xF);   // bin1
+            gr.st(6, ((uint32_t)reg[3] >> gr.at(2)) & 0xF);   // bin1
 
-            // counts[bin0]++ — read-modify-write
-            reg[3] = spm[SORT_META + gr.at(5)];
+            // counts[bin0]++ — RMW with explicit settle + RAW break.
+            reg[7] = spm[SORT_META + gr.at(5)];
             //NOP                                          // SPM settle
             //NOP                                          // SPM settle
-            reg[3] = reg[3] + 1;
-            spm[SORT_META + gr.at(5)] = reg[3];
+            reg[7] = reg[7] + 1;
+            //NOP                                          // RAW break before store
+            spm[SORT_META + gr.at(5)] = reg[7];
+            //NOP                                          // SPM port gap before next access
 
-            // counts[bin1]++ — sequential RMW (handles bin0==bin1 correctly)
-            reg[3] = spm[SORT_META + gr.at(6)];
-            //NOP
-            //NOP
-            reg[3] = reg[3] + 1;
-            spm[SORT_META + gr.at(6)] = reg[3];
+            // counts[bin1]++ — sequential RMW (handles bin0==bin1).
+            reg[7] = spm[SORT_META + gr.at(6)];
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+            reg[7] = reg[7] + 1;
+            //NOP                                          // RAW break before store
+            spm[SORT_META + gr.at(6)] = reg[7];
 
             gr.st(1, gr.at(1, CTRL_GR_LO) + 2, CTRL_GR_LO);  // i += 2
+            //NOP                                          // slot-1 guard for goto
             goto m20_loop;
 
         m20_tail:
             // Odd last element
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
                 goto m20_done;
+            //NOP                                          // post-branch slot1 guard
             gr.st(4, gr.at(1, CTRL_GR_LO) << 1);
             //NOP
-            reg[1] = spm[gr.at(3) + gr.at(4)];
-            //NOP
-            //NOP
+            reg[1] = spm[gr.at(3) + gr.at(4)];           // mvd: vd
+            reg[2] = spm[gr.at(3) + gr.at(4) + 1];       // mvd: k (unused)
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
             gr.st(5, ((uint32_t)reg[1] >> gr.at(2)) & 0xF);
-            reg[3] = spm[SORT_META + gr.at(5)];
-            //NOP
-            //NOP
-            reg[3] = reg[3] + 1;
-            spm[SORT_META + gr.at(5)] = reg[3];
+            //NOP                                          // RAW break for next reads of gr[5]
+            reg[7] = spm[SORT_META + gr.at(5)];
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+            reg[7] = reg[7] + 1;
+            //NOP                                          // RAW break
+            spm[SORT_META + gr.at(5)] = reg[7];
         m20_done: ;
         } else if (magic_id == 21) {
             // Sort scatter: scatter (vd, k) pairs into per-bin SPM regions.
             //
-            // ISA-lowered per Plan 3d AC-3/AC-4/AC-5: bin_cursors[16]
-            // mapped to reg[16..31] band (per AC-2 ABI artifact);
-            // tile_bin_counts kept SPM-resident at SORT_META+16
-            // (init+inc only); outer pair loop converted to labeled
-            // goto with odd-tail peel; 16-bin init via constexpr
-            // unroll over SORT_RADIX_BINS; SPM 2-cycle latency
-            // between load and bin extraction.
+            // ISA-lowered per Plan 3d AC-3/AC-4/AC-5. Round 3 amendment:
+            // bin_cursors[16] moved from reg[16..31] (runtime-indexed
+            // register access is not a real ISA op per gendp-isa-reviewer
+            // P1) to SPM at SORT_META+34..49 with explicit 2-cycle SPM
+            // settle on each access. tile_bin_counts kept SPM-resident
+            // at SORT_META+16. Outer pair loop is labeled goto with
+            // odd-tail peel; 16-bin init via constexpr unroll over
+            // SORT_RADIX_BINS.
             //
             // gr[]  | role
             //  1 lo | i
@@ -1504,7 +1522,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //  3    | tile_buf_off
             //  4    | bin_spm_off
             //  5    | scratch (i*2 / i+1)
-            //  6    | bin (current)
+            //  6    | bin (current; 0..15)
             //
             // reg[]  | role
             //  1     | vd0/vd
@@ -1513,8 +1531,17 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //  4     | k1
             //  5     | off0/off
             //  6     | off1
+            //  7     | bin_cursor scratch (load / RMW)
             //  8     | tile_bin_count scratch
-            //  16..31| bin_cursors[0..15]
+            //
+            // SPM-resident state:
+            //   spm[SORT_META + 0..15]  : final bin_counts (untouched)
+            //   spm[SORT_META + 16..31] : tile_bin_counts (init + inc)
+            //   spm[SORT_META + 34..49] : bin_cursors (init + RMW; new
+            //                             slot region added by Round 3
+            //                             ABI amendment to satisfy
+            //                             reviewer P1 on indirect reg)
+            constexpr int BIN_CUR_OFF = 34;
             int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
 
             // === INIT ===
@@ -1527,11 +1554,11 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //NOP                                          // SPM settle
             //NOP                                          // SPM settle
 
-            // bin_cursors[b] = 0 + tile_bin_counts[b] = 0
+            // bin_cursors[b] = 0 (SPM) + tile_bin_counts[b] = 0 (SPM)
             // (constexpr macro unroll over compile-time SORT_RADIX_BINS=16)
             for (int b = 0; b < SORT_RADIX_BINS; b++) {
-                reg[16 + b] = 0;
-                spm[SORT_META + 16 + b] = 0;
+                spm[SORT_META + 16 + b] = 0;       // tile_bin_counts[b]
+                spm[SORT_META + BIN_CUR_OFF + b] = 0;  // bin_cursors[b]
                 //NOP
             }
 
@@ -1539,74 +1566,109 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
         m21_loop:
             gr.st(5, gr.at(1, CTRL_GR_LO) + 1);
+            //NOP                                          // RAW break
             if (gr.at(5) >= gr.at(1, CTRL_GR_HI)) goto m21_tail;
+            //NOP                                          // post-branch slot1 guard
             gr.st(5, gr.at(1, CTRL_GR_LO) << 1);          // 2*i
             //NOP
 
-            // mvd: 4 contiguous (vd0, k0, vd1, k1)
-            reg[1] = spm[gr.at(3) + gr.at(5)];
-            reg[2] = spm[gr.at(3) + gr.at(5) + 1];
-            reg[3] = spm[gr.at(3) + gr.at(5) + 2];
-            reg[4] = spm[gr.at(3) + gr.at(5) + 3];
+            // 4-word mvd-pair-correct load: (vd0, k0, vd1, k1) split
+            // into two 2-word mvds with explicit settle between.
+            reg[1] = spm[gr.at(3) + gr.at(5)];           // mvd: vd0
+            reg[2] = spm[gr.at(3) + gr.at(5) + 1];       // mvd: k0
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+            reg[3] = spm[gr.at(3) + gr.at(5) + 2];       // mvd: vd1
+            reg[4] = spm[gr.at(3) + gr.at(5) + 3];       // mvd: k1
             //NOP                                          // SPM settle
             //NOP                                          // SPM settle
 
             // --- Scatter element 0 ---
             gr.st(6, ((uint32_t)reg[1] >> gr.at(2)) & 0xF);   // bin0
-            //NOP
-            // off0 = bin0*REGION_SIZE*2 + bin_cursors[bin0]*2
+            //NOP                                          // RAW break
+            // Read bin_cursors[bin0] from SPM
+            reg[7] = spm[SORT_META + BIN_CUR_OFF + gr.at(6)];
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+            // off0 = bin0 * (REGION_SIZE * 2) + cursor * 2
             reg[5] = gr.at(6) * (SORT_BIN_REGION_SIZE * 2)
-                + (reg[16 + gr.at(6)] << 1);
-            //NOP
+                + (reg[7] << 1);
+            //NOP                                          // RAW break
             spm[gr.at(4) + reg[5]]     = reg[1];           // vd0
             spm[gr.at(4) + reg[5] + 1] = reg[2];           // k0
-            reg[16 + gr.at(6)] = reg[16 + gr.at(6)] + 1;   // bin_cursors[bin0]++
+            //NOP                                          // SPM port gap
+            // Inc cursor (RMW): reg[7] already holds old cursor value
+            reg[7] = reg[7] + 1;
+            //NOP                                          // RAW break
+            spm[SORT_META + BIN_CUR_OFF + gr.at(6)] = reg[7];
+            //NOP                                          // SPM port gap
             // tile_bin_counts[bin0]++ (SPM RMW)
             reg[8] = spm[SORT_META + 16 + gr.at(6)];
             //NOP                                          // SPM settle
             //NOP                                          // SPM settle
             reg[8] = reg[8] + 1;
+            //NOP                                          // RAW break
             spm[SORT_META + 16 + gr.at(6)] = reg[8];
+            //NOP                                          // SPM port gap
 
             // --- Scatter element 1 ---
             gr.st(6, ((uint32_t)reg[3] >> gr.at(2)) & 0xF);   // bin1
-            //NOP
+            //NOP                                          // RAW break
+            reg[7] = spm[SORT_META + BIN_CUR_OFF + gr.at(6)];
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
             reg[6] = gr.at(6) * (SORT_BIN_REGION_SIZE * 2)
-                + (reg[16 + gr.at(6)] << 1);
-            //NOP
+                + (reg[7] << 1);
+            //NOP                                          // RAW break
             spm[gr.at(4) + reg[6]]     = reg[3];           // vd1
             spm[gr.at(4) + reg[6] + 1] = reg[4];           // k1
-            reg[16 + gr.at(6)] = reg[16 + gr.at(6)] + 1;
+            //NOP                                          // SPM port gap
+            reg[7] = reg[7] + 1;
+            //NOP                                          // RAW break
+            spm[SORT_META + BIN_CUR_OFF + gr.at(6)] = reg[7];
+            //NOP                                          // SPM port gap
             reg[8] = spm[SORT_META + 16 + gr.at(6)];
-            //NOP
-            //NOP
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
             reg[8] = reg[8] + 1;
+            //NOP                                          // RAW break
             spm[SORT_META + 16 + gr.at(6)] = reg[8];
+            //NOP                                          // SPM port gap
 
             gr.st(1, gr.at(1, CTRL_GR_LO) + 2, CTRL_GR_LO);
+            //NOP                                          // slot-1 guard
             goto m21_loop;
 
         m21_tail:
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
                 goto m21_done;
+            //NOP                                          // post-branch slot1 guard
             gr.st(5, gr.at(1, CTRL_GR_LO) << 1);
             //NOP
-            reg[1] = spm[gr.at(3) + gr.at(5)];
-            reg[2] = spm[gr.at(3) + gr.at(5) + 1];
-            //NOP
-            //NOP
+            reg[1] = spm[gr.at(3) + gr.at(5)];           // mvd: vd
+            reg[2] = spm[gr.at(3) + gr.at(5) + 1];       // mvd: k
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
             gr.st(6, ((uint32_t)reg[1] >> gr.at(2)) & 0xF);
-            //NOP
+            //NOP                                          // RAW break
+            reg[7] = spm[SORT_META + BIN_CUR_OFF + gr.at(6)];
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
             reg[5] = gr.at(6) * (SORT_BIN_REGION_SIZE * 2)
-                + (reg[16 + gr.at(6)] << 1);
-            //NOP
+                + (reg[7] << 1);
+            //NOP                                          // RAW break
             spm[gr.at(4) + reg[5]]     = reg[1];
             spm[gr.at(4) + reg[5] + 1] = reg[2];
-            reg[16 + gr.at(6)] = reg[16 + gr.at(6)] + 1;
+            //NOP                                          // SPM port gap
+            reg[7] = reg[7] + 1;
+            //NOP                                          // RAW break
+            spm[SORT_META + BIN_CUR_OFF + gr.at(6)] = reg[7];
+            //NOP                                          // SPM port gap
             reg[8] = spm[SORT_META + 16 + gr.at(6)];
-            //NOP
-            //NOP
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
             reg[8] = reg[8] + 1;
+            //NOP                                          // RAW break
             spm[SORT_META + 16 + gr.at(6)] = reg[8];
         m21_done: ;
         } else if (magic_id == 22) {
@@ -2130,10 +2192,14 @@ m23_end:    ;
             constexpr int Q_BASE_CONST  = GWFA_Q_START * 16;
             constexpr int GS_BASE_CONST = GWFA_GS_START * 16;
 
-            for (int d = 0; d < n_diags; d++) {
+            // Outer diag loop: lowered to label/goto form (AC-4).
+            int d_idx = 0;
+        m19_diag_loop:
+            if (d_idx >= n_diags) goto m19_diag_done;
+            {
                 // mvd: contiguous (vd, k) double-word load from FIN0_DIAGS
-                uint32_t vd = (uint32_t)fspm[FIN0_DIAGS + 2*d];
-                int32_t k = fspm[FIN0_DIAGS + 2*d + 1];
+                uint32_t vd = (uint32_t)fspm[FIN0_DIAGS + 2*d_idx];
+                int32_t k = fspm[FIN0_DIAGS + 2*d_idx + 1];
                 //NOP                                          // SPM 2-cycle settle
                 //NOP                                          // SPM 2-cycle settle
                 uint32_t v = vd >> 16;                        // half-reg hi
@@ -2141,14 +2207,18 @@ m23_end:    ;
                     - GWF_DIAG_SHIFT;
                 int32_t i_val = d_val + k;
                 // mvd: contiguous (lo, hi) arcmeta double-word load
-                int lo = fspm[FIN0_ARCMETA + 2*d];
-                int hi = fspm[FIN0_ARCMETA + 2*d + 1];
+                int lo = fspm[FIN0_ARCMETA + 2*d_idx];
+                int hi = fspm[FIN0_ARCMETA + 2*d_idx + 1];
                 //NOP                                          // SPM 2-cycle settle
                 //NOP                                          // SPM 2-cycle settle
                 int nv = hi - lo;
                 int32_t n_ext = 0;
 
-                for (int a = 0; a < nv; a++) {
+                // Inner arc loop: label/goto form (AC-4).
+                int a_idx = 0;
+            m19_arc_loop:
+                if (a_idx >= nv) goto m19_arc_done;
+                {
                     int arc_off = FIN0_ARCS
                         + FIN0_ARC_WORDS * arc_idx;
                     // mvd: contiguous (packed_vw, ow) double-word load
@@ -2164,25 +2234,69 @@ m23_end:    ;
                         | ((i_val + 1) & 0xFFFF);
                     int *bkt = &fspm[FIN0_HA + 4*arc_idx];
                     int absent = -1;
-                    for (int i = 0; i < 4; i++) {
-                        if ((uint32_t)bkt[i] == hkey) {
-                            absent = 0; break;
-                        }
-                        if (bkt[i] == (int)0xFFFFFFFF) {
-                            bkt[i] = (int)hkey;
-                            absent = 1;
-                            // Always record modified bucket for writeback
-                            fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
-                            uint32_t h2 = hkey * 2654435769U
-                                >> (32 - 22);
-                            uint32_t b = (h2 >> 2) & 0xFFFFF;
-                            // Bit 20 = new-bucket flag (first key in bucket)
-                            if (i == 0) b |= (1u << 20);
-                            fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
-                            n_HA++;
-                            break;
-                        }
+                    // Bucket 4-slot probe: macro-unrolled (AC-4).
+                    // i = 0
+                    if ((uint32_t)bkt[0] == hkey) {
+                        absent = 0; goto m19_bkt_done;
                     }
+                    if (bkt[0] != (int)0xFFFFFFFF) goto m19_bkt_1;
+                    {
+                        bkt[0] = (int)hkey;
+                        absent = 1;
+                        fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
+                        uint32_t h2 = hkey * 2654435769U >> (32 - 22);
+                        uint32_t b = (h2 >> 2) & 0xFFFFF;
+                        b |= (1u << 20);   // bucket-0 = new-bucket flag
+                        fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
+                        n_HA++;
+                        goto m19_bkt_done;
+                    }
+                m19_bkt_1:
+                    if ((uint32_t)bkt[1] == hkey) {
+                        absent = 0; goto m19_bkt_done;
+                    }
+                    if (bkt[1] != (int)0xFFFFFFFF) goto m19_bkt_2;
+                    {
+                        bkt[1] = (int)hkey;
+                        absent = 1;
+                        fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
+                        uint32_t h2 = hkey * 2654435769U >> (32 - 22);
+                        uint32_t b = (h2 >> 2) & 0xFFFFF;
+                        // i != 0: no new-bucket flag
+                        fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
+                        n_HA++;
+                        goto m19_bkt_done;
+                    }
+                m19_bkt_2:
+                    if ((uint32_t)bkt[2] == hkey) {
+                        absent = 0; goto m19_bkt_done;
+                    }
+                    if (bkt[2] != (int)0xFFFFFFFF) goto m19_bkt_3;
+                    {
+                        bkt[2] = (int)hkey;
+                        absent = 1;
+                        fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
+                        uint32_t h2 = hkey * 2654435769U >> (32 - 22);
+                        uint32_t b = (h2 >> 2) & 0xFFFFF;
+                        fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
+                        n_HA++;
+                        goto m19_bkt_done;
+                    }
+                m19_bkt_3:
+                    if ((uint32_t)bkt[3] == hkey) {
+                        absent = 0; goto m19_bkt_done;
+                    }
+                    if (bkt[3] != (int)0xFFFFFFFF) goto m19_bkt_done;
+                    {
+                        bkt[3] = (int)hkey;
+                        absent = 1;
+                        fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
+                        uint32_t h2 = hkey * 2654435769U >> (32 - 22);
+                        uint32_t b = (h2 >> 2) & 0xFFFFF;
+                        fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
+                        n_HA++;
+                    }
+                m19_bkt_done: ;
                     if (absent == -1) {
                         // Bucket full — treat as not-absent
                         absent = 0;
@@ -2233,9 +2347,13 @@ m23_end:    ;
                         n_B++;
                     }
                     arc_idx++;
+                    a_idx++;
+                    goto m19_arc_loop;
                 }
+            m19_arc_done: ;
                 // Deletion: if nv==0 || n_ext!=nv
-                if (nv == 0 || n_ext != nv) {
+                if (nv != 0 && n_ext == nv) goto m19_diag_advance;
+                {
                     uint32_t del_vd = (v << 16)                // half-reg pack
                         | ((GWF_DIAG_SHIFT + d_val + 1) & 0xFFFF);
                     int bo = FIN0_OUT_SIZE-2-2*n_B;
@@ -2244,7 +2362,11 @@ m23_end:    ;
                     fspm[FIN0_OUT + bo + 1] = k;
                     n_B++;
                 }
+            m19_diag_advance:
+                d_idx++;
+                goto m19_diag_loop;
             }
+        m19_diag_done: ;
             // Write output counts to metadata
             fspm[FIN0_META + 2] = n_A;
             fspm[FIN0_META + 3] = n_B;
