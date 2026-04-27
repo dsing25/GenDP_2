@@ -365,24 +365,30 @@ single test case — rests on:
     magic 29 in dedup-phase init).
 - **Save path semantics under DEC-1.** Every PE 23 yield (every
   `goto m23_end`) MUST funnel through a single SAVE label that
-  updates `reg[16..27]` (the moved-slot register copy) and writes
-  `DEDUP_META+2/+3` (controller-visible counts) plus
-  `DEDUP_META+10..+13` (controller refill/writeback) to SPM. The
-  moved slots `+0/+1/+4/+5/+6/+7/+14..+19` are NOT written back to
-  SPM on yield — register-resident only. This contract is the
-  inverse of the SPM-resident pattern (SPM persists across calls
-  AND across cases until magic 32 zeroes it; registers persist
-  only across calls within a step, and are re-seeded from SPM by
-  the cookie protocol at every step boundary).
+  writes `DEDUP_META+2/+3` (controller-visible counts) to SPM via
+  the `M23_SAVE_OUT` macro. The moved slots
+  `+0/+1/+4/+5/+6/+7/+14..+19` are NOT written back to SPM on
+  yield — register-resident in `reg[16..27]` only.
+  `DEDUP_META+10..+13` (controller refill/writeback) are NOT
+  written by the SAVE label itself; they are written **conditionally
+  within the M23_RD / M23_RI macros** on the buffer-swap arm
+  (`spm[DEDUP_META+10+dw] = 0` then `dw ^= 1` etc.), and READ at
+  PE 23 entry to seed `dtn / don_ / itn / ion` registers. This
+  contract is the inverse of the SPM-resident pattern (SPM persists
+  across calls AND across cases until magic 32 zeroes it;
+  registers persist only across calls within a step, and are
+  re-seeded from SPM by the cookie protocol at every step
+  boundary).
 - `DEDUP_META+2/+3` writes (n_do, n_io publish) MUST land in the
   PE 23 magic body epilogue in EVERY call (PING and PONG). These
   are controller-visible and required by magic 31 read.
-- `DEDUP_META+10..+13` writes (dtn refill / don_ swap / itn / ion
-  swap) MUST land in the PE 23 magic body whenever the buffer-swap
-  arm of M23_RD or M23_RI fires (per the existing dw^=1 / iw^=1
-  logic). The controller side (magic 30/31) reads/writes these slots
-  outside PE 23 calls; the PE side reads them on call entry and
-  updates them on swap.
+- `DEDUP_META+10..+13` writes happen only on the buffer-swap arm
+  of M23_RD or M23_RI (per the existing `spm[+10+dw]=0; dw^=1` /
+  `spm[+12+iw]=0; iw^=1` logic). They are NOT part of M23_SAVE.
+  The controller side (magic 30/31) reads/writes these slots
+  outside PE 23 calls; the PE side reads them on call entry to
+  seed `dtn/don_/itn/ion` and updates them only when a buffer-swap
+  fires within the call.
 
 ## 5. Half-Register Convention
 

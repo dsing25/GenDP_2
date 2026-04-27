@@ -1556,40 +1556,43 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
             // bin_cursors[b] = 0 (SPM) + tile_bin_counts[b] = 0 (SPM)
             // Round 4 fix: literal-unrolled 16-store init (no runtime
-            // for-loop in lowered magic body per AC-4). Pairs of stores
-            // separated by `//NOP` to keep SPM port utilization sane.
-            spm[SORT_META + 16] = 0;             spm[SORT_META + BIN_CUR_OFF +  0] = 0;
-            //NOP
-            spm[SORT_META + 17] = 0;             spm[SORT_META + BIN_CUR_OFF +  1] = 0;
-            //NOP
-            spm[SORT_META + 18] = 0;             spm[SORT_META + BIN_CUR_OFF +  2] = 0;
-            //NOP
-            spm[SORT_META + 19] = 0;             spm[SORT_META + BIN_CUR_OFF +  3] = 0;
-            //NOP
-            spm[SORT_META + 20] = 0;             spm[SORT_META + BIN_CUR_OFF +  4] = 0;
-            //NOP
-            spm[SORT_META + 21] = 0;             spm[SORT_META + BIN_CUR_OFF +  5] = 0;
-            //NOP
-            spm[SORT_META + 22] = 0;             spm[SORT_META + BIN_CUR_OFF +  6] = 0;
-            //NOP
-            spm[SORT_META + 23] = 0;             spm[SORT_META + BIN_CUR_OFF +  7] = 0;
-            //NOP
-            spm[SORT_META + 24] = 0;             spm[SORT_META + BIN_CUR_OFF +  8] = 0;
-            //NOP
-            spm[SORT_META + 25] = 0;             spm[SORT_META + BIN_CUR_OFF +  9] = 0;
-            //NOP
-            spm[SORT_META + 26] = 0;             spm[SORT_META + BIN_CUR_OFF + 10] = 0;
-            //NOP
-            spm[SORT_META + 27] = 0;             spm[SORT_META + BIN_CUR_OFF + 11] = 0;
-            //NOP
-            spm[SORT_META + 28] = 0;             spm[SORT_META + BIN_CUR_OFF + 12] = 0;
-            //NOP
-            spm[SORT_META + 29] = 0;             spm[SORT_META + BIN_CUR_OFF + 13] = 0;
-            //NOP
-            spm[SORT_META + 30] = 0;             spm[SORT_META + BIN_CUR_OFF + 14] = 0;
-            //NOP
-            spm[SORT_META + 31] = 0;             spm[SORT_META + BIN_CUR_OFF + 15] = 0;
-            //NOP
+            // for-loop in lowered magic body per AC-4). Plan 3d Round 7
+            // l9c P1 fix per Codex audit (round-7-audit-findings.md):
+            // each pair of non-contiguous stores split onto separate
+            // ISA lines with explicit SPM port-gap NOPs. Each store
+            // occupies its own VLIW cycle; 1 SPM port per PE preserved.
+            spm[SORT_META + 16] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF +  0] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 17] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF +  1] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 18] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF +  2] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 19] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF +  3] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 20] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF +  4] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 21] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF +  5] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 22] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF +  6] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 23] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF +  7] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 24] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF +  8] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 25] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF +  9] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 26] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF + 10] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 27] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF + 11] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 28] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF + 12] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 29] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF + 13] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 30] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF + 14] = 0; //NOP   // SPM port gap
+            spm[SORT_META + 31] = 0;             //NOP   // SPM port gap
+            spm[SORT_META + BIN_CUR_OFF + 15] = 0; //NOP   // SPM port gap
 
             gr.st(1, 0, CTRL_GR_LO);
 
@@ -1839,28 +1842,19 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // stream drain. No separate drain path.
             //
             // AC-7 cycle accounting for the emit block. Each branch
-            // arm has the same shape (B-arm lines 1548..1551, A-arm
-            // lines 1553..1556):
-            //   cycle N slot 0: out_lo = spm[...]            // SPM load
-            //   cycle N slot 1: out_hi = spm[...+1]          // SPM load
-            //   cycle N+1 slot 0: out[oi*2]   = (int)out_lo  // consumer
-            //   cycle N+1 slot 1: out[oi*2+1] = (int)out_hi  // consumer
-            // Under strict 2-cycle SPM latency (shared preamble rule 6),
-            // the N+1 consumers would land in the in-flight cycle and
-            // violate AC-7. The observable behavior on HEAD is clean
-            // because the C++ simulator does not model the pipeline
-            // stall — a real-ISA lowering would need to insert 2 NOP
-            // cycles (4 NOP slots) between the SPM loads and the
-            // stores, OR reshuffle so bi++ / oi++ fall in cycle N+1
-            // and the stores move to cycle N+2. This is a lowering-
-            // level structural hazard analogous to magic-20 chain
-            // B1/B2 per the AC-11 audit, and is dispositioned as
-            // exception-approved (see ac2-reviewer-dispositions.md
-            // row 22-1 Round 2 update). Boundary block at lines
-            // 1558..1567 reads out_lo/out_hi as pure register reads
-            // many cycles later (exhaustion checks + gpos compute +
-            // for-loop init intervene), so boundary reads are AC-7
-            // legal independent of the emit-block structural note.
+            // arm has the shape:
+            //   cycle N    : mvd: (out_lo, out_hi) = spm[X..X+1]
+            //   cycle N+1  : 2 NOPs (SPM settle, AC-7 latency gap)
+            //   cycle N+2  : consumer — out[oi*2] = out_lo;
+            //                          out[oi*2+1] = out_hi; bi++; oi++;
+            // Plan 3d Round 7 l9c P2 fix per Codex audit: removed the
+            // earlier "exception-approved" waiver comment block that
+            // described an older shape lacking the 2-cycle SPM settle.
+            // The current code (lines below) IS cycle-separated; no
+            // waiver is needed and ABI Section 5 waiver table remains
+            // empty. Boundary block reads out_lo/out_hi as register
+            // reads many cycles later (exhaustion checks + gpos
+            // compute intervene), so boundary reads are AC-7 legal.
             // Round 5 reviewer P1: staged SPM loads (one port per cycle).
             // Plan 3d Round 4: out_lo/out_hi in reg[12]/reg[13];
             // head_a_lo/head_b_lo time-multiplexed on reg[30]/reg[31].
