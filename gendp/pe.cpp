@@ -1747,24 +1747,46 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //     BL-20260413-pe-global-base.
             int out_off = (magic_mask & 1) ? MERGE_OUT1 : MERGE_OUT0;
             int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
-            int ai  = spm[MERGE_META + 0];
-            int bi  = spm[MERGE_META + 1];
-            int aw  = spm[MERGE_META + 7];
-            int bw  = spm[MERGE_META + 8];
-            int a_n = spm[MERGE_META + 9 + aw];
-            int b_n = spm[MERGE_META + 11 + bw];
-            int ab  = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
-            int bb  = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
+            // Plan 3d Round 4: m22 within-call state aliases reg[1..15,
+            // 28..31] per AC-2 amendment Section 3.2. C++ references
+            // alias the register storage; AC-3 compliant.
+            int& ai      = reg[1];
+            int& bi      = reg[2];
+            int& aw      = reg[3];
+            int& bw      = reg[4];
+            int& a_n     = reg[5];
+            int& b_n     = reg[6];
+            int& ab      = reg[7];
+            int& bb      = reg[8];
+            int& oi      = reg[9];
+            int& ai0     = reg[10];
+            int& bi0     = reg[11];
+            int& out_lo  = reg[12];
+            int& out_hi  = reg[13];
+            int& bvd_0   = reg[14];
+            int& bvd_1   = reg[15];
+            int& bvd_2   = reg[28];
+            int& gpos    = reg[29];
+            int& scratch_lo = reg[30];   // head_a_lo / probe_h / o
+            int& scratch_hi = reg[31];   // head_b_lo / probe_l / on
+            // Initialize from SPM-resident cross-call state.
+            ai  = spm[MERGE_META + 0];
+            bi  = spm[MERGE_META + 1];
+            aw  = spm[MERGE_META + 7];
+            bw  = spm[MERGE_META + 8];
+            a_n = spm[MERGE_META + 9 + aw];
+            b_n = spm[MERGE_META + 11 + bw];
+            ab  = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
+            bb  = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
             int *out = &spm[out_off];
-            int oi = 0;
-            int ai0 = ai, bi0 = bi;
+            oi  = 0;
+            ai0 = ai; bi0 = bi;
             // Plan 3d l8d: bvd[3] C++ local array eliminated per AC-3.
-            // Replaced with three named locals; the `for (b=0;b<3;b++)`
-            // boundary loop below is macro-unrolled into 6 explicit
-            // hi/lo comparisons in the original per-b order.
-            uint32_t bvd_0 = (uint32_t)spm[MERGE_META+13];
-            uint32_t bvd_1 = (uint32_t)spm[MERGE_META+14];
-            uint32_t bvd_2 = (uint32_t)spm[MERGE_META+15];
+            // Boundary positions (32-bit packed v|d sentinels) loaded
+            // into reg[14], reg[15], reg[28].
+            bvd_0 = spm[MERGE_META+13];
+            bvd_1 = spm[MERGE_META+14];
+            bvd_2 = spm[MERGE_META+15];
             // Plan 3d Round 8 l8d (AC-3): cum_oi / pe_global_base
             // migrated to gr[12] / gr[13] full-int register homes.
             //
@@ -1821,37 +1843,36 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // many cycles later (exhaustion checks + gpos compute +
             // for-loop init intervene), so boundary reads are AC-7
             // legal independent of the emit-block structural note.
-            // Round 5 reviewer P1: split the dual-SPM compare into
-            // staged loads (one SPM port per cycle) with explicit settle
-            // before the < comparison. Declarations hoisted outside the
-            // m22_switch_a/b goto labels' scope.
-            uint32_t out_lo, out_hi;
-            uint32_t head_b_lo, head_a_lo;
-            head_a_lo = 0; head_b_lo = 0;
+            // Round 5 reviewer P1: staged SPM loads (one port per cycle).
+            // Plan 3d Round 4: out_lo/out_hi in reg[12]/reg[13];
+            // head_a_lo/head_b_lo time-multiplexed on reg[30]/reg[31].
+            scratch_lo = 0; scratch_hi = 0;     // head_a_lo / head_b_lo
             if (ai < a_n) {
-                head_a_lo = (uint32_t)spm[ab+ai*2];
+                scratch_lo = spm[ab+ai*2];      // head_a_lo
                 //NOP                                    // SPM settle
                 //NOP                                    // SPM settle
             }
             if (bi < b_n) {
-                head_b_lo = (uint32_t)spm[bb+bi*2];
+                scratch_hi = spm[bb+bi*2];      // head_b_lo
                 //NOP                                    // SPM settle
                 //NOP                                    // SPM settle
             }
-            if (ai >= a_n || (bi < b_n && head_b_lo < head_a_lo)) {
-                out_lo = (uint32_t)spm[bb+bi*2];       // SPM load cycle N slot 0
-                out_hi = (uint32_t)spm[bb+bi*2+1];     // SPM load cycle N slot 1
-                //NOP                                    // SPM cycle N+1 slot 0
-                //NOP                                    // SPM cycle N+1 slot 1
-                out[oi*2]   = (int)out_lo;             // cycle N+2 consumer
-                out[oi*2+1] = (int)out_hi; bi++; oi++;
+            if (ai >= a_n
+                || (bi < b_n
+                    && (uint32_t)scratch_hi < (uint32_t)scratch_lo)) {
+                out_lo = spm[bb+bi*2];                  // SPM load N slot 0
+                out_hi = spm[bb+bi*2+1];                // SPM load N slot 1
+                //NOP                                    // SPM N+1 slot 0
+                //NOP                                    // SPM N+1 slot 1
+                out[oi*2]   = out_lo;                   // N+2 consumer
+                out[oi*2+1] = out_hi; bi++; oi++;
             } else {
-                out_lo = (uint32_t)spm[ab+ai*2];       // SPM load cycle N slot 0
-                out_hi = (uint32_t)spm[ab+ai*2+1];     // SPM load cycle N slot 1
-                //NOP                                    // SPM cycle N+1 slot 0
-                //NOP                                    // SPM cycle N+1 slot 1
-                out[oi*2]   = (int)out_lo;             // cycle N+2 consumer
-                out[oi*2+1] = (int)out_hi; ai++; oi++;
+                out_lo = spm[ab+ai*2];                  // SPM load N slot 0
+                out_hi = spm[ab+ai*2+1];                // SPM load N slot 1
+                //NOP                                    // SPM N+1 slot 0
+                //NOP                                    // SPM N+1 slot 1
+                out[oi*2]   = out_lo;                   // N+2 consumer
+                out[oi*2+1] = out_hi; ai++; oi++;
             }
             // Boundary tracking — bit-exact preservation per AC-5/AC-7.
             // Plan 3d l8d: runtime `for (b = 0; b < 3)` boundary loop
@@ -1864,60 +1885,67 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // settle the SPM 2-cycle latency is violated. Restructured:
             // load `probe_X` into a local, settle 2 cycles, compare,
             // conditional store, port-gap NOP between adjacent SPM ops.
-            { int gpos = gr.at(13) + gr.at(12) + oi - 1;
-              int probe_h0 = spm[976];
-              //NOP                                       // SPM settle
-              //NOP                                       // SPM settle
-              if (probe_h0 < 0 && out_hi >  bvd_0) spm[976] = gpos;
-              //NOP                                       // SPM port gap
-              int probe_l0 = spm[979];
-              //NOP
-              //NOP
-              if (probe_l0 < 0 && out_lo >= bvd_0) spm[979] = gpos;
-              //NOP                                       // SPM port gap
-              int probe_h1 = spm[977];
-              //NOP
-              //NOP
-              if (probe_h1 < 0 && out_hi >  bvd_1) spm[977] = gpos;
-              //NOP                                       // SPM port gap
-              int probe_l1 = spm[980];
-              //NOP
-              //NOP
-              if (probe_l1 < 0 && out_lo >= bvd_1) spm[980] = gpos;
-              //NOP                                       // SPM port gap
-              int probe_h2 = spm[978];
-              //NOP
-              //NOP
-              if (probe_h2 < 0 && out_hi >  bvd_2) spm[978] = gpos;
-              //NOP                                       // SPM port gap
-              int probe_l2 = spm[981];
-              //NOP
-              //NOP
-              if (probe_l2 < 0 && out_lo >= bvd_2) spm[981] = gpos;
-            }
+            // Plan 3d Round 4 (AC-3): gpos in reg[29]; probe_h_X /
+            // probe_l_X time-multiplexed on reg[30] (scratch_lo).
+            gpos = gr.at(13) + gr.at(12) + oi - 1;
+            scratch_lo = spm[976];                       // probe_h0
+            //NOP                                         // SPM settle
+            //NOP                                         // SPM settle
+            if (scratch_lo < 0 && (uint32_t)out_hi >  (uint32_t)bvd_0) spm[976] = gpos;
+            //NOP                                         // SPM port gap
+            scratch_lo = spm[979];                       // probe_l0
+            //NOP
+            //NOP
+            if (scratch_lo < 0 && (uint32_t)out_lo >= (uint32_t)bvd_0) spm[979] = gpos;
+            //NOP                                         // SPM port gap
+            scratch_lo = spm[977];                       // probe_h1
+            //NOP
+            //NOP
+            if (scratch_lo < 0 && (uint32_t)out_hi >  (uint32_t)bvd_1) spm[977] = gpos;
+            //NOP                                         // SPM port gap
+            scratch_lo = spm[980];                       // probe_l1
+            //NOP
+            //NOP
+            if (scratch_lo < 0 && (uint32_t)out_lo >= (uint32_t)bvd_1) spm[980] = gpos;
+            //NOP                                         // SPM port gap
+            scratch_lo = spm[978];                       // probe_h2
+            //NOP
+            //NOP
+            if (scratch_lo < 0 && (uint32_t)out_hi >  (uint32_t)bvd_2) spm[978] = gpos;
+            //NOP                                         // SPM port gap
+            scratch_lo = spm[981];                       // probe_l2
+            //NOP
+            //NOP
+            if (scratch_lo < 0 && (uint32_t)out_lo >= (uint32_t)bvd_2) spm[981] = gpos;
             // Post-emit exhaustion check (rare path).
             if (ai >= a_n) goto m22_switch_a;
             if (bi >= b_n) goto m22_switch_b;
             goto m22_top;
         m22_switch_a:
-            { int o = aw ^ 1;
-              int on = spm[MERGE_META + 9 + o];
-              if (on > 0) {
-                  spm[MERGE_META + 9 + aw] = 0;
-                  aw = o; ab = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
-                  ai = 0; ai0 -= a_n; a_n = on;
-              }
+            // Plan 3d Round 4 (AC-3): o/on time-multiplex on
+            // scratch_lo / scratch_hi (reg[30]/reg[31]).
+            scratch_lo = aw ^ 1;                            // o
+            scratch_hi = spm[MERGE_META + 9 + scratch_lo];  // on
+            //NOP                                            // SPM settle
+            //NOP                                            // SPM settle
+            if (scratch_hi > 0) {
+                spm[MERGE_META + 9 + aw] = 0;
+                aw = scratch_lo;
+                ab = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
+                ai = 0; ai0 -= a_n; a_n = scratch_hi;
             }
             if (bi >= b_n) goto m22_switch_b;
             goto m22_top;
         m22_switch_b:
-            { int o = bw ^ 1;
-              int on = spm[MERGE_META + 11 + o];
-              if (on > 0) {
-                  spm[MERGE_META + 11 + bw] = 0;
-                  bw = o; bb = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
-                  bi = 0; bi0 -= b_n; b_n = on;
-              }
+            scratch_lo = bw ^ 1;                            // o
+            scratch_hi = spm[MERGE_META + 11 + scratch_lo]; // on
+            //NOP                                            // SPM settle
+            //NOP                                            // SPM settle
+            if (scratch_hi > 0) {
+                spm[MERGE_META + 11 + bw] = 0;
+                bw = scratch_lo;
+                bb = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
+                bi = 0; bi0 -= b_n; b_n = scratch_hi;
             }
             if (ai >= a_n && bi >= b_n) goto m22_done;
             goto m22_top;
