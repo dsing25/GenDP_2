@@ -1765,8 +1765,15 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             uint32_t bvd_0 = (uint32_t)spm[MERGE_META+13];
             uint32_t bvd_1 = (uint32_t)spm[MERGE_META+14];
             uint32_t bvd_2 = (uint32_t)spm[MERGE_META+15];
-            int cum_oi = spm[982];
-            int pe_global_base = spm[983];
+            // Plan 3d Round 7 partial l8d (AC-3): cum_oi and
+            // pe_global_base migrated from C++ locals to gr[12] / gr[13]
+            // register homes (read once at entry, used in the boundary
+            // tracking block, written back at exit). All other PE 22
+            // body locals remain pending future-round AC-3 migration.
+            gr.st(12, spm[982]);             // cum_oi
+            gr.st(13, spm[983]);             // pe_global_base
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
             // Entry: reconcile pre-existing exhaustion from prior
             // invocation's tail before the first compare.
             if (ai >= a_n) goto m22_switch_a;
@@ -1846,7 +1853,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // settle the SPM 2-cycle latency is violated. Restructured:
             // load `probe_X` into a local, settle 2 cycles, compare,
             // conditional store, port-gap NOP between adjacent SPM ops.
-            { int gpos = pe_global_base + cum_oi + oi - 1;
+            { int gpos = gr.at(13) + gr.at(12) + oi - 1;
               int probe_h0 = spm[976];
               //NOP                                       // SPM settle
               //NOP                                       // SPM settle
@@ -1914,7 +1921,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //NOP                                          // SPM port gap
             spm[MERGE_META+7]=aw; spm[MERGE_META+8]=bw;
             //NOP                                          // SPM port gap
-            spm[982] = cum_oi + oi;
+            spm[982] = gr.at(12) + oi;
             // Plan 3d l8d: GWFA_AC5_DUMP env-gated dump removed
             // (AC-3 — env-gated debug counters / fopen branches not
             // permitted in lowered magic body; PLAN3D_TRACE_SNAPSHOT
