@@ -1960,29 +1960,55 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 ? DEDUP_DIAG_OUT1 : DEDUP_DIAG_OUT0;
             int io_off = (magic_mask & 1)
                 ? DEDUP_INTV_OUT1 : DEDUP_INTV_OUT0;
-            // Restore state from META
-            uint32_t pv = (uint32_t)spm[DEDUP_META + 0];
-            int pk       = spm[DEDUP_META + 1];
+            // DEC-1 phase cookie protocol (Plan 3d Round 2 amendment).
+            // Magic 29 (`pe_array.cpp:6513`) sets spm[DEDUP_META+8] =
+            // 0xFFFFFFFFU at every per-step dedup init. PE 23 entry:
+            //   sentinel set: seed reg[16..27] from SPM moved slots;
+            //                 write spm[DEDUP_META+8] = 0 to consume.
+            //   sentinel clear: use reg[16..27] directly.
+            uint32_t cookie = (uint32_t)spm[DEDUP_META + 8];
+            if (cookie == 0xFFFFFFFFU) {
+                reg[16] = spm[DEDUP_META + 0];
+                reg[17] = spm[DEDUP_META + 1];
+                reg[18] = spm[DEDUP_META + 4];
+                reg[19] = spm[DEDUP_META + 5];
+                reg[20] = spm[DEDUP_META + 6];
+                reg[21] = spm[DEDUP_META + 7];
+                reg[22] = spm[DEDUP_META + 14];
+                reg[23] = spm[DEDUP_META + 15];
+                reg[24] = spm[DEDUP_META + 16];
+                reg[25] = spm[DEDUP_META + 17];
+                reg[26] = spm[DEDUP_META + 18];
+                reg[27] = spm[DEDUP_META + 19];
+                spm[DEDUP_META + 8] = 0;
+            }
+            // Load magic-local working state from registers (DEC-1).
+            // Cross-call persistence on reg[16..27] holds because the
+            // magic-23 envelope at scripts/gwfa_instruction_generator.py:
+            // 666-688 only writes gr[10] between PING/PONG calls, and
+            // PE 8/13/19/20/21/22 do not touch reg[16..27].
+            uint32_t pv  = (uint32_t)reg[16];
+            int pk       = reg[17];
             int n_do = 0, n_io = 0;
-            int dc   = spm[DEDUP_META + 4];
-            int ic   = spm[DEDUP_META + 5];
-            int dw   = spm[DEDUP_META + 6];
-            int iw   = spm[DEDUP_META + 7];
-            // DEC-2 (Plan 2b Milestone B): DEDUP_META+8/+9 (formerly
-            // de/ie) are classified `dead` in the PE-side ABI —
-            // magic 32 init writes 0 and no magic reads them. The
-            // prior write-only `de`/`ie` flags have been removed; the
-            // slots remain zero-compat via magic 32's zeroing loop.
+            int dc       = reg[18];
+            int ic       = reg[19];
+            int dw       = reg[20];
+            int iw       = reg[21];
+            // DEDUP_META+8 is now the DEC-1 phase init cookie (consumed
+            // above). DEDUP_META+9 stays dead (Plan 2b Milestone B).
+            // DEDUP_META+10..+13 (dtn/don_/itn/ion) remain SPM-resident
+            // because controller magics 30/31 read/write them between
+            // PE 23 calls (controller refill/writeback handshake).
             int dtn  = spm[DEDUP_META + 10 + dw];
             int don_ = spm[DEDUP_META + 10 + (dw^1)];
             int itn  = spm[DEDUP_META + 12 + iw];
             int ion  = spm[DEDUP_META + 12 + (iw^1)];
-            uint32_t clo = (uint32_t)spm[DEDUP_META + 14];
-            uint32_t chi = (uint32_t)spm[DEDUP_META + 15];
-            int state    = spm[DEDUP_META + 16];
-            int pdone    = spm[DEDUP_META + 17];
-            uint32_t nv  = (uint32_t)spm[DEDUP_META + 18];
-            int nk       = spm[DEDUP_META + 19];
+            uint32_t clo = (uint32_t)reg[22];
+            uint32_t chi = (uint32_t)reg[23];
+            int state    = reg[24];
+            int pdone    = reg[25];
+            uint32_t nv  = (uint32_t)reg[26];
+            int nk       = reg[27];
             int db = dw ? DEDUP_DIAG_BUF1 : DEDUP_DIAG_BUF0;
             int ib = iw ? DEDUP_INTV_BUF1  : DEDUP_INTV_BUF0;
             int p = 0;  // processed counter
@@ -2096,17 +2122,20 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             #define M23_SAVE_OUT do { \
                 spm[DEDUP_META+2]=n_do; spm[DEDUP_META+3]=n_io; \
             } while(0)
-            // PE-internal resume state (will become registers in ISA)
+            // PE-internal resume state — DEC-1 register-resident
+            // (Plan 3d Round 2). Save to reg[16..27] only; the moved
+            // DEDUP_META slots are NOT mirrored to SPM. The DEC-1
+            // phase cookie (spm[DEDUP_META+8]) and magic 29's
+            // per-step refresh of the moved-slot SPM copy together
+            // ensure the registers are correctly seeded at every
+            // per-step boundary.
             #define M23_SAVE_RESUME do { \
-                spm[DEDUP_META+0]=(int)pv; spm[DEDUP_META+1]=pk; \
-                spm[DEDUP_META+4]=dc; spm[DEDUP_META+5]=ic; \
-                spm[DEDUP_META+6]=dw; spm[DEDUP_META+7]=iw; \
-                spm[DEDUP_META+14]=(int)clo; \
-                spm[DEDUP_META+15]=(int)chi; \
-                spm[DEDUP_META+16]=state; \
-                spm[DEDUP_META+17]=pdone; \
-                spm[DEDUP_META+18]=(int)nv; \
-                spm[DEDUP_META+19]=nk; \
+                reg[16]=(int)pv; reg[17]=pk; \
+                reg[18]=dc;      reg[19]=ic; \
+                reg[20]=dw;      reg[21]=iw; \
+                reg[22]=(int)clo; reg[23]=(int)chi; \
+                reg[24]=state;   reg[25]=pdone; \
+                reg[26]=(int)nv; reg[27]=nk; \
             } while(0)
             #define M23_SAVE do { M23_SAVE_OUT; M23_SAVE_RESUME; } while(0)
             // M23_SAVE_LIGHT (Plan 2b Milestone C1, p2b): omit the
@@ -2251,9 +2280,29 @@ m23_end:    ;
                 if ((magic_mask & 1) == 0 && !dumped_exit[id]) {
                     std::ofstream &snap23 = plan3d_snap_pe23();
                     snap23 << "pe23 pe=" << id << " phase=exit";
-                    for (int i = 0; i < 20; i++)
-                        snap23 << " dm[" << i << "]="
-                               << spm[DEDUP_META + i];
+                    // DEC-1 aware: moved slots come from reg[16..27]
+                    // (register-resident); unmoved slots come from SPM
+                    // (controller-visible / refill / dead).
+                    snap23 << " dm[0]="  << reg[16];
+                    snap23 << " dm[1]="  << reg[17];
+                    snap23 << " dm[2]="  << spm[DEDUP_META + 2];
+                    snap23 << " dm[3]="  << spm[DEDUP_META + 3];
+                    snap23 << " dm[4]="  << reg[18];
+                    snap23 << " dm[5]="  << reg[19];
+                    snap23 << " dm[6]="  << reg[20];
+                    snap23 << " dm[7]="  << reg[21];
+                    snap23 << " dm[8]="  << spm[DEDUP_META + 8];
+                    snap23 << " dm[9]="  << spm[DEDUP_META + 9];
+                    snap23 << " dm[10]=" << spm[DEDUP_META + 10];
+                    snap23 << " dm[11]=" << spm[DEDUP_META + 11];
+                    snap23 << " dm[12]=" << spm[DEDUP_META + 12];
+                    snap23 << " dm[13]=" << spm[DEDUP_META + 13];
+                    snap23 << " dm[14]=" << reg[22];
+                    snap23 << " dm[15]=" << reg[23];
+                    snap23 << " dm[16]=" << reg[24];
+                    snap23 << " dm[17]=" << reg[25];
+                    snap23 << " dm[18]=" << reg[26];
+                    snap23 << " dm[19]=" << reg[27];
                     snap23 << std::endl;
                     dumped_exit[id] = 1;
                 }
