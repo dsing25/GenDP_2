@@ -74,28 +74,40 @@ The control trace can set the compute trace's PC, enabling coarse-grained synchr
 The control trace uses a VLIW design with **two slots** that execute as a pair. Instructions are written in pairs:
 
 ```python
-# Instructions are written in pairs
-f.write(data_movement_instruction(...))  # Slot 0 (written first, executes SECOND)
-f.write(data_movement_instruction(...))  # Slot 1 (written second, executes FIRST)
+# Instructions are written in pairs (Slot 0 first, Slot 1 second)
+f.write(data_movement_instruction(...))  # Slot 0
+f.write(data_movement_instruction(...))  # Slot 1
 ```
 
-**Critical Execution Order**: The simulator processes the **second-written instruction (Slot 1) first**, then the **first-written instruction (Slot 0)**. This counter-intuitive order matters for hazards involving arithmetic operations that write to `gr`:
+**Concurrent semantics**: Both slots execute on the same cycle and read
+register state from **before** that cycle. The simulator implements this
+by snapshot/restore in `pe::decode_ctrl` (see `pe.cpp:335`): slot 1 is
+decoded first, gr/reg are snapped back to pre-cycle, slot 0 is decoded,
+then slot 1's deltas are reapplied. There is **no data forwarding** —
+both slots see the same pre-cycle inputs.
+
+**Same-cycle RAW is illegal**: as of `simulatorRulesPrompt.md` (commit
+978d23d) the simulator enforces this. A pair where slot A writes a
+register and slot B reads it produces a runtime error rather than silent
+stale-data.
 
 ```python
-# INCORRECT - read sees NEW value because increment (Slot 1) executes first
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))   # Slot 0: read SPM[gr[1]] - executes 2nd, sees new gr[1]
-f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))   # Slot 1: gr[1]++ - executes 1st
+# CRASH — same-cycle RAW: slot 1 writes gr[1], slot 0 reads gr[1]
+f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))   # Slot 0: reads gr[1]
+f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))   # Slot 1: writes gr[1]
 
-# CORRECT - place increment in Slot 0 so it executes AFTER the read
-f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))   # Slot 0: gr[1]++ - executes 2nd
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))   # Slot 1: read SPM[gr[1]] - executes 1st, sees old gr[1]
+# OK — produce the increment in a previous cycle, consume here
+f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))   # cycle N
+f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))     # cycle N
+f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))   # cycle N+1: sees new gr[1]
+f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))     # cycle N+1
 ```
 
-**Execution Order Summary**:
-- First written instruction → stored in Slot 0 → decoded **second**
-- Second written instruction → stored in Slot 1 → decoded **first**
+**WAR is fine**: slot A reads X, slot B writes X. Both slots see the
+pre-cycle value of X; B's new value is committed at end-of-cycle.
 
-**Write Timing Note**: Arithmetic ops (`add`, `addi`, `sub`, `subi`, `shifti_*`, `andi`) write to `gr` **immediately** during decode. However, `mv`/`si` writes to `gr` are **deferred** until after both decodes complete. This means hazards between two `mv`/`si` instructions are safe (both see old values), but hazards involving arithmetic ops require careful ordering as shown above.
+**WAW crashes**: two writes to the same gr/reg in one cycle (whether
+two control slots, or control + compute) trigger the WAW tracker.
 
 ### Controller Execution
 The controller has only **one control thread**. Use `XXX_main_instruction()` functions for controller code.
@@ -104,31 +116,46 @@ The controller has only **one control thread**. Use `XXX_main_instruction()` fun
 
 ## Control Instruction Format
 
-### 64-bit Instruction Encoding
+### 63-bit Instruction Encoding
+
+The control instruction is 63 bits wide (`INSTRUCTION_WIDTH` in
+`sys_def.h`), packed in a `uint64_t`. Layout, MSB → LSB:
 
 ```
-Bit:  63    54 53  50 49  46 45   44   43       30 29  26 25   24   23       10 9   6 5    0
-     ┌───────┬──────┬──────┬────┬────┬───────────┬──────┬────┬────┬───────────┬─────┬──────┐
-     │ rsvd  │ dest │ src  │ib0│ai0 │   imm_0   │ reg0 │ib1│ai1 │   imm_1   │reg1 │opcode│
-     │ 10b   │ 4b   │ 4b   │ 1b│ 1b │   14b     │  4b  │ 1b│ 1b │   14b     │ 4b  │  6b  │
-     └───────┴──────┴──────┴────┴────┴───────────┴──────┴────┴────┴───────────┴─────┴──────┘
+[62..59] dest    (4b)
+[58..55] src     (4b)
+[54]     ib0     (1b)   — operand-0 immBar
+[53]     ai0     (1b)   — operand-0 auto-increment
+[52..37] imm_0   (16b)  — signed immediate / register index for op 0
+[36..30] reg_0   (7b)   — base register for op 0
+[29]     ib1     (1b)   — operand-1 immBar
+[28]     ai1     (1b)   — operand-1 auto-increment
+[27..12] imm_1   (16b)  — signed immediate / register index for op 1
+[11..5]  reg_1   (7b)   — base register for op 1
+[4..0]   opcode  (5b)
 ```
 
 ### Field Descriptions
 
 | Field                        | Bits | Description                                          |
 |:-----------------------------|:----:|:-----------------------------------------------------|
-| `dest`                       | 4    | Destination location code                            |
+| `dest`                       | 4    | Destination location code (`MEMORY_COMPONENTS_ADDR_WIDTH`) |
 | `src`                        | 4    | Source location code                                 |
 | `reg_immBar_0` (ib0)         | 1    | Operand 0 mode: 0=imm, 1=register indirect          |
 | `reg_auto_increase_0` (ai0)  | 1    | Auto-increment `reg_0` after use                    |
-| `imm_0`                      | 14   | Immediate value or register index (sign-extended)   |
-| `reg_0`                      | 4    | Base register for operand 0 address calculation     |
+| `imm_0`                      | 16   | Signed immediate, or register index (`IMMEDIATE_WIDTH`) |
+| `reg_0`                      | 7    | Base register / sub-register select (`GLOBAL_REGISTER_ADDR_WIDTH`) |
 | `reg_immBar_1` (ib1)         | 1    | Operand 1 mode: 0=imm, 1=register indirect          |
 | `reg_auto_increase_1` (ai1)  | 1    | Auto-increment `reg_1` after use                    |
-| `imm_1`                      | 14   | Immediate value or register index (sign-extended)   |
-| `reg_1`                      | 4    | Base register for operand 1 address calculation     |
-| `opcode`                     | 6    | Operation code                                       |
+| `imm_1`                      | 16   | Signed immediate, or register index                  |
+| `reg_1`                      | 7    | Base register / sub-register select                  |
+| `opcode`                     | 5    | Operation code (`CTRL_OPCODE_WIDTH`)                 |
+
+The 7-bit register fields encode both the gr index (bottom 5 bits, i.e.
+`gr[0..31]`) and a 2-bit "register-file half" selector in the top 2 bits:
+`00 = gr` (full 32-bit), `01 = gr_lo` (low 16 bits), `10 = gr_hi` (high
+16 bits), `11 = resolved-reg` (PE compute reg). See the gr-subregister
+note in [Source and Destination Codes](#source-and-destination-codes).
 
 ### Python Generator Function
 
@@ -409,7 +436,7 @@ data_movement_instruction(
     0,              # reg_0: unused
     0,              # reg_immBar_1: 0 means imm_1 is immediate
     0,              # reg_auto_increase_1: unused
-    imm,            # imm_1: immediate value (14-bit, sign-extended)
+    imm,            # imm_1: 16-bit signed immediate
     rs2,            # reg_1: source register index
     addi            # opcode: 2
 )
@@ -420,7 +447,7 @@ data_movement_instruction(
 |---------|:-------------------------------------------------------------------|
 | `dest`  | PE: `gr` (1) or `out_port` (9). Controller: `gr`, `out_buf`, `out_port` |
 | `imm_0` | `rd` - destination register index                                  |
-| `imm_1` | `imm` - immediate value (-8192 to 8191)                            |
+| `imm_1` | `imm` - 16-bit signed immediate (-32768 to 32767)                  |
 | `reg_1` | `rs2` - source register to add to                                  |
 
 **Example**:
@@ -1130,7 +1157,7 @@ data_movement_instruction(
 )
 ```
 
-**Note**: Performs **arithmetic** (sign-extending) right shift. The shift amount (`imm_1`) is treated as an **unsigned** 14-bit value (NOT sign-extended), so only non-negative shift amounts are meaningful.
+**Note**: Performs **arithmetic** (sign-extending) right shift. The shift amount (`imm_1`) is the 16-bit field interpreted as unsigned; only small non-negative values (< 32) are meaningful for a 32-bit register.
 
 **Examples**:
 ```python
@@ -1154,7 +1181,7 @@ shifti_l gr[rd], gr[rs2], imm    # gr[rd] = gr[rs2] << imm
 
 **Encoding**: Same as `shifti_r`, but uses opcode 17.
 
-**Note**: The shift amount (`imm_1`) is treated as an **unsigned** 14-bit value (NOT sign-extended).
+**Note**: The shift amount (`imm_1`) is the 16-bit field interpreted as unsigned. Only shift amounts < 32 are meaningful for a 32-bit register.
 
 **Examples**:
 ```python
@@ -1188,7 +1215,7 @@ data_movement_instruction(
 )
 ```
 
-**Note**: The mask (`imm_1`) is treated as an **unsigned** 14-bit value (NOT sign-extended). Maximum mask value is 16383 (0x3FFF).
+**Note**: The mask (`imm_1`) is the 16-bit immediate field. Maximum mask value is 0xFFFF.
 
 **Examples**:
 ```python
@@ -1940,13 +1967,18 @@ Each memory block in the WFA algorithm contains 7 core sections of `MEM_BLOCK_SI
 - PADDING (reserved space) - 30 words
 - 2-word gap - reserved space
 
-**Current Configuration (BANK_SIZE = 8192):**
+**Current Configuration (`SPM_BANK_GROUP_SIZE` = 8192):**
 - Block 0: 254 words (7×32 + 30 padding) + 2 words (gap) = 256 words total
 - Block 1: 254 words (7×32 + 30 padding) + 2 words (gap) = 256 words total
 - Total blocks: 512 words
-- Pattern region: 3840 words (addresses 512-4351)
-- Text region: 3840 words (addresses 4352-8191)
-- Total per bank group: 512 + 3840 + 3840 = 8192 words ✓
+- Pattern region: addresses 512–1159 (`PATTERN_START = 512`,
+  `TEXT_START = 1160`)
+- Text region: addresses 1160–8191
+- Total per bank group: 8192 words ✓
+
+The pattern/text split moved when sequences shrank to 2-bit packing
+(commit c7da728); `TEXT_START` was 4352 for the legacy 8-bit packing
+and is **1160** today (`sys_def.h:207`).
 
 ### Critical Constraints
 
@@ -1961,10 +1993,13 @@ When changing scratchpad size, ensure:
 To change PADDING_SIZE from 30 to 64 words (to add more reserved space):
 1. In pe_array.cpp: Change `constexpr int PADDING_SIZE = 64;`
 2. In wfa_instruction_generator.py: Change `PADDING_SIZE = 64`
-3. Recalculate BLOCK_1_START: `32*7 + 2 + 64 = 290`
-4. Recalculate PATTERN_START: `290 + 32*7 + 2 + 64 = 580`
-5. Update sys_def.h: PATTERN_START = 580
-6. Verify: With BANK_SIZE=8192, SEQ_LEN_ALLOC = (8192-580)//2 = 3806, which leaves room for pattern (3806 words) and text (3806 words) each
+3. Recalculate `BLOCK_1_START`: `32*7 + 2 + 64 = 290`
+4. Recalculate `PATTERN_START`: `290 + 32*7 + 2 + 64 = 580`
+5. Update `sys_def.h`: `PATTERN_START = 580` and re-derive
+   `TEXT_START = PATTERN_START + SEQ_LEN_ALLOC` (for 2-bit packing,
+   `SEQ_LEN_ALLOC = (BANK_SIZE - 2*PATTERN_START) / something` —
+   the exact formula lives in `wfa_instruction_generator.py`).
+6. Run `wfa_check_correctness.py` to verify pattern/text fit.
 
 **Note:** The formula-based approach (`MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE`) enables this single-point-of-change capability. Changing PADDING_SIZE only requires editing the constant in two files; dependent values recalculate automatically.
 
@@ -2012,27 +2047,27 @@ fifo=[11,12,13,14], S2=15
 
 ### Key Constants (from sys_def.h)
 ```c
-SPM_BANK_GROUP_SIZE = 8192
-SPM_BANK_SIZE = 4096
+SPM_BANK_GROUP_SIZE = 8192   // per-PE bank-group (one of 4 PEs)
+SPM_BANK_SIZE = 4096         // per physical bank (two banks per PE)
+SPM_NUM_BANKS = 8            // 4 PE bank-groups × 2 banks each
 SPM_ADDR_NUM = 32768
 SPM_ACCESS_LATENCY = 2
 LINE_SIZE = 2
-SPM_NUM_BANKS = 8
+S2_BUFFER_INTS = 262144      // 1 MB / 4 bytes
 S2_NUM_BANKS = 4
 S2_READ_LATENCY = 6
 S2_WRITE_LATENCY = 3
 LSQ_MAX_ENTRIES_PER_BANK = 8
-ADDR_REGISTER_NUM = 16    // gr[0..15]
-REGFILE_ADDR_NUM = 32     // reg[0..31]
+ADDR_REGISTER_NUM = 16       // gr[0..15]
+REGFILE_ADDR_NUM = 32        // reg[0..31]
 PATTERN_START = 512
-TEXT_START = 4352
-ADDR_LEN = 15             // For address swizzling
+TEXT_START = 1160            // shrank from 4352 after 2-bit base packing
+ADDR_LEN = 15                // For address swizzling
 ```
 
 **Memory Block Constants (from wfa_instruction_generator.py):**
 ```python
-PADDING_SIZE = 30         // Adjustable padding per block (enables single-point-of-change)
+PADDING_SIZE = 30         // Adjustable padding per block
 BLOCK_1_START = 256       // = MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE
 PATTERN_START = 512       // = BLOCK_1_START + MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE
-SEQ_LEN_ALLOC = 3840      // = (BANK_SIZE - PATTERN_START) // 2
 ```

@@ -12,11 +12,18 @@ GenDP is a cycle-accurate simulator for a domain-specific accelerator designed f
 3.  **POA** (Partial Order Alignment) - `kernel=3`
 4.  **Chain** - `kernel=4`
 5.  **WFA** (Wavefront Alignment) - `kernel=5`
+6.  **bankThrasher** (SPM bank-conflict stress) - `kernel=6`
+7.  **GWFA** (Graph WFA) - `kernel=7`
+8.  **GSSW** (Graph Smith-Waterman) - `kernel=8`
 
 **Key Architecture Features:**
-*   **PE Array:** 4 PEs (expandable) connected in a systolic chain.
-*   **Memory:** Shared Scratchpad Memory (SPM), 4 banks (one per PE), 1024 words/bank.
-*   **Execution:** VLIW control trace (2 slots) + separate Compute trace.
+*   **PE Array:** 4 PEs (default `PE_4_SETTING`; `PE_NUM=64` slots
+    available) connected in a systolic chain.
+*   **Memory:** Shared SPM, 32768 words total (4 PE bank-groups × 2
+    banks each, 4096 words per bank). Plus a 1 MB controller-side S2
+    buffer (4 banks) routed through an LSQ.
+*   **Execution:** VLIW control trace (2 slots, concurrent semantics)
+    + separate Compute trace.
 
 ## Building and Running
 
@@ -42,7 +49,8 @@ Usage: `./sim -k <kernel_id> -i <input> -o <output> -n <num_cases>`
 ./sim -k 5 -i input.txt -o output.txt -n 100
 
 # Kernel IDs:
-# 1=bsw, 2=phmm, 3=poa, 4=chain, 5=wfa
+# 1=bsw, 2=phmm, 3=poa, 4=chain, 5=wfa,
+# 6=bankThrasher, 7=gwfa, 8=gssw
 ```
 
 ### Building Kernels (Golden Outputs)
@@ -57,36 +65,35 @@ cd kernel/poaV2 && make -j      # POA
 
 ## Development Conventions & Constraints
 
-### 1. VLIW Execution Order (CRITICAL)
-Control instructions are written in pairs (Slot 0, Slot 1), but **Slot 1 executes BEFORE Slot 0**.
-*   **Slot 1 (2nd write):** Executes FIRST.
-*   **Slot 0 (1st write):** Executes SECOND.
+### 1. VLIW Concurrent Execution (CRITICAL)
+Both control slots run on the same cycle and read **pre-cycle** gr/reg
+state (snapshot/restore in `pe::decode_ctrl`). Same-cycle RAW or WAW
+between slots **crashes** the simulator (commit 978d23d).
 
-**Incorrect:**
 ```python
-f.write(op_using_gr1_slot0...)   # Writes 1st, executes 2nd -> sees NEW gr[1]
-f.write(op_updating_gr1_slot1...) # Writes 2nd, executes 1st -> updates gr[1]
+# CRASH — same-cycle RAW: slot 1 writes gr[1], slot 0 reads gr[1]
+f.write(op_reading_gr1_slot0...)
+f.write(op_writing_gr1_slot1...)
 ```
-
-**Correct:**
-```python
-f.write(op_updating_gr1_slot0...) # Writes 1st, executes 2nd -> updates gr[1] AFTER read
-f.write(op_using_gr1_slot1...)    # Writes 2nd, executes 1st -> reads OLD gr[1]
-```
+Move the producer one cycle earlier and consume on the next cycle.
 
 ### 2. SPM Access Latency (CRITICAL)
-The SPM has a **2-cycle latency**. You MUST insert no-ops or unrelated work between an SPM access request and using the data.
+The SPM has a **2-cycle per-load latency** but is **pipelined**: each
+bank can hold up to 2 in-flight requests. Per-load latency is still
+preserved — the consumer must wait 2 cycles after that specific load.
 
-*   **Rule:** 2 cycles gap between request and use.
-*   **Rule:** No simultaneous read/write (single port per PE).
-*   **Rule:** No pipelining (cannot issue request while one is in flight).
+*   **Rule:** Consumer cycle ≥ load cycle + 2.
+*   **Rule:** No simultaneous read/write on a PE (single port per PE) —
+    issuing two SPM ops in one VLIW cycle crashes.
+*   **Rule:** Back-to-back SPM issues are fine; same-bank same-cycle
+    collisions across PEs/LSQ stall.
 
-**Pattern:**
+**Pattern (pipelined loads):**
 ```python
-f.write(load_request...)
-f.write(nop...) # Cycle 1
-f.write(nop...) # Cycle 2
-f.write(use_data...)
+f.write(load_A...)  # cycle 0
+f.write(load_B...)  # cycle 1 (legal — pipelined)
+f.write(use_A...)   # cycle 2 (A ready)
+f.write(use_B...)   # cycle 3 (B ready)
 ```
 
 ### 3. Development Workflow
@@ -119,6 +126,9 @@ f.write(use_data...)
     *   `magic_wfs_out.txt`: Simulator's internal state trace (WFA).
     *   `wfaTrace.txt`: Reference trace for validation.
 *   **Common Errors:**
-    *   **SPM Latency:** Reading data too early (garbage values).
-    *   **VLIW Hazard:** Logic errors due to Slot 1 executing before Slot 0.
-    *   **Synchronization:** Deadlocks if PEs don't signal completion (`gr[10]`) or Controller doesn't wait (`gr[13]`).
+    *   **SPM Latency:** Consumer reads load < 2 cycles after issue.
+    *   **VLIW Hazard:** Same-cycle RAW or WAW between slots — the
+        simulator crashes; rearrange the producer to a prior cycle.
+    *   **Two SPM ops in one cycle:** crashes (one port per PE).
+    *   **Synchronization:** Deadlocks if PEs don't signal completion
+        (`gr[10]`) or controller doesn't wait (`gr[13]`).

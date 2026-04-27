@@ -7,15 +7,27 @@
 - Outputs live in `*_sim_results/` and `*_output/`; see `README.md`, `CLAUDE.md`, and `docs.md` for workflows.
 
 ## Architecture & ISA Notes (from docs.md)
-- System hierarchy: `pe_array` controller drives a 4-PE chain and SPM (4096 addresses). Controller has `gr[0..15]`, input/output buffers, and 4 FIFOs.
-- Each PE has `reg[0..31]`, `gr[0..15]`, instruction buffers, and one SPM port (read OR write per cycle).
-- Dual-trace model: control trace is VLIW with 2 slots; the second-written instruction executes first. Arithmetic ops write `gr` during decode; `mv/si` writes to `gr` are deferred until after both decodes.
+- System hierarchy: `pe_array` controller drives a 4-PE chain and a
+  shared SPM of 32768 words (8 banks: 4 PE bank-groups × 2 banks each,
+  4096 words/bank). Controller has `gr[0..15]`, input/output buffers,
+  4 FIFOs, and a 1 MB S2 buffer with an LSQ.
+- Each PE has `reg[0..31]`, `gr[0..15]`, instruction buffers, and one
+  SPM port (read OR write per cycle).
+- Dual-trace model: control trace is a 2-slot VLIW. Both slots run
+  concurrently against pre-cycle gr/reg state (snapshot/restore in
+  `pe::decode_ctrl`). Same-cycle RAW and WAW now crash the simulator
+  (commit 978d23d).
 - Addressing: if `reg_immBar=1`, address = `gr[imm] + gr[reg]`; else address = `imm + gr[reg]`.
-- Controller/SPM rules: controller arithmetic destinations limited to `gr`, `out_buf`, `out_port`; `out_instr` is valid for `mv/si`. SPM has 2-cycle latency, no pipelining, single-port; loads only to `reg`, `gr`, or `out_port`.
+- Controller/SPM rules: controller arithmetic destinations limited to
+  `gr`, `out_buf`, `out_port`; `out_instr` is valid for `mv`/`si`.
+  SPM has 2-cycle latency and is **pipelined** (up to 2 in-flight per
+  bank per PE); single port per PE; PE SPM loads must target `reg`,
+  `gr`/`gr_lo`/`gr_hi`, or `out_port`.
 
 ## Build, Test, and Development Commands
 - Build simulator: `make` (ASan on by default). Variants: `make ADDRESS_SANITIZER=0`, `make debug=1`, `make profile=1`, `make clean`.
-- Run simulator: `./sim -k <1-5> -i <input> -o <output> -n <num>`.
+- Run simulator: `./sim -k <1-8> -i <input> -o <output> -n <num>`
+  (1=bsw, 2=phmm, 3=poa, 4=chain, 5=wfa, 6=bankThrasher, 7=gwfa, 8=gssw).
 - Kernel builds (examples): `cd kernel/bwa-mem && make -j`, `cd kernel/chain && make -j print=1` (others in `README.md`).
 
 ## Coding Style & Naming Conventions
