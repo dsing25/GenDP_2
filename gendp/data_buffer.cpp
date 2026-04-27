@@ -145,33 +145,35 @@ bool S2::hasPendingOps() const {
 addr_regfile::addr_regfile(int size) {
     buffer = (int*)malloc(size * sizeof(int));
     buffer_size = size;
+    last_write_cycle = (int*)malloc(size * sizeof(int));
+    halves_written = (unsigned char*)malloc(size * sizeof(unsigned char));
+    last_write_origin = (const char**)malloc(size * sizeof(const char*));
     reset();
 }
 
 addr_regfile::~addr_regfile() {
     free(buffer);
+    free(last_write_cycle);
+    free(halves_written);
+    free(last_write_origin);
 }
 
 void addr_regfile::reset() {
     int i;
-    for (i = 0; i < buffer_size; i++)
+    for (i = 0; i < buffer_size; i++) {
         buffer[i] = 0;
+        last_write_cycle[i] = -1;
+        halves_written[i] = 0;
+        last_write_origin[i] = nullptr;
+    }
 }
 
 void addr_regfile::write(int* write_addr, int* write_data, int n){
     for(int i = 0; i < n; i++){
         if (write_addr[i] != -1){
             if (write_addr[i] >= 0 && write_addr[i] < buffer_size)
-                st(write_addr[i], write_data[i]);
+                st(write_addr[i], write_data[i], CTRL_GR, "ctrl_write");
             else fprintf(stderr, "addr_regfile write addr error. %d outside buffsize %d\n", write_addr[i], buffer_size);
-        }
-    }
-    //ensure no two addrs are the same
-    for(int i = 0; i < n; i++){
-        for(int j = i + 1; j < n; j++){
-            if(write_addr[i] == write_addr[j] && write_addr[i] != -1){
-                fprintf(stderr, "addr_regfile write addr error. duplicate addr %d\n", write_addr[i]);
-            }
         }
     }
 }

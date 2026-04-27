@@ -55,6 +55,10 @@ class pe {
 
         void recieve_spm_data(int data[LINE_SIZE]);
 
+        // Reset per-cycle WAW trackers; called by pe_array::run() between
+        // test cases since cycle resets and stale markers would false-fire.
+        void reset_waw_trackers();
+
         void show_comp_reg();
 
         // SPM request port - populated by PE, consumed by pe_array arbitration

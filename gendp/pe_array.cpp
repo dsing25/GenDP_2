@@ -14,6 +14,16 @@ extern "C" {
 #define MAX_RANGE NUM_FRACTION_BITS
 #define NUM_INTEGER_BITS 5
 
+// SPM port restriction (controller side): an SPM access on the array
+// controller may transfer to/from gr (incl gr_lo/gr_hi), reg, s1c, or s2.
+// S2 uses a dedicated LSQ path that callers special-case before reaching
+// here; this helper is for the simple-port path.
+static bool ctrl_spm_target_ok(int pos) {
+    return pos == CTRL_REG || pos == CTRL_GR
+        || pos == CTRL_GR_LO || pos == CTRL_GR_HI
+        || pos == CTRL_S1C   || pos == CTRL_S2;
+}
+
 #ifndef GWFA_DBG_DEFAULT
 #define GWFA_DBG_DEFAULT 0
 #endif
@@ -55,6 +65,11 @@ pe_array::pe_array(int input_size, int output_size, int _pc_mode) {
     memset(va_regfile, 0, sizeof(va_regfile));
     memset(s1c, 0, sizeof(s1c));
     mm = nullptr;
+    for (int j = 0; j < MAIN_ADDR_REGISTER_NUM; j++) {
+        main_gr_last_cycle[j] = -1;
+        main_gr_halves[j] = 0;
+        main_gr_origin[j] = nullptr;
+    }
     //+1 allows addressing full range. 1 is dummy data. Not legal in real hardware
     SPM_unit = new SPM(SPM_ADDR_NUM+1, &active_event_producers);
     for (i = 0; i < PE_NUM; i++)
@@ -93,6 +108,54 @@ void pe_array::reset_controller_state() {
     load_data = 0;
     store_data = 0;
     from_fifo = 0;
+    for (int i = 0; i < MAIN_ADDR_REGISTER_NUM; i++) {
+        main_gr_last_cycle[i] = -1;
+        main_gr_halves[i] = 0;
+        main_gr_origin[i] = nullptr;
+    }
+}
+
+void pe_array::set_main_gr(int idx, int val, int pos,
+                           const char* origin) {
+    if (idx < 0 || idx >= MAIN_ADDR_REGISTER_NUM) {
+        fprintf(stderr,
+            "main set_gr: idx %d out of range [0,%d)\n",
+            idx, MAIN_ADDR_REGISTER_NUM);
+        exit(-1);
+    }
+    if (cycle > 0) {
+        int mask = (pos == CTRL_GR_LO) ? 0x1
+                 : (pos == CTRL_GR_HI) ? 0x2 : 0x3;
+        if (main_gr_last_cycle[idx] != cycle)
+            main_gr_halves[idx] = 0;
+        if (main_gr_halves[idx] & mask) {
+            fprintf(stderr,
+                "main WAW: gr[%d] written twice in cycle %d"
+                " (prev: %s, now: %s)\n",
+                idx, cycle,
+                main_gr_origin[idx] ? main_gr_origin[idx] : "?",
+                origin);
+            exit(-1);
+        }
+        main_gr_halves[idx] |= mask;
+        main_gr_last_cycle[idx] = cycle;
+        main_gr_origin[idx] = origin;
+    }
+    if (pos == CTRL_GR) {
+        main_addressing_register[idx] = val;
+    } else if (pos == CTRL_GR_LO) {
+        int old = main_addressing_register[idx];
+        main_addressing_register[idx] =
+            (old & (int)0xFFFF0000) | (val & 0xFFFF);
+    } else if (pos == CTRL_GR_HI) {
+        int old = main_addressing_register[idx];
+        main_addressing_register[idx] =
+            (old & 0x0000FFFF) | ((val & 0xFFFF) << 16);
+    } else {
+        fprintf(stderr,
+            "main set_gr: invalid pos %d\n", pos);
+        exit(-1);
+    }
 }
 
 void pe_array::write_spm_magic(int addr, int value) {
@@ -293,17 +356,15 @@ void pe_array::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, LoadRe
 #endif
 
     if (dest_pos == 1) {
-        main_addressing_register[dest_addr] = data.data[0];
+        set_main_gr(dest_addr, data.data[0], CTRL_GR, "main_store");
         if (dest_addr == 0) printf("%d\n", data.data[0]);
     } else if (dest_pos == CTRL_GR_LO) {
-        int old = main_addressing_register[dest_addr];
-        main_addressing_register[dest_addr] = (old & (int)0xFFFF0000) | (data.data[0] & 0xFFFF);
+        set_main_gr(dest_addr, data.data[0], CTRL_GR_LO, "main_store");
 #ifdef PROFILE
         printf("gr_lo[%d].\n", dest_addr);
 #endif
     } else if (dest_pos == CTRL_GR_HI) {
-        int old = main_addressing_register[dest_addr];
-        main_addressing_register[dest_addr] = (old & 0x0000FFFF) | ((data.data[0] & 0xFFFF) << 16);
+        set_main_gr(dest_addr, data.data[0], CTRL_GR_HI, "main_store");
 #ifdef PROFILE
         printf("gr_hi[%d].\n", dest_addr);
 #endif
@@ -3356,7 +3417,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         for (i = 0; i < 4; i++) {
             rs[i] = main_addressing_register[rs2] & 0xFF;
         }
-        memcpy(get_output_dest(dest,rd), rs, 4*sizeof(int8_t));
+        if (dest == CTRL_GR) {
+            int new_val;
+            memcpy(&new_val, rs, 4*sizeof(int8_t));
+            set_main_gr(rd, new_val, CTRL_GR, "set_8");
+        } else {
+            memcpy(get_output_dest(dest, rd), rs, 4*sizeof(int8_t));
+        }
 #ifdef PROFILE
         printf("set_8 gr[%d] gr[%d] (%d %lx)\n", rd, rs2, main_addressing_register[rs2], main_addressing_register[rd]);
 #endif
@@ -3423,6 +3490,21 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             lsq->enqueueSpmToS2(
                 spmAddr, s2Addr, true);
         } else {
+            // SPM port restriction: if either side is SPM, the other side
+            // must be a permitted target (gr/reg/s1c/s2). The S2<->SPM
+            // path is already handled above via LSQ.
+            if (src == CTRL_SPM && !ctrl_spm_target_ok(dest)) {
+                fprintf(stderr,
+                    "main PC=%d mv: illegal SPM load dest %d"
+                    " (allowed: gr/reg/s1c/s2)\n", *PC, dest);
+                exit(-1);
+            }
+            if (dest == CTRL_SPM && !ctrl_spm_target_ok(src)) {
+                fprintf(stderr,
+                    "main PC=%d mv: illegal SPM store src %d"
+                    " (allowed: gr/reg/s1c/s2)\n", *PC, src);
+                exit(-1);
+            }
             data = load(src, reg_immBar_flag_1,
                         sext_imm_1, reg_1, simd);
             store(dest, reg_immBar_flag_0,
@@ -3872,13 +3954,11 @@ int* pe_array::get_output_dest(int dest, int rd){
 
 void pe_array::set_output_dest(int dest, int rd, int val) {
     if (dest == CTRL_GR) {
-        main_addressing_register[rd] = val;
+        set_main_gr(rd, val, CTRL_GR, "set_output");
     } else if (dest == CTRL_GR_LO) {
-        int old = main_addressing_register[rd];
-        main_addressing_register[rd] = (old & (int)0xFFFF0000) | (val & 0xFFFF);
+        set_main_gr(rd, val, CTRL_GR_LO, "set_output");
     } else if (dest == CTRL_GR_HI) {
-        int old = main_addressing_register[rd];
-        main_addressing_register[rd] = (old & 0x0000FFFF) | ((val & 0xFFFF) << 16);
+        set_main_gr(rd, val, CTRL_GR_HI, "set_output");
     } else if (dest == CTRL_OUT_BUF) {
         output_buffer[rd] = val;
     } else if (dest == CTRL_OUT_PORT) {
@@ -4003,7 +4083,7 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
         add_a = main_addressing_register[rs1];
         add_b = main_addressing_register[rs2];
         sum = add_a + add_b;
-        main_addressing_register[rd] = sum;
+        set_main_gr(rd, sum, CTRL_GR, "add");
 #ifdef PROFILE
         printf("add gr[%d] gr[%d] gr[%d] (%d %d %d)\n", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -4014,7 +4094,7 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
         add_a = main_addressing_register[rs1];
         add_b = main_addressing_register[rs2];
         sum = add_a - add_b;
-        main_addressing_register[rd] = sum;
+        set_main_gr(rd, sum, CTRL_GR, "sub");
 #ifdef PROFILE
         printf("sub gr[%d] gr[%d] gr[%d] (%d %d %d)\n", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -4025,7 +4105,7 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
         add_a = imm;
         add_b = main_addressing_register[rs2];
         sum = add_a + add_b;
-        main_addressing_register[rd] = sum;
+        set_main_gr(rd, sum, CTRL_GR, "addi");
 #ifdef PROFILE
         printf("addi gr[%d] %d gr[%d] (%d %d %d)\n", rd, imm, rs2, sum, add_a, add_b);
 #endif
@@ -4037,7 +4117,11 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
         for (i = 0; i < 4; i++) {
             rs[i] = main_addressing_register[rs2] & 0xFF;
         }
-        memcpy(&main_addressing_register[rd], rs, 4*sizeof(int8_t));
+        {
+            int new_val;
+            memcpy(&new_val, rs, 4*sizeof(int8_t));
+            set_main_gr(rd, new_val, CTRL_GR, "set_8");
+        }
 #ifdef PROFILE
         printf("set_8 gr[%d] gr[%d] (%d %lx)\n", rd, rs2, main_addressing_register[rs2], main_addressing_register[rd]);
 #endif
@@ -4339,6 +4423,19 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     peCtrlNops = 0;
     controllerNops = 0;
 
+    // Reset WAW trackers across runs — cycle resets to 0 here, so stale
+    // last_cycle values from a prior case would otherwise spuriously match
+    // and false-positive WAW. Also reset PE-side trackers for the same
+    // reason.
+    for (int k = 0; k < MAIN_ADDR_REGISTER_NUM; k++) {
+        main_gr_last_cycle[k] = -1;
+        main_gr_halves[k] = 0;
+        main_gr_origin[k] = nullptr;
+    }
+    for (int p = 0; p < PE_NUM; p++) {
+        if (pe_unit[p]) pe_unit[p]->reset_waw_trackers();
+    }
+
     while (1) {
         cycle++;
         old_PC = main_PC;
@@ -4363,12 +4460,41 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             if (pairStalls) lsqFullStalls++;
         }
 
+        // Inter-slot RAW fix for the controller: slot 1 decodes first
+        // and may commit gr writes (set_main_gr, auto-inc, magic-instr
+        // setups) before slot 0 reads. Snapshot main_addressing_register,
+        // run slot 1, capture deltas, restore so slot 0 reads pre-cycle,
+        // run slot 0, then reapply slot 1's deltas. Slot-0 same-idx
+        // writes still hit the WAW tracker via set_main_gr; we also
+        // detect direct-write overlaps (auto-inc, magic) via delta
+        // intersection at the end.
+        int gr_snap_main[MAIN_ADDR_REGISTER_NUM];
+        memcpy(gr_snap_main, main_addressing_register,
+               MAIN_ADDR_REGISTER_NUM * sizeof(int));
+
         if (!pairStalls) {
             flag = decode(
                 main_instruction_buffer[main_PC][1],
                 &main_PC, simd, setting,
                 main_instruction_setting);
         }
+
+        // Capture slot 1 deltas vs snapshot.
+        int s1_changed[MAIN_ADDR_REGISTER_NUM];
+        int s1_val[MAIN_ADDR_REGISTER_NUM];
+        int s1_n = 0;
+        for (int k = 0; k < MAIN_ADDR_REGISTER_NUM; k++) {
+            if (main_addressing_register[k] != gr_snap_main[k]) {
+                s1_changed[s1_n] = k;
+                s1_val[s1_n] = main_addressing_register[k];
+                s1_n++;
+            }
+        }
+        // Restore so slot 0 reads pre-cycle. Direct write — leaves
+        // main_gr_last_cycle intact so a slot-0 set_main_gr to a slot-1
+        // touched idx still WAW-crashes.
+        memcpy(main_addressing_register, gr_snap_main,
+               MAIN_ADDR_REGISTER_NUM * sizeof(int));
 
         // Pre-PE decode of slot[0]: arithmetic + non-I/O
         // ops. Uses MI_1 filter to skip I/O-dest instrs
@@ -4417,6 +4543,23 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             if (is_cf(op1) && main_PC != old_PC + 1
                 && !is_cf(op0))
                 ; // main_PC already correct
+        }
+
+        // Reapply slot 1 deltas. Detect overlap with slot 0 writes by
+        // comparing against pre-restore snapshot — if both slots wrote
+        // the same idx (e.g. via auto-inc that bypasses set_main_gr),
+        // catch it here.
+        for (int k = 0; k < s1_n; k++) {
+            int idx = s1_changed[k];
+            if (main_addressing_register[idx] != gr_snap_main[idx]) {
+                fprintf(stderr,
+                    "main WAW: gr[%d] written by both slots in cycle %d"
+                    " (slot1=%d, slot0=%d)\n",
+                    idx, cycle, s1_val[k],
+                    main_addressing_register[idx]);
+                exit(-1);
+            }
+            main_addressing_register[idx] = s1_val[k];
         }
 
         pe_unit[0]->load_data = store_data;
