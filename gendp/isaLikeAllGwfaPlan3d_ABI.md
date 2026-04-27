@@ -156,17 +156,20 @@ Notes on table:
 ### 3.2 PE `reg[]` slots
 
 `reg[]` is the PE compute-side register file (32 slots,
-`reg[0..31]`). Plan 3d (post Round 9c + Round 3 amendments) uses
-three disjoint regions:
+`reg[0..31]`). Plan 3d (post Round 9c + Rounds 3/4/5/8 amendments)
+uses three disjoint regions:
 - **`reg[16..27]`** for PE 23 cross-call DEC-1 register-residency
   state (pv/pk/dc/ic/dw/iw/clo/chi/state/pdone/nv/nk; persists across
   PE 23 PING/PONG calls within a per-step dedup phase, gated by the
   `spm[DEDUP_META+8]` cookie protocol of Section 4.3).
-- **`reg[1..15]`** and **`reg[28..31]`** for PE 23 within-call state
-  (M23_RD/RI/PI macro outputs + PI temps + body locals
-  p/n_do/n_io/dtn/don_/itn/ion/db/ib/ad/ai). PE 23 always writes
-  these slots at entry before reading on each call, so cross-magic
-  clobber by PE 8/13/19 is safe.
+- **`reg[1..15]`** and **`reg[28..31]`** for PE-side within-call
+  scratch SHARED by ALL FIVE Plan 3d magics: m19, m20, m21, m22, m23.
+  Each magic writes these slots at entry before reading on each
+  call, so cross-magic clobber by other magics in the same case is
+  safe by construction. Per-magic mappings are documented in the
+  reg[1..15] / reg[28..31] table rows below; an extensive in-code
+  role header at the top of each magic body in `pe.cpp` is the
+  authoritative source.
 - **`reg[0]`** is the hardwired-zero slot (preserved across all
   magics).
 
@@ -187,7 +190,7 @@ magic bodies (loads / stores / scalar arithmetic on `reg[]`).
 | Slot          | Magic | Semantic role                                                | Status |
 |---------------|-------|--------------------------------------------------------------|--------|
 | reg[0]        | -     | hardwired 0                                                  | PRESERVED |
-| reg[1..15]    | (frozen reference m8/m13 cross-call; m19 + m20 + m21 + m22 + m23 within-call body-local scratch — Round 3 / 4 / 5 / 8 amendments) | reg[1..11] are written by PE 8 (frozen ref pe.cpp:890-891 sets reg[10]=gs_base, reg[11]=q_base; m8_outer_loop body sets reg[1, 2, 6, 7, 8, 9]) and PE 13 (frozen ref pe.cpp:1226-1227 sets reg[10]=gs_base, reg[11]=q_base; m13 body sets reg[1, 6, 7]). DEC-1 cross-call state therefore CANNOT use reg[1..10]; Round 9c relocates DEC-1 state to reg[16..27]. m23 mapping (Round 3): reg[1]=M23_RI lo / M23_RD vd, reg[2]=M23_RI hi / M23_RD k, reg[3]=M23_PI lo, reg[4]=M23_PI hi, reg[5..8]=M23_PI tc_/tw_/tt_/tb_, reg[9]=p, reg[10]=n_do, reg[11]=n_io, reg[12]=dtn, reg[13]=don_, reg[14]=itn, reg[15]=ion. m22 mapping (Round 4): reg[1]=ai, reg[2]=bi, reg[3]=aw, reg[4]=bw, reg[5]=a_n, reg[6]=b_n, reg[7]=ab, reg[8]=bb, reg[9]=oi, reg[10]=ai0, reg[11]=bi0, reg[12]=out_lo, reg[13]=out_hi, reg[14]=bvd_0, reg[15]=bvd_1. m19 mapping (Round 5): reg[1]=d_idx, reg[2]=n_A, reg[3]=n_B, reg[4]=n_HA, reg[5]=arc_idx, reg[6]=vd, reg[7]=k, reg[8]=nv, reg[9]=n_ext, reg[10]=a_idx, reg[11]=packed_vw, reg[12]=ow, reg[13]=ts_off, reg[14]=hkey, reg[15]=absent. m20 mapping (Round 8 amendment, aligns with in-code header pe.cpp:1425-1428): reg[1]=vd0, reg[2]=vd1, reg[3]=counts[bin] RMW scratch, reg[4]=k0/k1 dropped (loaded but unused), reg[7]=counts RMW scratch (alternate slot — see in-code at line 1466). m21 mapping (Round 8 amendment, aligns with in-code header pe.cpp:1527-1535): reg[1]=vd0/vd, reg[2]=k0/k, reg[3]=vd1, reg[4]=k1, reg[5]=off0/off, reg[6]=off1, reg[7]=bin_cursor RMW scratch, reg[8]=tile_bin_count RMW scratch. All 5 magics SHARE the band — magics fire serially (PE 8 → PE 19 → PE 13 → PE 20 → PE 21 → PE 22 → magic 29 → PE 23), each overwrites at entry. | EXTENDED  |
+| reg[1..15]    | (frozen reference m8/m13 cross-call; m19 + m20 + m21 + m22 + m23 within-call body-local scratch — Round 3 / 4 / 5 / 8 amendments) | reg[1..11] are written by PE 8 (frozen ref pe.cpp:890-891 sets reg[10]=gs_base, reg[11]=q_base; m8_outer_loop body sets reg[1, 2, 6, 7, 8, 9]) and PE 13 (frozen ref pe.cpp:1226-1227 sets reg[10]=gs_base, reg[11]=q_base; m13 body sets reg[1, 6, 7]). DEC-1 cross-call state therefore CANNOT use reg[1..10]; Round 9c relocates DEC-1 state to reg[16..27]. m23 mapping (Round 3): reg[1]=M23_RI lo / M23_RD vd, reg[2]=M23_RI hi / M23_RD k, reg[3]=M23_PI lo, reg[4]=M23_PI hi, reg[5..8]=M23_PI tc_/tw_/tt_/tb_, reg[9]=p, reg[10]=n_do, reg[11]=n_io, reg[12]=dtn, reg[13]=don_, reg[14]=itn, reg[15]=ion. m22 mapping (Round 4): reg[1]=ai, reg[2]=bi, reg[3]=aw, reg[4]=bw, reg[5]=a_n, reg[6]=b_n, reg[7]=ab, reg[8]=bb, reg[9]=oi, reg[10]=ai0, reg[11]=bi0, reg[12]=out_lo, reg[13]=out_hi, reg[14]=bvd_0, reg[15]=bvd_1. m19 mapping (Round 5): reg[1]=d_idx, reg[2]=n_A, reg[3]=n_B, reg[4]=n_HA, reg[5]=arc_idx, reg[6]=vd, reg[7]=k, reg[8]=nv, reg[9]=n_ext, reg[10]=a_idx, reg[11]=packed_vw, reg[12]=ow, reg[13]=ts_off, reg[14]=hkey, reg[15]=absent. m20 mapping (Round 9 amendment per executable body pe.cpp:1453-1480, supersedes the Round 8 mapping which copied a stale in-code header): reg[1]=vd0 (mvd-pair load with reg[2]), reg[2]=k0 (mvd-pair companion; consumed only by the load — value is "unused" downstream but the register is still the load destination), reg[3]=vd1 (mvd-pair load with reg[4]), reg[4]=k1 (mvd-pair companion; same "loaded but unused" status as reg[2]), reg[7]=counts[bin0/bin1] RMW scratch (load -> +1 -> store at lines 1466/1469/1471 and 1475/1478/1480). m21 mapping (Round 8 amendment, aligns with in-code header pe.cpp:1527-1535): reg[1]=vd0/vd, reg[2]=k0/k, reg[3]=vd1, reg[4]=k1, reg[5]=off0/off, reg[6]=off1, reg[7]=bin_cursor RMW scratch, reg[8]=tile_bin_count RMW scratch. All 5 magics SHARE the band — magics fire serially (PE 8 → PE 19 → PE 13 → PE 20 → PE 21 → PE 22 → magic 29 → PE 23), each overwrites at entry. | EXTENDED  |
 | reg[11]       | m8/m13 | q_base (gwfa frozen reference; not used by m22/m23) — m23 within-call: see reg[1..15] row | PRESERVED |
 | reg[16]       | m23   | pv (DEDUP_META+0), DEC-1 register-resident — Round 9c       | NEW       |
 | reg[17]       | m23   | pk (DEDUP_META+1), DEC-1 register-resident — Round 9c       | NEW       |

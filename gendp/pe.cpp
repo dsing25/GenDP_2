@@ -1422,10 +1422,14 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //  5    | bin0 (≤ 15)
             //  6    | bin1 (≤ 15)
             //
-            // reg[] | role
-            //  1    | vd0
-            //  2    | vd1
-            //  3    | counts[] read-modify-write scratch
+            // reg[] | role (Plan 3d Round 9 alignment with executable
+            //         body — earlier in-code header had stale slot
+            //         assignments that didn't match the lowered code)
+            //  1    | vd0           (mvd-pair load with reg[2])
+            //  2    | k0            (mvd-pair load companion; unused)
+            //  3    | vd1           (mvd-pair load with reg[4])
+            //  4    | k1            (mvd-pair load companion; unused)
+            //  7    | counts[bin] RMW scratch (load -> +1 -> store)
             int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
 
             // === INIT ===
