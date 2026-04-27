@@ -10,14 +10,42 @@ extern "C" {
 #include <iostream>
 #include "gssw_simd4.h"
 
+// SPM port restriction (PE side): an SPM load may write only to gr (incl
+// gr_lo/gr_hi), reg, or out_port; an SPM store may take its data only from
+// gr (incl gr_lo/gr_hi) or reg. Anything else would require driving the
+// shared SPM port from a path that hardware does not provide.
+static bool pe_spm_target_ok(int pos, bool is_load) {
+    if (pos == CTRL_REG || pos == CTRL_GR
+        || pos == CTRL_GR_LO || pos == CTRL_GR_HI) return true;
+    if (is_load && pos == CTRL_OUT_PORT) return true;
+    return false;
+}
+
 bool check_legal_mv(int src, int dest) {
-    //TODO come back and add this. Right now some traces (cough cough poa) are illegal
-    //can't move between SPM and out or in ports
-    //if ((src == CTRL_SPM && (dest == CTRL_IN_PORT || dest == CTRL_OUT_PORT)) ||
-    //    (dest == CTRL_SPM && (src == CTRL_IN_PORT || src == CTRL_OUT_PORT))) {
-    //    return false;
-    //}
+    // SPM load: src is SPM, dest is the writeback target.
+    if (src == CTRL_SPM && dest != CTRL_SPM) return pe_spm_target_ok(dest, true);
+    // SPM store: dest is SPM, src is the data source.
+    if (dest == CTRL_SPM && src != CTRL_SPM) return pe_spm_target_ok(src, false);
     return true;
+}
+
+// Returns true if `instruction` is a data-movement op whose src or dest
+// type field is CTRL_SPM. Used by pe::run() to detect two SPM accesses
+// issued by a single PE in one VLIW cycle (illegal — one memory port).
+// Magic instructions bypass the normal port and are never counted.
+static bool slot_does_spm_access(unsigned long instruction) {
+    if (instruction & ((unsigned long)1 << 63)) return false;  // magic
+    int opcode = instruction & ((1 << CTRL_OPCODE_WIDTH) - 1);
+    bool is_dm = (opcode == 4 || opcode == 5
+                  || opcode == CTRL_MVD || opcode == CTRL_MVI
+                  || opcode == CTRL_MVDQ || opcode == CTRL_MVDQI
+                  || opcode == CTRL_MVI2);
+    if (!is_dm) return false;
+    constexpr int W = INSTRUCTION_WIDTH;
+    constexpr int A = MEMORY_COMPONENTS_ADDR_WIDTH;
+    int dest_pos = (instruction >> (W - A)) & ((1 << A) - 1);
+    int src_pos  = (instruction >> (W - 2 * A)) & ((1 << A) - 1);
+    return src_pos == CTRL_SPM || dest_pos == CTRL_SPM;
 }
 
 pe::pe(int _id, SPM* spm, int _pc_mode) {
@@ -40,6 +68,18 @@ pe::~pe() {
     delete ctrl_instr_buffer_unit;
     delete addr_regfile_unit;
     delete regfile_unit;
+}
+
+void pe::reset_waw_trackers() {
+    for (int k = 0; k < ADDR_REGISTER_NUM; k++) {
+        addr_regfile_unit->last_write_cycle[k] = -1;
+        addr_regfile_unit->halves_written[k] = 0;
+        addr_regfile_unit->last_write_origin[k] = nullptr;
+    }
+    for (int k = 0; k < REGFILE_ADDR_NUM; k++) {
+        regfile_unit->last_write_cycle[k] = -1;
+        regfile_unit->last_write_origin[k] = nullptr;
+    }
 }
 
 void pe::reset() {
@@ -78,7 +118,7 @@ void pe::recieve_spm_data(int data[LINE_SIZE]){
                 int val = data[req.spm_addr & 1];
                 if (req.two_bit_extract)
                     val = (val >> req.bp_shift) & 0x3;
-                regfile_unit->register_file[req.addr] = val;
+                regfile_unit->set_delayed(req.addr, val);
                 }
 #ifdef PROFILE
                 printf("reg[%d] = %d\n",
@@ -86,7 +126,7 @@ void pe::recieve_spm_data(int data[LINE_SIZE]){
 #endif
             } else {
                 for (int i = 0; i < LINE_SIZE; i++)
-                    regfile_unit->register_file[req.addr + i] = data[i];
+                    regfile_unit->set_delayed(req.addr + i, data[i]);
 #ifdef PROFILE
                 printf("reg[%d,%d] = [%d,%d]\n",
                     req.addr, req.addr+1, data[0], data[1]);
@@ -100,7 +140,7 @@ void pe::recieve_spm_data(int data[LINE_SIZE]){
                 int val = data[req.spm_addr & 1];
                 if (req.two_bit_extract)
                     val = (val >> req.bp_shift) & 0x3;
-                addr_regfile_unit->st(req.addr, val, req.dst);
+                addr_regfile_unit->st_delayed(req.addr, val, req.dst);
 #ifdef PROFILE
                 printf("gr[%d] = %d\n",
                     req.addr, data[req.spm_addr & 1]);
@@ -110,7 +150,7 @@ void pe::recieve_spm_data(int data[LINE_SIZE]){
                 // indices (previously only word 0 was written, leaving
                 // the second half untouched — broke lowered GSSW).
                 for (int i = 0; i < LINE_SIZE; i++)
-                    addr_regfile_unit->st(req.addr + i, data[i], req.dst);
+                    addr_regfile_unit->st_delayed(req.addr + i, data[i], req.dst);
 #ifdef PROFILE
                 printf("gr[%d,%d] = [%d,%d]\n",
                     req.addr, req.addr + 1, data[0], data[1]);
@@ -255,20 +295,19 @@ void pe::run(int simd) {
     }
 
 
-    // Write compute outputs to gr if addressed (addr >= 32).
-    // Skip when the slot is halted to avoid spurious gr writes.
+    // Stage compute writes to gr — defer commit until after control decode
+    // so that control reads see pre-cycle gr values (concurrent semantics).
+    int comp_gr_idx[2] = {-1, -1};
+    int comp_gr_pos[2] = {0, 0};
     for (int s = 0; s < 2; s++) {
         if (op[s][0] == HALT) continue;
         int addr = output_addr[s];
-        if (addr >= 64)
-            addr_regfile_unit->st(addr - 64, regfile_unit->write_data[s], CTRL_GR_HI);
-        else if (addr >= 48)
-            addr_regfile_unit->st(addr - 48, regfile_unit->write_data[s], CTRL_GR_LO);
-        else if (addr >= 32)
-            addr_regfile_unit->st(addr - 32, regfile_unit->write_data[s]);
+        if (addr >= 64)      { comp_gr_idx[s] = addr - 64; comp_gr_pos[s] = CTRL_GR_HI; }
+        else if (addr >= 48) { comp_gr_idx[s] = addr - 48; comp_gr_pos[s] = CTRL_GR_LO; }
+        else if (addr >= 32) { comp_gr_idx[s] = addr - 32; comp_gr_pos[s] = CTRL_GR; }
     }
-    regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 0);
-    regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 1);
+    // regfile_unit->write_addr/write_data already hold staged compute reg
+    // writes — leave them; commit moved below to after control decode.
 #ifdef PROFILE
     printf("\nPE[%d]\t", id);
 #endif
@@ -283,8 +322,72 @@ void pe::run(int simd) {
         exit(-1);
     }
     int old_PC = PC[0];
+    // Structural hazard: PE has one SPM port — at most one SPM access per
+    // VLIW cycle. Check both slots before either dispatches.
+    if (slot_does_spm_access(ctrl_instr_buffer_unit->buffer[PC[0]][0])
+        && slot_does_spm_access(ctrl_instr_buffer_unit->buffer[PC[1]][1])) {
+        fprintf(stderr,
+            "PE[%d] cycle %d PC=[%d/%d]: two SPM accesses in one VLIW"
+            " cycle — only one memory port per PE.\n",
+            id, cycle, PC[0], PC[1]);
+        exit(-1);
+    }
+    // Inter-slot RAW fix: both control slots must observe the same
+    // pre-cycle gr/reg state. Slot 1 decodes first and may commit gr/reg
+    // writes during decode (e.g. gr_lo/gr_hi, arithmetic dest=gr); without
+    // intervention slot 0 would read those new values. Snapshot, run slot
+    // 1, capture its deltas, restore so slot 0 reads pre-cycle, run slot
+    // 0, then reapply slot 1's deltas. Slot-0 same-idx writes still hit
+    // the WAW tracker (last_write_cycle from slot 1 is preserved across
+    // restore) so overlap crashes correctly.
+    int gr_snap[ADDR_REGISTER_NUM];
+    int reg_snap[REGFILE_ADDR_NUM];
+    memcpy(gr_snap, addr_regfile_unit->buffer,
+           ADDR_REGISTER_NUM * sizeof(int));
+    memcpy(reg_snap, regfile_unit->register_file,
+           REGFILE_ADDR_NUM * sizeof(int));
+
     decode(ctrl_instr_buffer_unit->buffer[PC[1]][1], &PC[1], src_dest[1], &ctrl_op[1], simd, &ctrl_write_addrs[0], &ctrl_write_data[0]);
+
+    // Capture slot 1's gr/reg deltas (changes vs snapshot).
+    int s1_gr_changed[ADDR_REGISTER_NUM];
+    int s1_gr_val[ADDR_REGISTER_NUM];
+    int s1_n_gr = 0;
+    for (int k = 0; k < ADDR_REGISTER_NUM; k++) {
+        if (addr_regfile_unit->buffer[k] != gr_snap[k]) {
+            s1_gr_changed[s1_n_gr] = k;
+            s1_gr_val[s1_n_gr] = addr_regfile_unit->buffer[k];
+            s1_n_gr++;
+        }
+    }
+    int s1_reg_changed[REGFILE_ADDR_NUM];
+    int s1_reg_val[REGFILE_ADDR_NUM];
+    int s1_n_reg = 0;
+    for (int k = 0; k < REGFILE_ADDR_NUM; k++) {
+        if (regfile_unit->register_file[k] != reg_snap[k]) {
+            s1_reg_changed[s1_n_reg] = k;
+            s1_reg_val[s1_n_reg] = regfile_unit->register_file[k];
+            s1_n_reg++;
+        }
+    }
+
+    // Restore so slot 0 sees pre-cycle. Direct buffer write — leaves the
+    // WAW tracker (last_write_cycle) intact, so a slot-0 write to any idx
+    // slot 1 wrote will still crash via the instrumented st()/set().
+    memcpy(addr_regfile_unit->buffer, gr_snap,
+           ADDR_REGISTER_NUM * sizeof(int));
+    memcpy(regfile_unit->register_file, reg_snap,
+           REGFILE_ADDR_NUM * sizeof(int));
+
     decode(ctrl_instr_buffer_unit->buffer[PC[0]][0], &PC[0], src_dest[0], &ctrl_op[0], simd, &ctrl_write_addrs[1], &ctrl_write_data[1]);
+
+    // Reapply slot 1's deltas. Any idx slot 0 also wrote would already
+    // have crashed via WAW. So at this point the two delta sets are
+    // disjoint and we can reapply slot 1's via direct write.
+    for (int k = 0; k < s1_n_gr; k++)
+        addr_regfile_unit->buffer[s1_gr_changed[k]] = s1_gr_val[k];
+    for (int k = 0; k < s1_n_reg; k++)
+        regfile_unit->register_file[s1_reg_changed[k]] = s1_reg_val[k];
 
     // Branch-as-group: both VLIW slots must agree on control flow
     auto is_ctrl_flow = [](int op) {
@@ -307,6 +410,23 @@ void pe::run(int simd) {
 
     // Track if PE is halted (both slots executing halt instruction)
     halted = (ctrl_op[0] == CTRL_HALT && ctrl_op[1] == CTRL_HALT);
+
+    // Commit deferred compute writes now that control decode has consumed
+    // its pre-cycle gr/reg view. Instrumented st()/set() detects any WAW
+    // collision against control writes that already committed during decode.
+    for (int s = 0; s < 2; s++) {
+        if (comp_gr_idx[s] >= 0)
+            addr_regfile_unit->st(comp_gr_idx[s],
+                regfile_unit->write_data[s], comp_gr_pos[s], "comp");
+    }
+    if (regfile_unit->write_addr[0] >= 0
+        && regfile_unit->write_addr[0] < REGFILE_ADDR_NUM)
+        regfile_unit->set(regfile_unit->write_addr[0],
+            regfile_unit->write_data[0], "comp");
+    if (regfile_unit->write_addr[1] >= 0
+        && regfile_unit->write_addr[1] < REGFILE_ADDR_NUM)
+        regfile_unit->set(regfile_unit->write_addr[1],
+            regfile_unit->write_data[1], "comp");
 
     addr_regfile_unit->write(ctrl_write_addrs, ctrl_write_data, CTRL_REGFILE_WRITE_PORTS);
 
@@ -1974,7 +2094,7 @@ m23_end:    ;
                 fprintf(stderr, "PE[%d] set_8 reg[%d] out of range\n", id, rd);
                 exit(-1);
             }
-            regfile_unit->register_file[rd] = broadcast;
+            regfile_unit->set(rd, broadcast, "set_8");
         } else if (dest == CTRL_GR
                 || dest == CTRL_GR_LO
                 || dest == CTRL_GR_HI) {
