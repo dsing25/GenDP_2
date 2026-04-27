@@ -155,12 +155,17 @@ Notes on table:
 
 ### 3.2 PE `reg[]` slots
 
-`reg[]` is the PE compute-side register file (32 slots). Plan 3d
-restricts itself to the addressing-capable subset (`reg[0..15]` per
-the simulator's compute trace). Compute instructions are deferred per
-rule 12; this artifact reserves `reg[]` slots only for state that
-must persist across ISA lines and survive M23_RD / M23_RI / M23_PI
-macro boundaries.
+`reg[]` is the PE compute-side register file (32 slots,
+`reg[0..31]`). Plan 3d uses two disjoint regions of this file:
+- **`reg[0..15]`** for cross-magic state that must persist across ISA
+  lines and survive M23_RD / M23_RI / M23_PI macro boundaries (PE 23
+  DEC-1 register-residency state).
+- **`reg[16..31]`** as the PE 21 sort-cursor band (Section 3.3); not
+  used by any other Plan 3d magic.
+
+Compute instructions are deferred per rule 12; this artifact only
+reserves `reg[]` slots for addressing-trace state used by lowered
+magic bodies (loads / stores / scalar arithmetic on `reg[]`).
 
 | Slot          | Magic | Semantic role                                                | Status |
 |---------------|-------|--------------------------------------------------------------|--------|
@@ -175,7 +180,7 @@ macro boundaries.
 | reg[8]        | m23   | state lo / pdone hi packed, DEC-1 register-resident          | NEW       |
 | reg[9]        | m23   | nv (next vd), DEC-1 register-resident                        | NEW       |
 | reg[10]       | m23   | nk (next k), DEC-1 register-resident                         | NEW       |
-| reg[11]       | m19   | M23_RD/RI/PI macro intermediate (caller-dead at m23 boundary) | NEW       |
+| reg[11]       | m23   | M23_RD/RI/PI macro intermediate temp (caller-dead on m23 magic boundary; reusable by m19/m20/m21/m22 as scratch since PE 23 is dead-on-entry to those magics) | NEW       |
 | reg[12..15]   | -     | reserved; available for waiver-driven temp expansion         | NEW       |
 | reg[16..31]   | m21   | bin_cursors[0..15] — per-PE 16-entry SORT_RADIX_BINS cursor band (see Section 3.3) | NEW       |
 

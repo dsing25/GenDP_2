@@ -17,6 +17,20 @@ extern "C" {
 #include <iostream>
 #ifdef PLAN3D_TRACE_SNAPSHOT
 #include <fstream>
+namespace {
+inline std::ofstream& plan3d_snap_pe19() {
+    static std::ofstream s("plan3d_snapshot_pe19.txt", std::ios::app);
+    return s;
+}
+inline std::ofstream& plan3d_snap_pe22() {
+    static std::ofstream s("plan3d_snapshot_pe22.txt", std::ios::app);
+    return s;
+}
+inline std::ofstream& plan3d_snap_pe23() {
+    static std::ofstream s("plan3d_snapshot_pe23.txt", std::ios::app);
+    return s;
+}
+}
 #endif
 
 bool check_legal_mv(int src, int dest) {
@@ -1640,15 +1654,14 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 #ifdef PLAN3D_TRACE_SNAPSHOT
             // Frozen observable dump: MERGE_META[0..8] + spm[976..983].
             {
-                static std::ofstream snap22("plan3d_snapshot_pe22.txt",
-                                             std::ios::app);
+                std::ofstream &snap22 = plan3d_snap_pe22();
                 snap22 << "pe22 pe=" << id;
                 for (int i = 0; i <= 8; i++)
                     snap22 << " MM[" << i << "]=" << spm[MERGE_META + i];
                 snap22 << " spm976_981=";
                 for (int i = 976; i <= 981; i++) snap22 << spm[i] << ",";
                 snap22 << " spm982=" << spm[982]
-                       << " spm983=" << spm[983] << "\n";
+                       << " spm983=" << spm[983] << std::endl;
             }
 #endif
         } else if (magic_id == 23) {
@@ -1692,13 +1705,12 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             {
                 static int dumped_entry[4] = {0, 0, 0, 0};
                 if ((magic_mask & 1) == 0 && !dumped_entry[id]) {
-                    static std::ofstream snap23(
-                        "plan3d_snapshot_pe23.txt", std::ios::app);
+                    std::ofstream &snap23 = plan3d_snap_pe23();
                     snap23 << "pe23 pe=" << id << " phase=entry";
                     for (int i = 0; i < 20; i++)
                         snap23 << " dm[" << i << "]="
                                << spm[DEDUP_META + i];
-                    snap23 << "\n";
+                    snap23 << std::endl;
                     dumped_entry[id] = 1;
                 }
             }
@@ -1939,13 +1951,12 @@ m23_end:    ;
             {
                 static int dumped_exit[4] = {0, 0, 0, 0};
                 if ((magic_mask & 1) == 0 && !dumped_exit[id]) {
-                    static std::ofstream snap23(
-                        "plan3d_snapshot_pe23.txt", std::ios::app);
+                    std::ofstream &snap23 = plan3d_snap_pe23();
                     snap23 << "pe23 pe=" << id << " phase=exit";
                     for (int i = 0; i < 20; i++)
                         snap23 << " dm[" << i << "]="
                                << spm[DEDUP_META + i];
-                    snap23 << "\n";
+                    snap23 << std::endl;
                     dumped_exit[id] = 1;
                 }
             }
@@ -2136,8 +2147,7 @@ m23_end:    ;
 #ifdef PLAN3D_TRACE_SNAPSHOT
             // Frozen observable dump: FIN0_META + first N words of A/B/HA.
             {
-                static std::ofstream snap19("plan3d_snapshot_pe19.txt",
-                                             std::ios::app);
+                std::ofstream &snap19 = plan3d_snap_pe19();
                 snap19 << "pe19 pe=" << id;
                 for (int i = 0; i <= 4; i++)
                     snap19 << " META[" << i << "]=" << fspm[FIN0_META + i];
@@ -2159,7 +2169,7 @@ m23_end:    ;
                 for (int i = 0; i < dH; i++)
                     snap19 << fspm[FIN0_OUT_HA + 2*i] << ","
                            << fspm[FIN0_OUT_HA + 2*i + 1] << ";";
-                snap19 << "\n";
+                snap19 << std::endl;
             }
 #endif
         m19_done: ;
