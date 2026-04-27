@@ -1803,10 +1803,24 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // many cycles later (exhaustion checks + gpos compute +
             // for-loop init intervene), so boundary reads are AC-7
             // legal independent of the emit-block structural note.
+            // Round 5 reviewer P1: split the dual-SPM compare into
+            // staged loads (one SPM port per cycle) with explicit settle
+            // before the < comparison. Declarations hoisted outside the
+            // m22_switch_a/b goto labels' scope.
             uint32_t out_lo, out_hi;
-            if (ai >= a_n || (bi < b_n
-                    && (uint32_t)spm[bb+bi*2]
-                       < (uint32_t)spm[ab+ai*2])) {
+            uint32_t head_b_lo, head_a_lo;
+            head_a_lo = 0; head_b_lo = 0;
+            if (ai < a_n) {
+                head_a_lo = (uint32_t)spm[ab+ai*2];
+                //NOP                                    // SPM settle
+                //NOP                                    // SPM settle
+            }
+            if (bi < b_n) {
+                head_b_lo = (uint32_t)spm[bb+bi*2];
+                //NOP                                    // SPM settle
+                //NOP                                    // SPM settle
+            }
+            if (ai >= a_n || (bi < b_n && head_b_lo < head_a_lo)) {
                 out_lo = (uint32_t)spm[bb+bi*2];       // SPM load cycle N slot 0
                 out_hi = (uint32_t)spm[bb+bi*2+1];     // SPM load cycle N slot 1
                 //NOP                                    // SPM cycle N+1 slot 0
@@ -1890,9 +1904,16 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             if (ai >= a_n && bi >= b_n) goto m22_done;
             goto m22_top;
         m22_done:
+            // Round 5 reviewer P1 fix: SPM port gaps between m22_done
+            // publishes. Adjacent stores (MERGE_META+0/+1 mvd-pair,
+            // MERGE_META+4 isolated, MERGE_META+7/+8 mvd-pair, spm[982]
+            // isolated) need explicit settle gaps per 1-port-per-PE rule.
             spm[MERGE_META+0]=ai; spm[MERGE_META+1]=bi;
+            //NOP                                          // SPM port gap
             spm[MERGE_META+4]=oi;
+            //NOP                                          // SPM port gap
             spm[MERGE_META+7]=aw; spm[MERGE_META+8]=bw;
+            //NOP                                          // SPM port gap
             spm[982] = cum_oi + oi;
             // Plan 3d l8d: GWFA_AC5_DUMP env-gated dump removed
             // (AC-3 — env-gated debug counters / fopen branches not
@@ -2361,18 +2382,24 @@ m23_end:    ;
                         goto m19_bkt_done;
                     }
                 m19_bkt_3:
-                    if ((uint32_t)bkt[3] == hkey) {
+                    {
+                    int probe3 = bkt[3];
+                    //NOP                                          // SPM settle
+                    //NOP                                          // SPM settle
+                    if ((uint32_t)probe3 == hkey) {
                         absent = 0; goto m19_bkt_done;
                     }
-                    if (bkt[3] != (int)0xFFFFFFFF) goto m19_bkt_done;
-                    {
-                        bkt[3] = (int)hkey;
-                        absent = 1;
-                        fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
-                        uint32_t h2 = hkey * 2654435769U >> (32 - 22);
-                        uint32_t b = (h2 >> 2) & 0xFFFFF;
-                        fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
-                        n_HA++;
+                    if (probe3 != (int)0xFFFFFFFF) goto m19_bkt_done;
+                    bkt[3] = (int)hkey;
+                    //NOP                                          // SPM port gap
+                    absent = 1;
+                    fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
+                    //NOP                                          // SPM port gap
+                    uint32_t h2 = hkey * 2654435769U >> (32 - 22);
+                    uint32_t b = (h2 >> 2) & 0xFFFFF;
+                    // i != 0: no new-bucket flag
+                    fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
+                    n_HA++;
                     }
                 m19_bkt_done: ;
                     if (absent == -1) {
