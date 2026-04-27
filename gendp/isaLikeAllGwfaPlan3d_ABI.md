@@ -181,7 +181,8 @@ magic bodies (loads / stores / scalar arithmetic on `reg[]`).
 | reg[9]        | m23   | nv (next vd), DEC-1 register-resident                        | NEW       |
 | reg[10]       | m23   | nk (next k), DEC-1 register-resident                         | NEW       |
 | reg[11]       | m23   | M23_RD/RI/PI macro intermediate temp (caller-dead on m23 magic boundary; reusable by m19/m20/m21/m22 as scratch since PE 23 is dead-on-entry to those magics) | NEW       |
-| reg[12..15]   | -     | reserved; available for waiver-driven temp expansion         | NEW       |
+| reg[12]       | m23   | DEC-1 init cookie (Round 9 amendment): 0 = first PE 23 call this case → load moved DEDUP_META slots from SPM into reg[1..10]; 1 = subsequent call → load from reg[1..10]. pe::reset() clears reg[12]=0 at case boundary. Required because pv=0 is a legitimate diag value (not the 0xFFFFFFFFU sentinel from magic 29). | NEW       |
+| reg[13..15]   | -     | reserved; available for waiver-driven temp expansion         | NEW       |
 | reg[16..31]   | (none, post-amendment) | Reserved-but-unused after Round 3 amendment that moved PE 21 bin_cursors out of this band into SPM. Reason: runtime-indexed `reg[16 + bin]` access is not a real ISA op (gendp-isa-reviewer P1, l8cv-rev). PE 21 cursors now live at `spm[SORT_META + 34..49]` (see Section 3.3). | EXTENDED  |
 
 ### 3.3 PE 21 `bin_cursors[16]` band — Round 3 amendment (SPM-resident)
