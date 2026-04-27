@@ -172,8 +172,7 @@ magic bodies (loads / stores / scalar arithmetic on `reg[]`).
 | reg[0]        | -     | hardwired 0                                                  | PRESERVED |
 | reg[1..10]    | (frozen reference m8/m13 only, post Round 9c amendment) | reg[1..11] are written by PE 8 (frozen ref pe.cpp:890-891 sets reg[10]=gs_base, reg[11]=q_base; m8_outer_loop body sets reg[1, 2, 6, 7, 8, 9]) and PE 13 (frozen ref pe.cpp:1226-1227 sets reg[10]=gs_base, reg[11]=q_base; m13 body sets reg[1, 6, 7]). Within a single test case, multi-step GWFA expansion fires PE 8/PE 13 BETWEEN dedup phases (each expansion step has its own phase 1 / phase 2 / sort / merge / dedup sequence), so the original DEC-1 reg[1..10] mapping is INFEASIBLE — reg[1..11] are clobbered between PE 23 calls of consecutive dedup phases. Round 9c amendment relocates DEC-1 state to reg[16..27] (no other PE-side magic touches that band). | EXTENDED  |
 | reg[11]       | m8/m13 | q_base (gwfa frozen reference; not used by m22/m23)         | PRESERVED |
-| reg[12]       | m23   | DEC-1 init cookie (Round 9a amendment, retained Round 9c): 0 = first PE 23 call this case → load moved DEDUP_META slots from SPM into reg[16..27] (per Round 9c re-mapping); 1 = subsequent call → load from reg[16..27]. pe::reset() clears reg[12]=0 at case boundary. Required because pv=0 is a legitimate diag value (not the 0xFFFFFFFFU sentinel from magic 29). | NEW       |
-| reg[13..15]   | -     | reserved; available for waiver-driven temp expansion         | NEW       |
+| reg[12..15]   | -     | reserved; available for waiver-driven temp expansion. (Round 2 amendment supersedes the Round 9a `reg[12]` per-case init cookie: DEC-1 now uses the SPM-resident `DEDUP_META+8` per-step phase cookie set by controller magic 29 — see Section 4.3 — so a per-case PE-side cookie is redundant and reg[12] is freed.) | NEW       |
 | reg[16]       | m23   | pv (DEDUP_META+0), DEC-1 register-resident — Round 9c       | NEW       |
 | reg[17]       | m23   | pk (DEDUP_META+1), DEC-1 register-resident — Round 9c       | NEW       |
 | reg[18]       | m23   | dc (DEDUP_META+4), DEC-1 register-resident — Round 9c       | NEW       |
@@ -186,7 +185,6 @@ magic bodies (loads / stores / scalar arithmetic on `reg[]`).
 | reg[25]       | m23   | pdone (DEDUP_META+17), full int — Round 9c                   | NEW       |
 | reg[26]       | m23   | nv (DEDUP_META+18), DEC-1 register-resident — Round 9c       | NEW       |
 | reg[27]       | m23   | nk (DEDUP_META+19), DEC-1 register-resident — Round 9c       | NEW       |
-| reg[13..15]   | -     | reserved; available for waiver-driven temp expansion         | NEW       |
 | reg[28..31]   | (none, post Round 3 / Round 9c amendments) | Reserved-but-unused after Round 3 freed reg[16..31] from PE 21 bin_cursors (see Section 3.3) and Round 9c relocated PE 23 DEC-1 state into reg[16..27]. Available for future waiver-driven expansion. | EXTENDED  |
 
 ### 3.3 PE 21 `bin_cursors[16]` band — Round 3 amendment (SPM-resident)
@@ -274,7 +272,7 @@ cookie (see Section 4.3).
 | DEDUP_META+5   | ic (intv cursor)                          | **MOVED** to reg[19]                                                                | (envelope evidence)               |
 | DEDUP_META+6   | dw (diag ping-pong selector 0/1)          | **MOVED** to reg[20] full int (no half-pack — Round 9c)                             | (envelope evidence)               |
 | DEDUP_META+7   | iw (intv ping-pong selector 0/1)          | **MOVED** to reg[21] full int (no half-pack — Round 9c)                             | (envelope evidence)               |
-| DEDUP_META+8   | dead (kept zero by magic 32)              | **UNCHANGED** in SPM (dead, kept 0)                                                 | Plan 2b Milestone B               |
+| DEDUP_META+8   | per-step phase init cookie (Round 2 amendment) | **REPURPOSED** — controller magic 29 sets this slot to `0xFFFFFFFFU` at each per-step dedup init (`pe_array.cpp:6513`); PE 23 entry reads it, and on sentinel-hit performs a one-shot seed of `reg[16..27]` from `spm[DEDUP_META+0/+1/+4/+5/+6/+7/+14..+19]` then writes the slot back to 0. Magic 32 still zeros the slot defensively at end-of-dedup so it stays clean across non-dedup phases. | Round 2 amendment |
 | DEDUP_META+9   | dead (kept zero by magic 32)              | **UNCHANGED** in SPM (dead, kept 0)                                                 | Plan 2b Milestone B               |
 | DEDUP_META+10  | dtn (diag tile current count)             | **UNCHANGED** in SPM                                                                | Read/write by controller magics 30/31 at `pe_array.cpp:5817-5916, 6163-6184` |
 | DEDUP_META+11  | don_ (diag tile other-buffer count)       | **UNCHANGED** in SPM                                                                | (same controller refill evidence) |
@@ -315,25 +313,40 @@ single test case — rests on:
 ### 4.3 Constraints and invariants
 
 - `gr[10]` excluded from any DEC-1 reservation. RESERVED for sync.
-- **First-call init cookie (Round 9a amendment).** `reg[12]` gates
-  the entry sequence:
-  - `pe::reset()` at case boundary clears all regs to 0, so on the
-    first PE 23 call within a case `reg[12] == 0`.
-  - First-call entry path (`reg[12] == 0`): seed `reg[16..27]` from
-    `spm[DEDUP_META+0/+1/+4/+5/+6/+7/+14..+19]` (the moved-slot SPM
-    copy that magic 29 / magic 32 maintain at case boundaries — pv
-    seeded to 0xFFFFFFFFU sentinel by magic 29, the rest seeded to
-    0). Then write `reg[12] = 1` to mark the cookie consumed.
-  - Subsequent-call entry path (`reg[12] == 1`): use the
-    register-resident `reg[16..27]` directly; do NOT re-load from
-    SPM. The SPM moved-slot copy is stale on subsequent calls
-    because the SAVE path no longer writes back to SPM for the
-    moved slots.
-  - The cookie is required because `pv == 0` is a legitimate diag
-    value (vd=0 in the packed encoding) and cannot itself be used
-    as a sentinel for "first call this case"; only `reg[12]` can
-    distinguish the magic-29 sentinel-load case from a register
-    value that has been overwritten by prior PE 23 SAVE writes.
+- **Per-step phase init cookie (Round 2 amendment).** `spm[DEDUP_META+8]`
+  gates the entry sequence:
+  - Controller magic 29 (`pe_array.cpp:6513`) writes
+    `spm[DEDUP_META+8] = 0xFFFFFFFFU` at every per-step dedup init.
+    Magic 29 fires at the start of every GWFA expansion step's
+    dedup phase, so this is a per-step boundary signal (a stronger
+    condition than per-case, since each multi-step expansion step
+    has its own magic 29 call).
+  - First-call entry path within a step (`spm[DEDUP_META+8] ==
+    0xFFFFFFFFU`): seed `reg[16..27]` from
+    `spm[DEDUP_META+0/+1/+4/+5/+6/+7/+14..+19]` (the moved-slot
+    SPM copy that magic 29 just refreshed — pv seeded to
+    0xFFFFFFFFU sentinel, clo seeded to 0xFFFFFFFFU sentinel, all
+    others seeded to 0). Then write `spm[DEDUP_META+8] = 0` to
+    consume the cookie.
+  - Subsequent-call entry path within a step
+    (`spm[DEDUP_META+8] == 0`): use the register-resident
+    `reg[16..27]` directly; do NOT re-load from SPM. The SPM
+    moved-slot copy is stale on subsequent calls because the SAVE
+    path no longer writes back to SPM for the moved slots.
+  - The phase cookie is REQUIRED because the prior `reg[12]`
+    per-case cookie design (Round 9a, superseded) gates only at
+    case boundary via `pe::reset()` clear, but multi-step GWFA
+    expansion fires magic 29 between each step's dedup phase —
+    so step 2's first PE 23 call would otherwise see stale
+    step-1 register state masquerading as "subsequent call". The
+    SPM-resident phase cookie at `DEDUP_META+8` is set by magic 29
+    every step and consumed by PE 23's first call per step, so it
+    correctly gates seed-from-SPM at the right boundary regardless
+    of register state.
+  - Magic 32 still zeros `spm[DEDUP_META+8]` defensively at
+    end-of-dedup so the slot stays 0 across non-dedup magic
+    boundaries (i.e., the cookie sentinel is only ever set by
+    magic 29 in dedup-phase init).
 - **Save path semantics under DEC-1.** Every PE 23 yield (every
   `goto m23_end`) MUST funnel through a single SAVE label that
   updates `reg[16..27]` (the moved-slot register copy) and writes
@@ -343,7 +356,8 @@ single test case — rests on:
   SPM on yield — register-resident only. This contract is the
   inverse of the SPM-resident pattern (SPM persists across calls
   AND across cases until magic 32 zeroes it; registers persist
-  only across calls within a case).
+  only across calls within a step, and are re-seeded from SPM by
+  the cookie protocol at every step boundary).
 - `DEDUP_META+2/+3` writes (n_do, n_io publish) MUST land in the
   PE 23 magic body epilogue in EVERY call (PING and PONG). These
   are controller-visible and required by magic 31 read.
