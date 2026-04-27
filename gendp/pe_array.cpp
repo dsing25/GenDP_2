@@ -6510,7 +6510,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     //NOP
                     spm2[DEDUP_META+7] = 0;
                     //NOP
-                    spm2[DEDUP_META+8] = 0;
+                    // DEDUP_META+8: per-step phase init cookie (Plan 3d
+                    // Round 2 DEC-1 amendment). Sentinel 0xFFFFFFFFU
+                    // tells PE 23 entry "magic 29 just ran for this
+                    // step — re-seed reg[16..27] from SPM moved slots".
+                    // PE 23 consumes by writing 0 after seed.
+                    spm2[DEDUP_META+8] = (int)0xFFFFFFFF;
                     //NOP
                     spm2[DEDUP_META+9] = 0;
                     //NOP
