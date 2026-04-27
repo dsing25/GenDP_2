@@ -1770,12 +1770,24 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             int& scratch_lo = reg[30];   // head_a_lo / probe_h / o
             int& scratch_hi = reg[31];   // head_b_lo / probe_l / on
             // Initialize from SPM-resident cross-call state.
-            ai  = spm[MERGE_META + 0];
+            // Plan 3d Round 6 l9c: SPM port-gap discipline applied to
+            // entry-block loads. Adjacent contiguous pairs annotated
+            // mvd: (single ISA op, 1 SPM port). Non-contiguous loads
+            // separated by `// SPM port gap` NOPs.
+            ai  = spm[MERGE_META + 0];                   // mvd: (ai, bi)
             bi  = spm[MERGE_META + 1];
-            aw  = spm[MERGE_META + 7];
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+            aw  = spm[MERGE_META + 7];                   // mvd: (aw, bw)
             bw  = spm[MERGE_META + 8];
-            a_n = spm[MERGE_META + 9 + aw];
-            b_n = spm[MERGE_META + 11 + bw];
+            //NOP                                          // SPM settle (also: a_n/b_n below need aw/bw register-resident)
+            //NOP                                          // SPM settle
+            a_n = spm[MERGE_META + 9 + aw];              // non-contig (depends on aw)
+            //NOP                                          // SPM port gap
+            //NOP                                          // SPM settle
+            b_n = spm[MERGE_META + 11 + bw];             // non-contig (depends on bw)
+            //NOP                                          // SPM port gap
+            //NOP                                          // SPM settle
             ab  = aw ? MERGE_A_BUF1 : MERGE_A_BUF0;
             bb  = bw ? MERGE_B_BUF1 : MERGE_B_BUF0;
             int *out = &spm[out_off];
@@ -1783,10 +1795,16 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             ai0 = ai; bi0 = bi;
             // Plan 3d l8d: bvd[3] C++ local array eliminated per AC-3.
             // Boundary positions (32-bit packed v|d sentinels) loaded
-            // into reg[14], reg[15], reg[28].
-            bvd_0 = spm[MERGE_META+13];
+            // into reg[14], reg[15], reg[28]. mvd-pair (bvd_0, bvd_1)
+            // at +13/+14; bvd_2 at +15 is a 1-word straggler with port
+            // gap separator.
+            bvd_0 = spm[MERGE_META+13];                  // mvd: (bvd_0, bvd_1)
             bvd_1 = spm[MERGE_META+14];
-            bvd_2 = spm[MERGE_META+15];
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+            bvd_2 = spm[MERGE_META+15];                  // 1-word straggler
+            //NOP                                          // SPM port gap
+            //NOP                                          // SPM settle
             // Plan 3d Round 8 l8d (AC-3): cum_oi / pe_global_base
             // migrated to gr[12] / gr[13] full-int register homes.
             //
@@ -1803,8 +1821,8 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // pe_global_base → gr[13] (full int); the half-reg
             // packing in the artifact's original specification is
             // documented as a per-AC-2 controlled-change amendment.
-            gr.st(12, spm[982]);             // cum_oi (full)
-            gr.st(13, spm[983]);             // pe_global_base (full)
+            gr.st(12, spm[982]);             // mvd: (cum_oi, pe_global_base)
+            gr.st(13, spm[983]);
             //NOP                                          // SPM settle
             //NOP                                          // SPM settle
             // Entry: reconcile pre-existing exhaustion from prior
@@ -1995,20 +2013,42 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //                 write spm[DEDUP_META+8] = 0 to consume.
             //   sentinel clear: use reg[16..27] directly.
             uint32_t cookie = (uint32_t)spm[DEDUP_META + 8];
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
             if (cookie == 0xFFFFFFFFU) {
-                reg[16] = spm[DEDUP_META + 0];
+                // Plan 3d Round 6 l9c: cookie-seed adjacent contiguous
+                // pairs annotated mvd: (single ISA op per pair). Each
+                // mvd-pair followed by 2-NOP SPM settle for AC-5 / AC-7
+                // discipline. The final cookie-consume store
+                // `spm[DEDUP_META + 8] = 0` is preceded by an SPM port
+                // gap so it doesn't collide with the prior load pair.
+                reg[16] = spm[DEDUP_META + 0];           // mvd: (pv, pk)
                 reg[17] = spm[DEDUP_META + 1];
-                reg[18] = spm[DEDUP_META + 4];
+                //NOP                                      // SPM settle
+                //NOP                                      // SPM settle
+                reg[18] = spm[DEDUP_META + 4];           // mvd: (dc, ic)
                 reg[19] = spm[DEDUP_META + 5];
-                reg[20] = spm[DEDUP_META + 6];
+                //NOP                                      // SPM settle
+                //NOP                                      // SPM settle
+                reg[20] = spm[DEDUP_META + 6];           // mvd: (dw, iw)
                 reg[21] = spm[DEDUP_META + 7];
-                reg[22] = spm[DEDUP_META + 14];
+                //NOP                                      // SPM settle
+                //NOP                                      // SPM settle
+                reg[22] = spm[DEDUP_META + 14];          // mvd: (clo, chi)
                 reg[23] = spm[DEDUP_META + 15];
-                reg[24] = spm[DEDUP_META + 16];
+                //NOP                                      // SPM settle
+                //NOP                                      // SPM settle
+                reg[24] = spm[DEDUP_META + 16];          // mvd: (state, pdone)
                 reg[25] = spm[DEDUP_META + 17];
-                reg[26] = spm[DEDUP_META + 18];
+                //NOP                                      // SPM settle
+                //NOP                                      // SPM settle
+                reg[26] = spm[DEDUP_META + 18];          // mvd: (nv, nk)
                 reg[27] = spm[DEDUP_META + 19];
-                spm[DEDUP_META + 8] = 0;
+                //NOP                                      // SPM settle
+                //NOP                                      // SPM settle
+                spm[DEDUP_META + 8] = 0;                 // cookie consume
+                //NOP                                      // SPM port gap
+                //NOP                                      // SPM settle
             }
             // Cross-call DEC-1 state aliases (reg[16..27] — Round 9c).
             // C++ references: storage lives in registers; identifiers
@@ -2048,10 +2088,22 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // SPM mirror) remain SPM-resident because controller
             // magics 30/31 read/write them between PE 23 calls.
             n_do = 0; n_io = 0; p = 0; ad = 0; ai = 0;
+            // Plan 3d Round 6 l9c: dtn/don_/itn/ion are non-contiguous
+            // SPM addresses (depend on dw, iw selectors) so each load
+            // is a scalar mv with explicit SPM port gap NOPs separating
+            // adjacent loads.
             dtn  = spm[DEDUP_META + 10 + dw];
+            //NOP                                          // SPM port gap
+            //NOP                                          // SPM settle
             don_ = spm[DEDUP_META + 10 + (dw^1)];
+            //NOP                                          // SPM port gap
+            //NOP                                          // SPM settle
             itn  = spm[DEDUP_META + 12 + iw];
+            //NOP                                          // SPM port gap
+            //NOP                                          // SPM settle
             ion  = spm[DEDUP_META + 12 + (iw^1)];
+            //NOP                                          // SPM port gap
+            //NOP                                          // SPM settle
             db   = dw ? DEDUP_DIAG_BUF1 : DEDUP_DIAG_BUF0;
             ib   = iw ? DEDUP_INTV_BUF1 : DEDUP_INTV_BUF0;
 #ifdef PLAN3D_TRACE_SNAPSHOT
