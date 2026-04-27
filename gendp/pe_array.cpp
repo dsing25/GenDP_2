@@ -3333,6 +3333,21 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         printf("addi gr[%d] %d gr[%d] (%d %d %d)\n", rd, imm, rs2, sum, add_a, add_b);
 #endif
         (*PC)++;
+    } else if (opcode == CTRL_MUL) {       // mul rd rs2 imm/gr[imm]
+        // gr[rd] = op_a * gr[rs2] where op_a is sext_imm_1 (immBar=0)
+        // or gr[imm_1] (immBar=1). Slot-0 only by programmer contract.
+        rd = reg_imm_0;
+        rs2 = reg_1;
+        add_a = reg_immBar_flag_1 ? read_gr_src(src, reg_imm_1) : sext_imm_1;
+        add_b = read_gr_src(src, rs2);
+        sum = add_a * add_b;
+        set_output_dest(dest, rd, sum);
+#ifdef PROFILE
+        printf("mul gr[%d] %s%d gr[%d] (%d %d %d)\n", rd,
+               reg_immBar_flag_1 ? "gr[" : "", reg_immBar_flag_1 ? reg_imm_1 : sext_imm_1,
+               rs2, sum, add_a, add_b);
+#endif
+        (*PC)++;
     } else if (opcode == 3) {       // set_8 rd rs2
         rd = reg_imm_0;
         rs2 = reg_1;
@@ -3951,7 +3966,7 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
     if (main_instruction_setting == MAIN_INSTRUCTION_2) {
         // Arithmetic (opcodes 0-3) now runs pre-PE via
         // decode(). Skip here to avoid double-execution.
-        if (opcode <= 3 || opcode == CTRL_CALL
+        if (opcode <= 3 || opcode == CTRL_MUL || opcode == CTRL_CALL
             || opcode == CTRL_RET || opcode == CTRL_RETNE) {
 #ifdef PROFILE
             printf("\n");

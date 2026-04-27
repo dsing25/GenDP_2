@@ -166,6 +166,8 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_CALL 26
 #define CTRL_RET 27
 #define CTRL_RETNE 28
+// gr[rd] = gr[rs2] * (immBar_1 ? gr[imm_1] : sext_imm_1). Slot-0 only.
+#define CTRL_MUL 29
 
 // DEST/SRCS
 #define CTRL_REG 0

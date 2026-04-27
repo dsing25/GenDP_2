@@ -44,6 +44,8 @@ barrier = 24
 mvi2 = 25
 call = 26
 ret = 27
+retne = 28
+mul = 29        # gr[rd] = gr[rs2] * (immBar_1 ? gr[imm_1] : sext_imm_1). Slot-0 only.
 # these instruction tags here are for data movement
 # use sys_def.h for compute tags
 

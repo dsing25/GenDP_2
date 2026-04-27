@@ -232,7 +232,9 @@ sub-fields into a single gr entry (e.g. `gr[1].lo = n`,
 | 11-14| fifo     | ✓    | ✓     | Pop on load, push on store                      |
 | 15   | S2       | ✓‡   | ✓‡    | ‡Controller `mv`/`si` and block ops (`mvdq`/`mvdqi`) |
 
-**Controller Arithmetic Destination Restriction**: Arithmetic operations (`add`, `sub`, `addi`, `subi`, `shifti_*`, `andi`) on the controller can only write to `gr` (1), `out_buf` (6), or `out_port` (9). Using other destinations (e.g., `out_instr`, `fifo`) will crash the simulator. Move operations (`mv`, `si`) have broader destination support.
+**Controller Arithmetic Destination Restriction**: Arithmetic operations (`add`, `sub`, `addi`, `subi`, `shifti_*`, `andi`, `mul`) on the controller can only write to `gr` (1), `out_buf` (6), or `out_port` (9). Using other destinations (e.g., `out_instr`, `fifo`) will crash the simulator. Move operations (`mv`, `si`) have broader destination support.
+
+**`mul` slot restriction**: The multiply unit lives in only one VLIW lane (slot 0 by convention). Encoding `mul` on slot 1 is a structural hazard, similar to `mvdq+mvdq`. Pair a `mul` with a non-`mul` op (e.g. `mv`, `si`, `addi`, NOP) on the other slot.
 
 **Note on out_instr (code 10) for Controller**: When the controller loads from `comp_ib`, the instruction is stored in an internal buffer (`PE_instruction`). Specifying `out_instr` as the destination in a `mv` operation causes the store function to do nothing, but the instruction is still transferred to PEs via the internal buffer. This is the mechanism for distributing compute instructions.
 
@@ -287,12 +289,13 @@ Controller.out_port → PE[0].in_port → PE[0].out_port → PE[1].in_port → .
 | 26   | Call                  | `call`     | ras = PC+1; PC = target (absolute)           |
 | 27   | Return                | `ret`      | PC = ras                                     |
 | 28   | Return Not Equal      | `retne`    | if (op1 != op2) PC = ras                     |
+| 29   | Multiply              | `mul`      | gr[rd] = gr[rs2] * (immBar_1 ? gr[imm_1] : imm)  |
 
 ### Import Statement
 ```python
 from opcodes import (add, sub, addi, set_8, si, mv, bne, beq, bge, blt, jump,
     set_PC, none, halt, shifti_r, shifti_l, ANDI, mvd, subi, mvi, mvdq,
-    mvdqi, barrier, mvi2, call, ret, retne)
+    mvdqi, barrier, mvi2, call, ret, retne, mul)
 ```
 
 ---
@@ -429,6 +432,61 @@ f.write(data_movement_instruction(gr, gr, 1, 0, 7, 0, 0, 0, 1, 7, addi))
 ```
 
 **Note**: The `reg_immBar_0` flag is often set to 1 in examples but doesn't affect `addi` behavior.
+
+---
+
+#### `mul` (opcode 29) - Multiply
+
+**Summary**: Multiplies a register by either an immediate or another register.
+The `reg_immBar_1` flag selects between the two modes, so a single opcode
+serves both `mul gr,imm` and `mul gr,gr`. Slot-0 only by convention.
+
+**Syntax**:
+```
+mul gr[rd], imm,    gr[rs2]   # immBar_1=0: gr[rd] = imm * gr[rs2]
+mul gr[rd], gr[rs1], gr[rs2]  # immBar_1=1: gr[rd] = gr[rs1] * gr[rs2]
+```
+
+**Encoding**:
+```python
+data_movement_instruction(
+    dest,           # gr (1) (PE), or gr/out_buf/out_port (controller)
+    src,            # Unused (typically gr)
+    0,              # reg_immBar_0: unused
+    0,              # reg_auto_increase_0: unused
+    rd,             # imm_0: destination register index
+    0,              # reg_0: unused
+    immBar_1,       # 0: imm_1 is immediate; 1: imm_1 is gr index (rs1)
+    0,              # reg_auto_increase_1: unused
+    imm_or_rs1,     # imm_1: immediate value OR rs1 register index
+    rs2,            # reg_1: source register (always gr)
+    mul             # opcode: 29
+)
+```
+
+**Operand Mapping**:
+| Field      | Usage                                                              |
+|------------|:-------------------------------------------------------------------|
+| `dest`     | PE: `gr`. Controller: `gr`, `out_buf`, `out_port`.                 |
+| `imm_0`    | `rd` — destination gr index                                        |
+| `immBar_1` | 0 → `imm_1` is a 16-bit signed immediate. 1 → `imm_1` is gr index. |
+| `imm_1`    | Immediate multiplier OR source-A gr index, per `immBar_1`.         |
+| `reg_1`    | `rs2` — source-B gr index (always a register)                      |
+
+**Example**:
+```python
+# gr[2] = 3 * gr[11]  (multiply by immediate)
+f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 3, 11, mul))
+
+# gr[5] = gr[7] * gr[11]  (multiply two registers; immBar_1=1, imm_1=7)
+f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 1, 0, 7, 11, mul))
+```
+
+**Notes**:
+- 32-bit signed multiply, low 32 bits of the product (wraps like `add`).
+- Slot 0 only — pair with a non-`mul` op on the other slot. Two `mul`s in
+  one VLIW bundle is a structural hazard.
+- Latency = 1 cycle, same as `add`/`addi`. Standard RAW rules apply.
 
 ---
 
