@@ -87,15 +87,21 @@ CXXFLAGS    += -DGWFA_BUILD
 CXXFLAGS_O3 += -DGWFA_BUILD
 endif
 
-# Stamp file that tracks the current WITH_GWFA state. `make` cannot see
-# CXXFLAGS changes, so initializing the Gwfa submodule after a no-GWFA
-# build would silently reuse stale main.o / pe.o / pe_array.o (missing
-# -DGWFA_BUILD) and ship a `sim` that cannot dispatch `-k 7`. The stamp
-# rule rewrites .gwfa_state only when WITH_GWFA flips; the rewrite bumps
-# mtime, so the GWFA-gated TUs below rebuild automatically.
+# Stamp file that tracks the current WITH_GWFA + snapshot/trace flag
+# state. `make` cannot see CXXFLAGS changes, so a previously-built
+# tree (with one set of preprocessor defines) would silently reuse
+# stale main.o / pe.o / pe_array.o on the next `make ... <flag>=1
+# sim` invocation, masking #ifdef-guarded code from the new build.
+# The stamp rule rewrites .gwfa_state only when ANY tracked variable
+# flips (WITH_GWFA, plan3c_snap, plan3d_snap, gwfa_seam_trace); the
+# rewrite bumps mtime, so the gated TUs below rebuild automatically.
+# Plan 3d Round 10 l9c P2 fix per Codex review: prior version
+# tracked only WITH_GWFA, so `make plan3d_snap=1 sim` after a
+# normal build silently produced no snapshot files unless the user
+# remembered to `make clean` first.
 .PHONY: .gwfa_state_FORCE
 .gwfa_state: .gwfa_state_FORCE
-	@echo "WITH_GWFA=$(WITH_GWFA)" > $@.tmp
+	@echo "WITH_GWFA=$(WITH_GWFA)|plan3c_snap=$(plan3c_snap)|plan3d_snap=$(plan3d_snap)|gwfa_seam_trace=$(gwfa_seam_trace)" > $@.tmp
 	@if ! cmp -s $@.tmp $@ 2>/dev/null; then mv $@.tmp $@; \
 	else rm -f $@.tmp; fi
 .gwfa_state_FORCE:
