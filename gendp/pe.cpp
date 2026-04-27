@@ -1729,9 +1729,13 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             int *out = &spm[out_off];
             int oi = 0;
             int ai0 = ai, bi0 = bi;
-            uint32_t bvd[3] = {(uint32_t)spm[MERGE_META+13],
-                               (uint32_t)spm[MERGE_META+14],
-                               (uint32_t)spm[MERGE_META+15]};
+            // Plan 3d l8d: bvd[3] C++ local array eliminated per AC-3.
+            // Replaced with three named locals; the `for (b=0;b<3;b++)`
+            // boundary loop below is macro-unrolled into 6 explicit
+            // hi/lo comparisons in the original per-b order.
+            uint32_t bvd_0 = (uint32_t)spm[MERGE_META+13];
+            uint32_t bvd_1 = (uint32_t)spm[MERGE_META+14];
+            uint32_t bvd_2 = (uint32_t)spm[MERGE_META+15];
             int cum_oi = spm[982];
             int pe_global_base = spm[983];
             // Entry: reconcile pre-existing exhaustion from prior
@@ -1788,15 +1792,19 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 out[oi*2]   = (int)out_lo;             // cycle N+2 consumer
                 out[oi*2+1] = (int)out_hi; ai++; oi++;
             }
-            // Boundary tracking — bit-exact preservation per AC-5.
-            // Uses out_lo/out_hi from the emit instead of reloading.
+            // Boundary tracking — bit-exact preservation per AC-5/AC-7.
+            // Plan 3d l8d: runtime `for (b = 0; b < 3)` boundary loop
+            // unrolled to 6 explicit hi/lo comparisons in the same per-b
+            // order as the original (b=0 hi → b=0 lo → b=1 hi → b=1 lo
+            // → b=2 hi → b=2 lo). Uses bvd_0 / bvd_1 / bvd_2 register
+            // homes (post-AC-3 elimination of bvd[3]).
             { int gpos = pe_global_base + cum_oi + oi - 1;
-              for (int b = 0; b < 3; b++) {
-                  if (spm[976+b] < 0 && out_hi > bvd[b])
-                      spm[976+b] = gpos;
-                  if (spm[979+b] < 0 && out_lo >= bvd[b])
-                      spm[979+b] = gpos;
-              }
+              if (spm[976] < 0 && out_hi >  bvd_0) spm[976] = gpos;
+              if (spm[979] < 0 && out_lo >= bvd_0) spm[979] = gpos;
+              if (spm[977] < 0 && out_hi >  bvd_1) spm[977] = gpos;
+              if (spm[980] < 0 && out_lo >= bvd_1) spm[980] = gpos;
+              if (spm[978] < 0 && out_hi >  bvd_2) spm[978] = gpos;
+              if (spm[981] < 0 && out_lo >= bvd_2) spm[981] = gpos;
             }
             // Post-emit exhaustion check (rare path).
             if (ai >= a_n) goto m22_switch_a;
@@ -1829,22 +1837,10 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             spm[MERGE_META+4]=oi;
             spm[MERGE_META+7]=aw; spm[MERGE_META+8]=bw;
             spm[982] = cum_oi + oi;
-            {
-                const char *e = getenv("GWFA_AC5_DUMP");
-                if (e && atoi(e)) {
-                    FILE *f = fopen("ac5_dump.txt", "a");
-                    if (f) {
-                        fprintf(f, "pe=%d a1=%d b1=%d "
-                            "spm[976..981]=%d,%d,%d,%d,%d,%d "
-                            "spm[982]=%d spm[983]=%d\n",
-                            id, spm[MERGE_META+10], spm[MERGE_META+12],
-                            spm[976], spm[977], spm[978],
-                            spm[979], spm[980], spm[981],
-                            spm[982], spm[983]);
-                        fclose(f);
-                    }
-                }
-            }
+            // Plan 3d l8d: GWFA_AC5_DUMP env-gated dump removed
+            // (AC-3 — env-gated debug counters / fopen branches not
+            // permitted in lowered magic body; PLAN3D_TRACE_SNAPSHOT
+            // dump below is the supported probe).
 #ifdef PLAN3D_TRACE_SNAPSHOT
             // Frozen observable dump: MERGE_META[0..8] + spm[976..983].
             {
@@ -1894,7 +1890,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             int db = dw ? DEDUP_DIAG_BUF1 : DEDUP_DIAG_BUF0;
             int ib = iw ? DEDUP_INTV_BUF1  : DEDUP_INTV_BUF0;
             int p = 0;  // processed counter
-            bool ad = false, ai = false;  // all_diag/intv done
+            // Plan 3d l8e (partial — AC-3): bool flags replaced with int
+            // (bool is not a real ISA register type). 0 = false, 1 = true.
+            int ad = 0, ai = 0;  // all_diag/intv done
 #ifdef PLAN3D_TRACE_SNAPSHOT
             {
                 static int dumped_entry[4] = {0, 0, 0, 0};
@@ -2079,15 +2077,17 @@ m23_B_peek_done:
             clo = 0xFFFFFFFFU;
             goto m23_B_loop;
 m23_B_done:
-            // Forbidden check: skip diag if inside current intv
-            { bool forb = (clo != 0xFFFFFFFFU
-                && clo <= pv && pv < chi);
-              if (!forb) {
+            // Forbidden check: skip diag if inside current intv.
+            // Plan 3d l8e (partial — AC-3): inverted to a goto skip;
+            // bool forb local eliminated.
+            if (clo != 0xFFFFFFFFU && clo <= pv && pv < chi)
+                goto m23_skip_emit_d;
+            {
                   spm[do_off + n_do*2] = (int)pv;
                   spm[do_off + n_do*2+1] = pk;
                   n_do++;
-              }
             }
+        m23_skip_emit_d:
             if (nv == 0xFFFFFFFFU) { pv = 0xFFFFFFFFU; goto m23_C; }
             pv = nv; pk = nk;
             goto m23_X;
