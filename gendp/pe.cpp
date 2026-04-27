@@ -2362,41 +2362,60 @@ m23_end:    ;
             int *fspm = &SPM_unit->buffer[
                 id * SPM_BANK_GROUP_SIZE + fin0_base];
             int n_diags = fspm[FIN0_META];
-            int n_A = 0, n_B = 0, n_HA = 0;
-            int arc_idx = 0;
-            // Plan 3d l8a partial lowering: env-gated debug counters
-            // and the GWFA_FIN0_DUMP fopen branch removed (AC-3 prep);
-            // mvi2_ld lambda inlined at its two call sites below
-            // (AC-3 prep — eliminates lambda-return-value carrying
-            // state across ISA lines). Loop structure and locals
-            // retained pending l8a full lowering.
+            // Plan 3d Round 5: m19 within-call state aliases reg[1..15,
+            // 28..31] per AC-2 amendment Section 3.2. C++ references
+            // alias register storage; AC-3 compliant — no C++ local
+            // carries state across ISA lines. v / d_val / i_val / w
+            // are derived inline at use sites from vd / k / packed_vw.
+            int& d_idx     = reg[1];
+            int& n_A       = reg[2];
+            int& n_B       = reg[3];
+            int& n_HA      = reg[4];
+            int& arc_idx   = reg[5];
+            int& vd        = reg[6];
+            int& k         = reg[7];
+            int& nv        = reg[8];
+            int& n_ext     = reg[9];
+            int& a_idx     = reg[10];
+            int& packed_vw = reg[11];
+            int& ow        = reg[12];
+            int& ts_off    = reg[13];
+            int& hkey      = reg[14];
+            int& absent    = reg[15];
+            int& scratch_a = reg[28];   // probe / q_char / nd / sd / id2 / del_vd / bo
+            int& scratch_b = reg[29];   // h2 / b / gs_char / nvd / svd / ivd
+            int& scratch_c = reg[30];   // lo / q_phys / gs_phys / q_bp2 / gs_bp2
+            int& scratch_d = reg[31];   // hi / gs_pos / general
+            // Initialize within-call state at entry.
+            n_A = 0; n_B = 0; n_HA = 0; arc_idx = 0; d_idx = 0;
             constexpr int Q_BASE_CONST  = GWFA_Q_START * 16;
             constexpr int GS_BASE_CONST = GWFA_GS_START * 16;
 
             // Outer diag loop: lowered to label/goto form (AC-4).
-            int d_idx = 0;
         m19_diag_loop:
             if (d_idx >= n_diags) goto m19_diag_done;
             {
                 // mvd: contiguous (vd, k) double-word load from FIN0_DIAGS
-                uint32_t vd = (uint32_t)fspm[FIN0_DIAGS + 2*d_idx];
-                int32_t k = fspm[FIN0_DIAGS + 2*d_idx + 1];
+                vd = fspm[FIN0_DIAGS + 2*d_idx];
+                k  = fspm[FIN0_DIAGS + 2*d_idx + 1];
                 //NOP                                          // SPM 2-cycle settle
                 //NOP                                          // SPM 2-cycle settle
-                uint32_t v = vd >> 16;                        // half-reg hi
-                int32_t d_val = (int32_t)(vd & 0xFFFF)        // half-reg lo
-                    - GWF_DIAG_SHIFT;
-                int32_t i_val = d_val + k;
-                // mvd: contiguous (lo, hi) arcmeta double-word load
-                int lo = fspm[FIN0_ARCMETA + 2*d_idx];
-                int hi = fspm[FIN0_ARCMETA + 2*d_idx + 1];
+                // v / d_val / i_val derived inline from vd / k:
+                //   v     = (uint32_t)vd >> 16            // half-reg hi
+                //   d_val = (int)(vd & 0xFFFF) - GWF_DIAG_SHIFT  // half-reg lo
+                //   i_val = d_val + k
+                // mvd: contiguous (lo, hi) arcmeta double-word load.
+                // lo / hi land in scratch_c / scratch_d transiently;
+                // nv = hi - lo is the only persistent value.
+                scratch_c = fspm[FIN0_ARCMETA + 2*d_idx];     // lo
+                scratch_d = fspm[FIN0_ARCMETA + 2*d_idx + 1]; // hi
                 //NOP                                          // SPM 2-cycle settle
                 //NOP                                          // SPM 2-cycle settle
-                int nv = hi - lo;
-                int32_t n_ext = 0;
+                nv = scratch_d - scratch_c;                   // nv = hi - lo
+                n_ext = 0;
 
                 // Inner arc loop: label/goto form (AC-4).
-                int a_idx = 0;
+                a_idx = 0;
             m19_arc_loop:
                 if (a_idx >= nv) goto m19_arc_done;
                 {
@@ -2405,153 +2424,159 @@ m23_end:    ;
                     // mvd: contiguous (packed_vw, ow) double-word load
                     // from the arc record. ts_off stays scalar (not
                     // lowerable per AC-9 — 3-word arc record).
-                    int packed_vw = fspm[arc_off];
-                    int ow = fspm[arc_off + 1];
-                    int ts_off = fspm[arc_off + 2];
+                    packed_vw = fspm[arc_off];
+                    ow        = fspm[arc_off + 1];
+                    ts_off    = fspm[arc_off + 2];
                     //NOP                                          // SPM 2-cycle settle (Round 4 reviewer P0)
                     //NOP                                          // SPM 2-cycle settle (Round 4 reviewer P0)
-                    uint32_t w = (uint32_t)packed_vw >> 16;   // half-reg hi
+                    // w derived inline at use sites: w = (uint32_t)packed_vw >> 16  // half-reg hi
 
-                    // Hash check: scan bucket for key
-                    uint32_t hkey = (w << 16)
-                        | ((i_val + 1) & 0xFFFF);
+                    // Hash check: scan bucket for key.
+                    // i_val = ((int)(vd & 0xFFFF) - GWF_DIAG_SHIFT) + k
+                    hkey = (((uint32_t)packed_vw >> 16) << 16)    // half-reg hi (w)
+                        | ((((int)(vd & 0xFFFF) - GWF_DIAG_SHIFT) + k + 1) & 0xFFFF);
                     int *bkt = &fspm[FIN0_HA + 4*arc_idx];
-                    int absent = -1;
+                    absent = -1;
                     // Bucket 4-slot probe: macro-unrolled (AC-4).
-                    // Each `bkt[i]` SPM read is followed by 2-cycle
-                    // SPM settle NOPs before the compare/branch consumer
-                    // (Round 4 reviewer P0). Insertion writes are
-                    // separated by SPM port-gap NOPs.
+                    // probe value time-multiplexed on scratch_a (reg[28]);
+                    // h2 / b time-multiplexed on scratch_b (reg[29]).
                     // i = 0
-                    int probe0 = bkt[0];
+                    scratch_a = bkt[0];                              // probe0
                     //NOP                                          // SPM settle
                     //NOP                                          // SPM settle
-                    if ((uint32_t)probe0 == hkey) {
+                    if ((uint32_t)scratch_a == (uint32_t)hkey) {
                         absent = 0; goto m19_bkt_done;
                     }
-                    if (probe0 != (int)0xFFFFFFFF) goto m19_bkt_1;
-                    {
-                        bkt[0] = (int)hkey;
-                        //NOP                                      // SPM port gap
-                        absent = 1;
-                        fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
-                        //NOP                                      // SPM port gap
-                        uint32_t h2 = hkey * 2654435769U >> (32 - 22);
-                        uint32_t b = (h2 >> 2) & 0xFFFFF;
-                        b |= (1u << 20);   // bucket-0 = new-bucket flag
-                        fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
-                        n_HA++;
-                        goto m19_bkt_done;
-                    }
-                m19_bkt_1:
-                    {
-                    int probe1 = bkt[1];
-                    //NOP                                          // SPM settle
-                    //NOP                                          // SPM settle
-                    if ((uint32_t)probe1 == hkey) {
-                        absent = 0; goto m19_bkt_done;
-                    }
-                    if (probe1 != (int)0xFFFFFFFF) goto m19_bkt_2;
-                    bkt[1] = (int)hkey;
+                    if (scratch_a != (int)0xFFFFFFFF) goto m19_bkt_1;
+                    bkt[0] = hkey;
                     //NOP                                          // SPM port gap
                     absent = 1;
                     fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
                     //NOP                                          // SPM port gap
-                    uint32_t h2 = hkey * 2654435769U >> (32 - 22);
-                    uint32_t b = (h2 >> 2) & 0xFFFFF;
-                    // i != 0: no new-bucket flag
-                    fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
+                    scratch_b = (int)((uint32_t)hkey * 2654435769U >> (32 - 22));     // h2
+                    scratch_b = (int)(((uint32_t)scratch_b >> 2) & 0xFFFFF);          // b
+                    scratch_b |= (1u << 20);                       // bucket-0 = new-bucket flag
+                    fspm[FIN0_OUT_HA + 2*n_HA + 1] = scratch_b;
                     n_HA++;
                     goto m19_bkt_done;
-                    }
-                m19_bkt_2:
-                    {
-                    int probe2 = bkt[2];
+                m19_bkt_1:
+                    scratch_a = bkt[1];                              // probe1
                     //NOP                                          // SPM settle
                     //NOP                                          // SPM settle
-                    if ((uint32_t)probe2 == hkey) {
+                    if ((uint32_t)scratch_a == (uint32_t)hkey) {
                         absent = 0; goto m19_bkt_done;
                     }
-                    if (probe2 != (int)0xFFFFFFFF) goto m19_bkt_3;
-                    bkt[2] = (int)hkey;
+                    if (scratch_a != (int)0xFFFFFFFF) goto m19_bkt_2;
+                    bkt[1] = hkey;
                     //NOP                                          // SPM port gap
                     absent = 1;
                     fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
                     //NOP                                          // SPM port gap
-                        uint32_t h2 = hkey * 2654435769U >> (32 - 22);
-                        uint32_t b = (h2 >> 2) & 0xFFFFF;
-                        fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
-                        n_HA++;
-                        goto m19_bkt_done;
-                    }
-                m19_bkt_3:
-                    {
-                    int probe3 = bkt[3];
-                    //NOP                                          // SPM settle
-                    //NOP                                          // SPM settle
-                    if ((uint32_t)probe3 == hkey) {
-                        absent = 0; goto m19_bkt_done;
-                    }
-                    if (probe3 != (int)0xFFFFFFFF) goto m19_bkt_done;
-                    bkt[3] = (int)hkey;
-                    //NOP                                          // SPM port gap
-                    absent = 1;
-                    fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
-                    //NOP                                          // SPM port gap
-                    uint32_t h2 = hkey * 2654435769U >> (32 - 22);
-                    uint32_t b = (h2 >> 2) & 0xFFFFF;
+                    scratch_b = (int)((uint32_t)hkey * 2654435769U >> (32 - 22));
+                    scratch_b = (int)(((uint32_t)scratch_b >> 2) & 0xFFFFF);
                     // i != 0: no new-bucket flag
-                    fspm[FIN0_OUT_HA + 2*n_HA + 1] = (int)b;
+                    fspm[FIN0_OUT_HA + 2*n_HA + 1] = scratch_b;
                     n_HA++;
+                    goto m19_bkt_done;
+                m19_bkt_2:
+                    scratch_a = bkt[2];                              // probe2
+                    //NOP                                          // SPM settle
+                    //NOP                                          // SPM settle
+                    if ((uint32_t)scratch_a == (uint32_t)hkey) {
+                        absent = 0; goto m19_bkt_done;
                     }
+                    if (scratch_a != (int)0xFFFFFFFF) goto m19_bkt_3;
+                    bkt[2] = hkey;
+                    //NOP                                          // SPM port gap
+                    absent = 1;
+                    fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
+                    //NOP                                          // SPM port gap
+                    scratch_b = (int)((uint32_t)hkey * 2654435769U >> (32 - 22));
+                    scratch_b = (int)(((uint32_t)scratch_b >> 2) & 0xFFFFF);
+                    fspm[FIN0_OUT_HA + 2*n_HA + 1] = scratch_b;
+                    n_HA++;
+                    goto m19_bkt_done;
+                m19_bkt_3:
+                    scratch_a = bkt[3];                              // probe3
+                    //NOP                                          // SPM settle
+                    //NOP                                          // SPM settle
+                    if ((uint32_t)scratch_a == (uint32_t)hkey) {
+                        absent = 0; goto m19_bkt_done;
+                    }
+                    if (scratch_a != (int)0xFFFFFFFF) goto m19_bkt_done;
+                    bkt[3] = hkey;
+                    //NOP                                          // SPM port gap
+                    absent = 1;
+                    fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
+                    //NOP                                          // SPM port gap
+                    scratch_b = (int)((uint32_t)hkey * 2654435769U >> (32 - 22));
+                    scratch_b = (int)(((uint32_t)scratch_b >> 2) & 0xFFFFF);
+                    // i != 0: no new-bucket flag
+                    fspm[FIN0_OUT_HA + 2*n_HA + 1] = scratch_b;
+                    n_HA++;
                 m19_bkt_done: ;
                     if (absent == -1) {
                         // Bucket full — treat as not-absent
                         absent = 0;
                     }
 
-                    // Character match using precomputed ts_off (mvi2_ld inlined).
-                    int q_bp2  = Q_BASE_CONST + (i_val + 1);
-                    int q_phys = apply_address_swizzle(q_bp2 >> 4);
+                    // Character match (mvi2_ld inlined). q_bp2 / q_phys
+                    // and gs_pos / gs_bp2 / gs_phys are block-local
+                    // intermediates; q_char / gs_char use scratch_a /
+                    // scratch_b (probe slots are dead at this point in
+                    // the arc-loop control flow).
+                    //   i_val = ((int)(vd & 0xFFFF) - GWF_DIAG_SHIFT) + k
+                    scratch_c = Q_BASE_CONST                          // q_bp2
+                        + ((int)(vd & 0xFFFF) - GWF_DIAG_SHIFT) + k + 1;
+                    scratch_d = apply_address_swizzle(scratch_c >> 4); // q_phys
                     //NOP                                       // SPM swizzle settle
-                    int q_char = (SPM_unit->buffer[q_phys]
-                        >> ((q_bp2 & 0xF) << 1)) & 0x3;
-                    int gs_pos  = ts_off + ow;
-                    int gs_bp2  = GS_BASE_CONST + gs_pos;
-                    int gs_phys = apply_address_swizzle(gs_bp2 >> 4);
+                    scratch_a = (SPM_unit->buffer[scratch_d]          // q_char
+                        >> ((scratch_c & 0xF) << 1)) & 0x3;
+                    scratch_c = GS_BASE_CONST + ts_off + ow;          // gs_bp2
+                    scratch_d = apply_address_swizzle(scratch_c >> 4); // gs_phys
                     //NOP                                       // SPM swizzle settle
-                    int gs_char = (SPM_unit->buffer[gs_phys]
-                        >> ((gs_bp2 & 0xF) << 1)) & 0x3;
+                    scratch_b = (SPM_unit->buffer[scratch_d]          // gs_char
+                        >> ((scratch_c & 0xF) << 1)) & 0x3;
 
-                    if (q_char == gs_char) {
+                    if (scratch_a == scratch_b) {
                         n_ext++;
                         if (absent) {
-                            // Match + absent → output A
-                            int32_t nd = i_val + 1 - ow;
-                            uint32_t nvd = (w << 16)           // half-reg pack
-                                | ((GWF_DIAG_SHIFT + nd) & 0xFFFF);
+                            // Match + absent → output A.
+                            //   w   = (uint32_t)packed_vw >> 16  // half-reg hi
+                            //   nd  = i_val + 1 - ow
+                            //   nvd = (w << 16) | ((GWF_DIAG_SHIFT + nd) & 0xFFFF)
+                            scratch_b = ((int)((uint32_t)packed_vw & 0xFFFF0000))
+                                | ((GWF_DIAG_SHIFT
+                                    + (((int)(vd & 0xFFFF) - GWF_DIAG_SHIFT) + k + 1 - ow))
+                                   & 0xFFFF);                                  // nvd
                             // mvd: contiguous (nvd, ow) A-queue write
-                            fspm[FIN0_OUT + 2*n_A] = (int)nvd;
+                            fspm[FIN0_OUT + 2*n_A] = scratch_b;
                             fspm[FIN0_OUT + 2*n_A + 1] = ow;
                             n_A++;
                         }
                     } else if (absent) {
-                        // Mismatch + absent → output B (sub + ins)
-                        int32_t sd = i_val - ow;
-                        uint32_t svd = (w << 16)               // half-reg pack
-                            | ((GWF_DIAG_SHIFT + sd) & 0xFFFF);
-                        int bo = FIN0_OUT_SIZE-2-2*n_B;
+                        // Mismatch + absent → output B (sub + ins).
+                        //   sd  = i_val - ow
+                        //   svd = (w << 16) | ((GWF_DIAG_SHIFT + sd) & 0xFFFF)
+                        scratch_b = ((int)((uint32_t)packed_vw & 0xFFFF0000))
+                            | ((GWF_DIAG_SHIFT
+                                + (((int)(vd & 0xFFFF) - GWF_DIAG_SHIFT) + k - ow))
+                               & 0xFFFF);                                      // svd
+                        scratch_a = FIN0_OUT_SIZE-2-2*n_B;                     // bo
                         // mvd: contiguous (svd, ow) B-queue write (sub)
-                        fspm[FIN0_OUT + bo] = (int)svd;
-                        fspm[FIN0_OUT + bo + 1] = ow;
+                        fspm[FIN0_OUT + scratch_a] = scratch_b;
+                        fspm[FIN0_OUT + scratch_a + 1] = ow;
                         n_B++;
-                        int32_t id2 = i_val + 1 - ow;
-                        uint32_t ivd = (w << 16)               // half-reg pack
-                            | ((GWF_DIAG_SHIFT + id2) & 0xFFFF);
-                        bo = FIN0_OUT_SIZE-2-2*n_B;
+                        //   id2 = i_val + 1 - ow
+                        //   ivd = (w << 16) | ((GWF_DIAG_SHIFT + id2) & 0xFFFF)
+                        scratch_b = ((int)((uint32_t)packed_vw & 0xFFFF0000))
+                            | ((GWF_DIAG_SHIFT
+                                + (((int)(vd & 0xFFFF) - GWF_DIAG_SHIFT) + k + 1 - ow))
+                               & 0xFFFF);                                      // ivd
+                        scratch_a = FIN0_OUT_SIZE-2-2*n_B;                     // bo
                         // mvd: contiguous (ivd, ow) B-queue write (ins)
-                        fspm[FIN0_OUT + bo] = (int)ivd;
-                        fspm[FIN0_OUT + bo + 1] = ow;
+                        fspm[FIN0_OUT + scratch_a] = scratch_b;
+                        fspm[FIN0_OUT + scratch_a + 1] = ow;
                         n_B++;
                     }
                     arc_idx++;
@@ -2561,15 +2586,18 @@ m23_end:    ;
             m19_arc_done: ;
                 // Deletion: if nv==0 || n_ext!=nv
                 if (nv != 0 && n_ext == nv) goto m19_diag_advance;
-                {
-                    uint32_t del_vd = (v << 16)                // half-reg pack
-                        | ((GWF_DIAG_SHIFT + d_val + 1) & 0xFFFF);
-                    int bo = FIN0_OUT_SIZE-2-2*n_B;
-                    // mvd: contiguous (del_vd, k) B-queue write (del)
-                    fspm[FIN0_OUT + bo] = (int)del_vd;
-                    fspm[FIN0_OUT + bo + 1] = k;
-                    n_B++;
-                }
+                //   v       = (uint32_t)vd >> 16  // half-reg hi
+                //   del_vd  = (v << 16) | ((GWF_DIAG_SHIFT + d_val + 1) & 0xFFFF)
+                //           = ((vd & 0xFFFF0000)) | ((GWF_DIAG_SHIFT + d_val + 1) & 0xFFFF)
+                //   d_val + 1 = (int)(vd & 0xFFFF) - GWF_DIAG_SHIFT + 1
+                //   GWF_DIAG_SHIFT + d_val + 1 = (int)(vd & 0xFFFF) + 1
+                scratch_b = ((int)((uint32_t)vd & 0xFFFF0000))
+                    | (((int)(vd & 0xFFFF) + 1) & 0xFFFF);                     // del_vd
+                scratch_a = FIN0_OUT_SIZE-2-2*n_B;                              // bo
+                // mvd: contiguous (del_vd, k) B-queue write (del)
+                fspm[FIN0_OUT + scratch_a] = scratch_b;
+                fspm[FIN0_OUT + scratch_a + 1] = k;
+                n_B++;
             m19_diag_advance:
                 d_idx++;
                 goto m19_diag_loop;
