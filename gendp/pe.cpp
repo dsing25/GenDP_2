@@ -1405,78 +1405,210 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // Sort bin count: contiguous (vd,k,vd,k) mvd loads.
             // Each element is 2 words (vd,k); load 4 contiguous words
             // per iteration to process 2 elements.
-            int tile_buf_off = (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
+            //
+            // ISA-lowered per Plan 3d AC-3/AC-4/AC-5: state in
+            // gr[]/reg[]; outer for→labeled goto with explicit
+            // odd-tail peel; SPM 2-cycle latency between load and
+            // bin extraction. tile_buf_off, shift, SPM offsets all
+            // kept in full-width slots per BL-20260427-half-reg-
+            // truncation-ow (values may exceed int16 range).
+            //
+            // gr[]  | role
+            //  1 lo | i (loop counter; ≤ tile_n ≤ SORT_TILE)
+            //  1 hi | tile_n
+            //  2    | shift (full)
+            //  3    | tile_buf_off (full; SPM offset)
+            //  4    | scratch (i*2, i+1)
+            //  5    | bin0 (≤ 15)
+            //  6    | bin1 (≤ 15)
+            //
+            // reg[] | role
+            //  1    | vd0
+            //  2    | vd1
+            //  3    | counts[] read-modify-write scratch
             int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
-            int tile_n = spm[SORT_META + 32];
-            int shift  = spm[SORT_META + 33];
-            int *tile   = &spm[tile_buf_off];
-            int *counts = &spm[SORT_META];
-            // Process two elements: load contiguous (vd0,k0,vd1,k1)
-            int i = 0;
-            for (; i + 1 < tile_n; i += 2) {
-                // mvd: 4 contiguous words (vd0, k0, vd1, k1)
-                int vd0 = tile[i * 2];
-                int k0  = tile[i * 2 + 1];   // loaded but unused
-                int vd1 = tile[i * 2 + 2];
-                int k1  = tile[i * 2 + 3];   // loaded but unused
-                (void)k0; (void)k1;
-                int bin0 = ((uint32_t)vd0 >> shift) & 0xF;
-                int bin1 = ((uint32_t)vd1 >> shift) & 0xF;
-                counts[bin0]++;
-                counts[bin1]++;
-            }
-            // Peel: odd last element
-            if (i < tile_n) {
-                int vd = tile[i * 2];
-                int bin = ((uint32_t)vd >> shift) & 0xF;
-                counts[bin]++;
-            }
+
+            // === INIT ===
+            gr.st(3, (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0);
+            gr.st(1, spm[SORT_META + 32], CTRL_GR_HI);   // tile_n
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+            gr.st(2, spm[SORT_META + 33]);               // shift
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+            gr.st(1, 0, CTRL_GR_LO);                     // i = 0
+
+        m20_loop:
+            gr.st(4, gr.at(1, CTRL_GR_LO) + 1);          // i+1
+            if (gr.at(4) >= gr.at(1, CTRL_GR_HI)) goto m20_tail;
+            gr.st(4, gr.at(1, CTRL_GR_LO) << 1);         // 2*i
+            //NOP
+
+            // mvd: 4 contiguous words (vd0,k0,vd1,k1) — k0/k1 dropped
+            reg[1] = spm[gr.at(3) + gr.at(4)];           // vd0
+            reg[2] = spm[gr.at(3) + gr.at(4) + 2];       // vd1
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+
+            gr.st(5, ((uint32_t)reg[1] >> gr.at(2)) & 0xF);   // bin0
+            gr.st(6, ((uint32_t)reg[2] >> gr.at(2)) & 0xF);   // bin1
+
+            // counts[bin0]++ — read-modify-write
+            reg[3] = spm[SORT_META + gr.at(5)];
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+            reg[3] = reg[3] + 1;
+            spm[SORT_META + gr.at(5)] = reg[3];
+
+            // counts[bin1]++ — sequential RMW (handles bin0==bin1 correctly)
+            reg[3] = spm[SORT_META + gr.at(6)];
+            //NOP
+            //NOP
+            reg[3] = reg[3] + 1;
+            spm[SORT_META + gr.at(6)] = reg[3];
+
+            gr.st(1, gr.at(1, CTRL_GR_LO) + 2, CTRL_GR_LO);  // i += 2
+            goto m20_loop;
+
+        m20_tail:
+            // Odd last element
+            if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
+                goto m20_done;
+            gr.st(4, gr.at(1, CTRL_GR_LO) << 1);
+            //NOP
+            reg[1] = spm[gr.at(3) + gr.at(4)];
+            //NOP
+            //NOP
+            gr.st(5, ((uint32_t)reg[1] >> gr.at(2)) & 0xF);
+            reg[3] = spm[SORT_META + gr.at(5)];
+            //NOP
+            //NOP
+            reg[3] = reg[3] + 1;
+            spm[SORT_META + gr.at(5)] = reg[3];
+        m20_done: ;
         } else if (magic_id == 21) {
-            // Sort scatter: two-element mvd loads for bandwidth.
-            int tile_buf_off = (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0;
-            int bin_spm_off  = (magic_mask & 1) ? SORT_BIN_SPM1  : SORT_BIN_SPM0;
+            // Sort scatter: scatter (vd, k) pairs into per-bin SPM regions.
+            //
+            // ISA-lowered per Plan 3d AC-3/AC-4/AC-5: bin_cursors[16]
+            // mapped to reg[16..31] band (per AC-2 ABI artifact);
+            // tile_bin_counts kept SPM-resident at SORT_META+16
+            // (init+inc only); outer pair loop converted to labeled
+            // goto with odd-tail peel; 16-bin init via constexpr
+            // unroll over SORT_RADIX_BINS; SPM 2-cycle latency
+            // between load and bin extraction.
+            //
+            // gr[]  | role
+            //  1 lo | i
+            //  1 hi | tile_n
+            //  2    | shift
+            //  3    | tile_buf_off
+            //  4    | bin_spm_off
+            //  5    | scratch (i*2 / i+1)
+            //  6    | bin (current)
+            //
+            // reg[]  | role
+            //  1     | vd0/vd
+            //  2     | k0/k
+            //  3     | vd1
+            //  4     | k1
+            //  5     | off0/off
+            //  6     | off1
+            //  8     | tile_bin_count scratch
+            //  16..31| bin_cursors[0..15]
             int *spm = &SPM_unit->buffer[id * SPM_BANK_GROUP_SIZE];
-            int tile_n = spm[SORT_META + 32];
-            int shift  = spm[SORT_META + 33];
-            int *tile            = &spm[tile_buf_off];
-            int *tile_bin_counts = &spm[SORT_META + 16];
-            int bin_cursors[SORT_RADIX_BINS] = {};
-            for (int b = 0; b < SORT_RADIX_BINS; b++) tile_bin_counts[b] = 0;
-            // Process two elements per iteration (mvd: 4 words)
-            int i = 0;
-            for (; i + 1 < tile_n; i += 2) {
-                // mvd: load element 0 (vd, k)
-                int vd0 = tile[i * 2];
-                int k0  = tile[i * 2 + 1];
-                // mvd: load element 1 (vd, k)
-                int vd1 = tile[(i+1) * 2];
-                int k1  = tile[(i+1) * 2 + 1];
-                // Scatter element 0
-                int bin0 = ((uint32_t)vd0 >> shift) & 0xF;
-                int off0 = bin0 * SORT_BIN_REGION_SIZE * 2 + bin_cursors[bin0] * 2;
-                spm[bin_spm_off + off0]     = vd0;
-                spm[bin_spm_off + off0 + 1] = k0;
-                bin_cursors[bin0]++;
-                tile_bin_counts[bin0]++;
-                // Scatter element 1
-                int bin1 = ((uint32_t)vd1 >> shift) & 0xF;
-                int off1 = bin1 * SORT_BIN_REGION_SIZE * 2 + bin_cursors[bin1] * 2;
-                spm[bin_spm_off + off1]     = vd1;
-                spm[bin_spm_off + off1 + 1] = k1;
-                bin_cursors[bin1]++;
-                tile_bin_counts[bin1]++;
+
+            // === INIT ===
+            gr.st(3, (magic_mask & 1) ? SORT_TILE_BUF1 : SORT_TILE_BUF0);
+            gr.st(4, (magic_mask & 1) ? SORT_BIN_SPM1  : SORT_BIN_SPM0);
+            gr.st(1, spm[SORT_META + 32], CTRL_GR_HI);
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+            gr.st(2, spm[SORT_META + 33]);
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+
+            // bin_cursors[b] = 0 + tile_bin_counts[b] = 0
+            // (constexpr macro unroll over compile-time SORT_RADIX_BINS=16)
+            for (int b = 0; b < SORT_RADIX_BINS; b++) {
+                reg[16 + b] = 0;
+                spm[SORT_META + 16 + b] = 0;
+                //NOP
             }
-            // Peel: handle odd last element
-            if (i < tile_n) {
-                int vd = tile[i * 2];
-                int k  = tile[i * 2 + 1];
-                int bin = ((uint32_t)vd >> shift) & 0xF;
-                int off = bin * SORT_BIN_REGION_SIZE * 2 + bin_cursors[bin] * 2;
-                spm[bin_spm_off + off]     = vd;
-                spm[bin_spm_off + off + 1] = k;
-                bin_cursors[bin]++;
-                tile_bin_counts[bin]++;
-            }
+
+            gr.st(1, 0, CTRL_GR_LO);
+
+        m21_loop:
+            gr.st(5, gr.at(1, CTRL_GR_LO) + 1);
+            if (gr.at(5) >= gr.at(1, CTRL_GR_HI)) goto m21_tail;
+            gr.st(5, gr.at(1, CTRL_GR_LO) << 1);          // 2*i
+            //NOP
+
+            // mvd: 4 contiguous (vd0, k0, vd1, k1)
+            reg[1] = spm[gr.at(3) + gr.at(5)];
+            reg[2] = spm[gr.at(3) + gr.at(5) + 1];
+            reg[3] = spm[gr.at(3) + gr.at(5) + 2];
+            reg[4] = spm[gr.at(3) + gr.at(5) + 3];
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+
+            // --- Scatter element 0 ---
+            gr.st(6, ((uint32_t)reg[1] >> gr.at(2)) & 0xF);   // bin0
+            //NOP
+            // off0 = bin0*REGION_SIZE*2 + bin_cursors[bin0]*2
+            reg[5] = gr.at(6) * (SORT_BIN_REGION_SIZE * 2)
+                + (reg[16 + gr.at(6)] << 1);
+            //NOP
+            spm[gr.at(4) + reg[5]]     = reg[1];           // vd0
+            spm[gr.at(4) + reg[5] + 1] = reg[2];           // k0
+            reg[16 + gr.at(6)] = reg[16 + gr.at(6)] + 1;   // bin_cursors[bin0]++
+            // tile_bin_counts[bin0]++ (SPM RMW)
+            reg[8] = spm[SORT_META + 16 + gr.at(6)];
+            //NOP                                          // SPM settle
+            //NOP                                          // SPM settle
+            reg[8] = reg[8] + 1;
+            spm[SORT_META + 16 + gr.at(6)] = reg[8];
+
+            // --- Scatter element 1 ---
+            gr.st(6, ((uint32_t)reg[3] >> gr.at(2)) & 0xF);   // bin1
+            //NOP
+            reg[6] = gr.at(6) * (SORT_BIN_REGION_SIZE * 2)
+                + (reg[16 + gr.at(6)] << 1);
+            //NOP
+            spm[gr.at(4) + reg[6]]     = reg[3];           // vd1
+            spm[gr.at(4) + reg[6] + 1] = reg[4];           // k1
+            reg[16 + gr.at(6)] = reg[16 + gr.at(6)] + 1;
+            reg[8] = spm[SORT_META + 16 + gr.at(6)];
+            //NOP
+            //NOP
+            reg[8] = reg[8] + 1;
+            spm[SORT_META + 16 + gr.at(6)] = reg[8];
+
+            gr.st(1, gr.at(1, CTRL_GR_LO) + 2, CTRL_GR_LO);
+            goto m21_loop;
+
+        m21_tail:
+            if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
+                goto m21_done;
+            gr.st(5, gr.at(1, CTRL_GR_LO) << 1);
+            //NOP
+            reg[1] = spm[gr.at(3) + gr.at(5)];
+            reg[2] = spm[gr.at(3) + gr.at(5) + 1];
+            //NOP
+            //NOP
+            gr.st(6, ((uint32_t)reg[1] >> gr.at(2)) & 0xF);
+            //NOP
+            reg[5] = gr.at(6) * (SORT_BIN_REGION_SIZE * 2)
+                + (reg[16 + gr.at(6)] << 1);
+            //NOP
+            spm[gr.at(4) + reg[5]]     = reg[1];
+            spm[gr.at(4) + reg[5] + 1] = reg[2];
+            reg[16 + gr.at(6)] = reg[16 + gr.at(6)] + 1;
+            reg[8] = spm[SORT_META + 16 + gr.at(6)];
+            //NOP
+            //NOP
+            reg[8] = reg[8] + 1;
+            spm[SORT_META + 16 + gr.at(6)] = reg[8];
+        m21_done: ;
         } else if (magic_id == 22) {
             // Merge: input-capped two-pointer merge with ping-pong tiles.
             //
@@ -1989,24 +2121,14 @@ m23_end:    ;
             int n_diags = fspm[FIN0_META];
             int n_A = 0, n_B = 0, n_HA = 0;
             int arc_idx = 0;
-            // AC-9 edge-case probe counters (gated by GWFA_FIN0_DUMP
-            // env var). Accumulated across all magic-19 calls within a
-            // single simulator run; logged at magic-19 exit when active.
-            int dbg_nv_zero = 0;
-            int dbg_empty_bucket = 0;
-            int dbg_full_bucket = 0;
-            int dbg_absent_yes = 0;
-            int dbg_absent_no_match = 0;
-            int dbg_absent_no_full = 0;
-            // GET_2BIT from interleaved SPM (Q and GS sequences)
-            auto mvi2_ld = [&](int base_char_addr, int char_off) -> int {
-                int bp2 = base_char_addr + char_off;
-                int phys = apply_address_swizzle(bp2 >> 4);
-                return (SPM_unit->buffer[phys]
-                    >> ((bp2 & 0xF) << 1)) & 0x3;
-            };
-            int gs_base = GWFA_GS_START * 16;
-            int q_base = GWFA_Q_START * 16;
+            // Plan 3d l8a partial lowering: env-gated debug counters
+            // and the GWFA_FIN0_DUMP fopen branch removed (AC-3 prep);
+            // mvi2_ld lambda inlined at its two call sites below
+            // (AC-3 prep — eliminates lambda-return-value carrying
+            // state across ISA lines). Loop structure and locals
+            // retained pending l8a full lowering.
+            constexpr int Q_BASE_CONST  = GWFA_Q_START * 16;
+            constexpr int GS_BASE_CONST = GWFA_GS_START * 16;
 
             for (int d = 0; d < n_diags; d++) {
                 // mvd: contiguous (vd, k) double-word load from FIN0_DIAGS
@@ -2024,7 +2146,6 @@ m23_end:    ;
                 //NOP                                          // SPM 2-cycle settle
                 //NOP                                          // SPM 2-cycle settle
                 int nv = hi - lo;
-                if (nv == 0) dbg_nv_zero++;
                 int32_t n_ext = 0;
 
                 for (int a = 0; a < nv; a++) {
@@ -2050,7 +2171,6 @@ m23_end:    ;
                         if (bkt[i] == (int)0xFFFFFFFF) {
                             bkt[i] = (int)hkey;
                             absent = 1;
-                            if (i == 0) dbg_empty_bucket++;
                             // Always record modified bucket for writeback
                             fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
                             uint32_t h2 = hkey * 2654435769U
@@ -2066,18 +2186,20 @@ m23_end:    ;
                     if (absent == -1) {
                         // Bucket full — treat as not-absent
                         absent = 0;
-                        dbg_full_bucket++;
-                        dbg_absent_no_full++;
-                    } else if (absent == 0) {
-                        dbg_absent_no_match++;
-                    } else {
-                        dbg_absent_yes++;
                     }
 
-                    // Character match using precomputed ts_off
-                    int q_char = mvi2_ld(q_base, i_val + 1);
-                    int gs_pos = ts_off + ow;
-                    int gs_char = mvi2_ld(gs_base, gs_pos);
+                    // Character match using precomputed ts_off (mvi2_ld inlined).
+                    int q_bp2  = Q_BASE_CONST + (i_val + 1);
+                    int q_phys = apply_address_swizzle(q_bp2 >> 4);
+                    //NOP                                       // SPM swizzle settle
+                    int q_char = (SPM_unit->buffer[q_phys]
+                        >> ((q_bp2 & 0xF) << 1)) & 0x3;
+                    int gs_pos  = ts_off + ow;
+                    int gs_bp2  = GS_BASE_CONST + gs_pos;
+                    int gs_phys = apply_address_swizzle(gs_bp2 >> 4);
+                    //NOP                                       // SPM swizzle settle
+                    int gs_char = (SPM_unit->buffer[gs_phys]
+                        >> ((gs_bp2 & 0xF) << 1)) & 0x3;
 
                     if (q_char == gs_char) {
                         n_ext++;
@@ -2127,23 +2249,6 @@ m23_end:    ;
             fspm[FIN0_META + 2] = n_A;
             fspm[FIN0_META + 3] = n_B;
             fspm[FIN0_META + 4] = n_HA;
-            {
-                const char *e = getenv("GWFA_FIN0_DUMP");
-                if (e && atoi(e)) {
-                    FILE *f = fopen("fin0_edges.txt", "a");
-                    if (f) {
-                        fprintf(f, "pe=%d n_diags=%d nv_zero=%d "
-                            "empty_bucket=%d full_bucket=%d "
-                            "absent_yes=%d absent_no_match=%d "
-                            "absent_no_full=%d\n",
-                            id, n_diags, dbg_nv_zero,
-                            dbg_empty_bucket, dbg_full_bucket,
-                            dbg_absent_yes, dbg_absent_no_match,
-                            dbg_absent_no_full);
-                        fclose(f);
-                    }
-                }
-            }
 #ifdef PLAN3D_TRACE_SNAPSHOT
             // Frozen observable dump: FIN0_META + first N words of A/B/HA.
             {
@@ -2161,8 +2266,8 @@ m23_end:    ;
                 int dB = (n_B < 8) ? n_B : 8;
                 snap19 << "pe19 pe=" << id << " B=";
                 for (int i = 0; i < dB; i++)
-                    snap19 << fspm[FIN0_OUT_SIZE-2-2*i] << ","
-                           << fspm[FIN0_OUT_SIZE-1-2*i] << ";";
+                    snap19 << fspm[FIN0_OUT + (FIN0_OUT_SIZE - 2 - 2*i)] << ","
+                           << fspm[FIN0_OUT + (FIN0_OUT_SIZE - 1 - 2*i)] << ";";
                 snap19 << "\n";
                 int dH = (n_HA < 8) ? n_HA : 8;
                 snap19 << "pe19 pe=" << id << " HA=";
