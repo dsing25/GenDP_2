@@ -1765,13 +1765,24 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             uint32_t bvd_0 = (uint32_t)spm[MERGE_META+13];
             uint32_t bvd_1 = (uint32_t)spm[MERGE_META+14];
             uint32_t bvd_2 = (uint32_t)spm[MERGE_META+15];
-            // Plan 3d Round 7 partial l8d (AC-3): cum_oi and
-            // pe_global_base migrated from C++ locals to gr[12] / gr[13]
-            // register homes (read once at entry, used in the boundary
-            // tracking block, written back at exit). All other PE 22
-            // body locals remain pending future-round AC-3 migration.
-            gr.st(12, spm[982]);             // cum_oi
-            gr.st(13, spm[983]);             // pe_global_base
+            // Plan 3d Round 8 l8d (AC-3): cum_oi / pe_global_base
+            // migrated to gr[12] / gr[13] full-int register homes.
+            //
+            // ABI amendment rationale: the committed AC-2 artifact
+            // Section 3.1 line 134 originally specified
+            // "m22 lo=cum_oi / hi=pe_global_base" (gr[6] half-reg
+            // packing). Empirical evidence from the PE 22 frozen
+            // snapshot oracle shows cum_oi reaching 1589365 in case 0
+            // (PE 0), well above the int16_t [-32768,32767] range. Per
+            // BL-20260427-half-reg-truncation-ow, packing such values
+            // into a half-register silently truncates to 16 bits and
+            // corrupts the snapshot output. Round 8 amends the
+            // artifact to assign cum_oi → gr[12] (full int) and
+            // pe_global_base → gr[13] (full int); the half-reg
+            // packing in the artifact's original specification is
+            // documented as a per-AC-2 controlled-change amendment.
+            gr.st(12, spm[982]);             // cum_oi (full)
+            gr.st(13, spm[983]);             // pe_global_base (full)
             //NOP                                          // SPM settle
             //NOP                                          // SPM settle
             // Entry: reconcile pre-existing exhaustion from prior
