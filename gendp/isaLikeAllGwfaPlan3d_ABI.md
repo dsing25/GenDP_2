@@ -170,20 +170,24 @@ magic bodies (loads / stores / scalar arithmetic on `reg[]`).
 | Slot          | Magic | Semantic role                                                | Status |
 |---------------|-------|--------------------------------------------------------------|--------|
 | reg[0]        | -     | hardwired 0                                                  | PRESERVED |
-| reg[1]        | m23   | pv (packed prev-vd), DEC-1 register-resident across PING/PONG | NEW       |
-| reg[2]        | m23   | pk (prev k), DEC-1 register-resident across PING/PONG        | NEW       |
-| reg[3]        | m23   | dc (diag cursor), DEC-1 register-resident across PING/PONG   | NEW       |
-| reg[4]        | m23   | ic (intv cursor), DEC-1 register-resident across PING/PONG   | NEW       |
-| reg[5]        | m23   | dw lo / iw hi packed (ping-pong selectors), DEC-1            | NEW       |
-| reg[6]        | m23   | clo (current intv lo), DEC-1 register-resident               | NEW       |
-| reg[7]        | m23   | chi (current intv hi), DEC-1 register-resident               | NEW       |
-| reg[8]        | m23   | state lo / pdone hi packed, DEC-1 register-resident          | NEW       |
-| reg[9]        | m23   | nv (next vd), DEC-1 register-resident                        | NEW       |
-| reg[10]       | m23   | nk (next k), DEC-1 register-resident                         | NEW       |
-| reg[11]       | m23   | M23_RD/RI/PI macro intermediate temp (caller-dead on m23 magic boundary; reusable by m19/m20/m21/m22 as scratch since PE 23 is dead-on-entry to those magics) | NEW       |
-| reg[12]       | m23   | DEC-1 init cookie (Round 9 amendment): 0 = first PE 23 call this case → load moved DEDUP_META slots from SPM into reg[1..10]; 1 = subsequent call → load from reg[1..10]. pe::reset() clears reg[12]=0 at case boundary. Required because pv=0 is a legitimate diag value (not the 0xFFFFFFFFU sentinel from magic 29). | NEW       |
+| reg[1..10]    | (frozen reference m8/m13 only, post Round 9c amendment) | reg[1..11] are written by PE 8 (frozen ref pe.cpp:890-891 sets reg[10]=gs_base, reg[11]=q_base; m8_outer_loop body sets reg[1, 2, 6, 7, 8, 9]) and PE 13 (frozen ref pe.cpp:1226-1227 sets reg[10]=gs_base, reg[11]=q_base; m13 body sets reg[1, 6, 7]). Within a single test case, multi-step GWFA expansion fires PE 8/PE 13 BETWEEN dedup phases (each expansion step has its own phase 1 / phase 2 / sort / merge / dedup sequence), so the original DEC-1 reg[1..10] mapping is INFEASIBLE — reg[1..11] are clobbered between PE 23 calls of consecutive dedup phases. Round 9c amendment relocates DEC-1 state to reg[16..27] (no other PE-side magic touches that band). | EXTENDED  |
+| reg[11]       | m8/m13 | q_base (gwfa frozen reference; not used by m22/m23)         | PRESERVED |
+| reg[12]       | m23   | DEC-1 init cookie (Round 9a amendment, retained Round 9c): 0 = first PE 23 call this case → load moved DEDUP_META slots from SPM into reg[16..27] (per Round 9c re-mapping); 1 = subsequent call → load from reg[16..27]. pe::reset() clears reg[12]=0 at case boundary. Required because pv=0 is a legitimate diag value (not the 0xFFFFFFFFU sentinel from magic 29). | NEW       |
 | reg[13..15]   | -     | reserved; available for waiver-driven temp expansion         | NEW       |
-| reg[16..31]   | (none, post-amendment) | Reserved-but-unused after Round 3 amendment that moved PE 21 bin_cursors out of this band into SPM. Reason: runtime-indexed `reg[16 + bin]` access is not a real ISA op (gendp-isa-reviewer P1, l8cv-rev). PE 21 cursors now live at `spm[SORT_META + 34..49]` (see Section 3.3). | EXTENDED  |
+| reg[16]       | m23   | pv (DEDUP_META+0), DEC-1 register-resident — Round 9c       | NEW       |
+| reg[17]       | m23   | pk (DEDUP_META+1), DEC-1 register-resident — Round 9c       | NEW       |
+| reg[18]       | m23   | dc (DEDUP_META+4), DEC-1 register-resident — Round 9c       | NEW       |
+| reg[19]       | m23   | ic (DEDUP_META+5), DEC-1 register-resident — Round 9c       | NEW       |
+| reg[20]       | m23   | dw (DEDUP_META+6), full int — Round 9c (no half-pack)       | NEW       |
+| reg[21]       | m23   | iw (DEDUP_META+7), full int — Round 9c                       | NEW       |
+| reg[22]       | m23   | clo (DEDUP_META+14), DEC-1 register-resident — Round 9c     | NEW       |
+| reg[23]       | m23   | chi (DEDUP_META+15), DEC-1 register-resident — Round 9c     | NEW       |
+| reg[24]       | m23   | state (DEDUP_META+16), full int — Round 9c                   | NEW       |
+| reg[25]       | m23   | pdone (DEDUP_META+17), full int — Round 9c                   | NEW       |
+| reg[26]       | m23   | nv (DEDUP_META+18), DEC-1 register-resident — Round 9c       | NEW       |
+| reg[27]       | m23   | nk (DEDUP_META+19), DEC-1 register-resident — Round 9c       | NEW       |
+| reg[13..15]   | -     | reserved; available for waiver-driven temp expansion         | NEW       |
+| reg[28..31]   | (none, post Round 3 / Round 9c amendments) | Reserved-but-unused after Round 3 freed reg[16..31] from PE 21 bin_cursors (see Section 3.3) and Round 9c relocated PE 23 DEC-1 state into reg[16..27]. Available for future waiver-driven expansion. | EXTENDED  |
 
 ### 3.3 PE 21 `bin_cursors[16]` band — Round 3 amendment (SPM-resident)
 
