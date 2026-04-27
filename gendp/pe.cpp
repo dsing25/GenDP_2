@@ -1982,39 +1982,50 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 reg[27] = spm[DEDUP_META + 19];
                 spm[DEDUP_META + 8] = 0;
             }
-            // Load magic-local working state from registers (DEC-1).
-            // Cross-call persistence on reg[16..27] holds because the
-            // magic-23 envelope at scripts/gwfa_instruction_generator.py:
-            // 666-688 only writes gr[10] between PING/PONG calls, and
-            // PE 8/13/19/20/21/22 do not touch reg[16..27].
-            uint32_t pv  = (uint32_t)reg[16];
-            int pk       = reg[17];
-            int n_do = 0, n_io = 0;
-            int dc       = reg[18];
-            int ic       = reg[19];
-            int dw       = reg[20];
-            int iw       = reg[21];
-            // DEDUP_META+8 is now the DEC-1 phase init cookie (consumed
-            // above). DEDUP_META+9 stays dead (Plan 2b Milestone B).
-            // DEDUP_META+10..+13 (dtn/don_/itn/ion) remain SPM-resident
-            // because controller magics 30/31 read/write them between
-            // PE 23 calls (controller refill/writeback handshake).
-            int dtn  = spm[DEDUP_META + 10 + dw];
-            int don_ = spm[DEDUP_META + 10 + (dw^1)];
-            int itn  = spm[DEDUP_META + 12 + iw];
-            int ion  = spm[DEDUP_META + 12 + (iw^1)];
-            uint32_t clo = (uint32_t)reg[22];
-            uint32_t chi = (uint32_t)reg[23];
-            int state    = reg[24];
-            int pdone    = reg[25];
-            uint32_t nv  = (uint32_t)reg[26];
-            int nk       = reg[27];
-            int db = dw ? DEDUP_DIAG_BUF1 : DEDUP_DIAG_BUF0;
-            int ib = iw ? DEDUP_INTV_BUF1  : DEDUP_INTV_BUF0;
-            int p = 0;  // processed counter
-            // Plan 3d l8e (partial — AC-3): bool flags replaced with int
-            // (bool is not a real ISA register type). 0 = false, 1 = true.
-            int ad = 0, ai = 0;  // all_diag/intv done
+            // Cross-call DEC-1 state aliases (reg[16..27] — Round 9c).
+            // C++ references: storage lives in registers; identifiers
+            // alias for readable access. AC-3 compliant — no separate
+            // C++ local state, since reads/writes resolve to the
+            // underlying register slot directly.
+            int& pv    = reg[16];
+            int& pk    = reg[17];
+            int& dc    = reg[18];
+            int& ic    = reg[19];
+            int& dw    = reg[20];
+            int& iw    = reg[21];
+            int& clo   = reg[22];
+            int& chi   = reg[23];
+            int& state = reg[24];
+            int& pdone = reg[25];
+            int& nv    = reg[26];
+            int& nk    = reg[27];
+            // Within-call state aliases (reg[9..15, 28..31] — Plan 3d
+            // Round 3 amendment, full int). reg[] supports C++
+            // operator[] and reference aliasing; gr is `addr_regfile`
+            // with .at()/.st() methods only.
+            int& p     = reg[9];
+            int& n_do  = reg[10];
+            int& n_io  = reg[11];
+            int& dtn   = reg[12];
+            int& don_  = reg[13];
+            int& itn   = reg[14];
+            int& ion   = reg[15];
+            int& db    = reg[28];
+            int& ib    = reg[29];
+            int& ad    = reg[30];
+            int& ai    = reg[31];
+            // Initialize within-call state at entry. DEDUP_META+8 was
+            // the DEC-1 phase init cookie (consumed above). +9 stays
+            // dead (Plan 2b Milestone B). +10..+13 (dtn/don_/itn/ion
+            // SPM mirror) remain SPM-resident because controller
+            // magics 30/31 read/write them between PE 23 calls.
+            n_do = 0; n_io = 0; p = 0; ad = 0; ai = 0;
+            dtn  = spm[DEDUP_META + 10 + dw];
+            don_ = spm[DEDUP_META + 10 + (dw^1)];
+            itn  = spm[DEDUP_META + 12 + iw];
+            ion  = spm[DEDUP_META + 12 + (iw^1)];
+            db   = dw ? DEDUP_DIAG_BUF1 : DEDUP_DIAG_BUF0;
+            ib   = iw ? DEDUP_INTV_BUF1 : DEDUP_INTV_BUF0;
 #ifdef PLAN3D_TRACE_SNAPSHOT
             {
                 static int dumped_entry[4] = {0, 0, 0, 0};
@@ -2057,9 +2068,9 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                     dw ^= 1; \
                     db = dw ? DEDUP_DIAG_BUF1 : DEDUP_DIAG_BUF0; \
                     dtn = don_; don_ = 0; dc = 0; \
-                    if (dtn == 0) { ad = true; goto fail_label; } \
+                    if (dtn == 0) { ad = 1; goto fail_label; } \
                 } \
-                vd_out = (uint32_t)spm[db+dc*2];   /* cycle N slot 0 */ \
+                vd_out = spm[db+dc*2];             /* cycle N slot 0 */ \
                 k_out  = spm[db+dc*2+1];           /* cycle N slot 1 */ \
                 dc++;                              /* cycle N+1 slot 0 (sep) */ \
                 p++;                               /* cycle N+1 slot 1 (sep) */ \
@@ -2083,10 +2094,10 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                     iw ^= 1; \
                     ib = iw ? DEDUP_INTV_BUF1 : DEDUP_INTV_BUF0; \
                     itn = ion; ion = 0; ic = 0; \
-                    if (itn == 0) { ai = true; goto fail_label; } \
+                    if (itn == 0) { ai = 1; goto fail_label; } \
                 } \
-                lo_out = (uint32_t)spm[ib+ic*2];   /* cycle N slot 0 */ \
-                hi_out = (uint32_t)spm[ib+ic*2+1]; /* cycle N slot 1 */ \
+                lo_out = spm[ib+ic*2];             /* cycle N slot 0 */ \
+                hi_out = spm[ib+ic*2+1];           /* cycle N slot 1 */ \
                 ic++;                              /* cycle N+1 slot 0 (sep) */ \
                 p++;                               /* cycle N+1 slot 1 (sep) */ \
             } while(0)
@@ -2105,16 +2116,22 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             //       slot, AC-7 legal.
             //     m23_C_peek (line 1810): `if (lo <= chi)` reads lo
             //       at cycle N+2 slot 0 — same.
+            // M23_PI internal temps mapped to reg[5..8] per Round 3
+            // ABI amendment: reg[5]=tc_, reg[6]=tw_, reg[7]=tt_,
+            // reg[8]=tb_. Within-call only — caller-dead at entry.
             #define M23_PI(lo_out, hi_out, fail_label) do { \
-                int tc_=ic, tw_=iw, tt_=itn, tb_=ib; \
-                if (tc_ >= tt_) { \
-                    tw_ ^= 1; \
-                    tb_ = tw_ ? DEDUP_INTV_BUF1 : DEDUP_INTV_BUF0; \
-                    tt_ = ion; tc_ = 0; \
-                    if (tt_ == 0) goto fail_label; \
+                reg[5] = ic;                              /* tc_ = ic */ \
+                reg[6] = iw;                              /* tw_ = iw */ \
+                reg[7] = itn;                             /* tt_ = itn */ \
+                reg[8] = ib;                              /* tb_ = ib */ \
+                if (reg[5] >= reg[7]) { \
+                    reg[6] ^= 1; \
+                    reg[8] = reg[6] ? DEDUP_INTV_BUF1 : DEDUP_INTV_BUF0; \
+                    reg[7] = ion; reg[5] = 0; \
+                    if (reg[7] == 0) goto fail_label; \
                 } \
-                lo_out = (uint32_t)spm[tb_+tc_*2];   /* cycle N slot 0 */ \
-                hi_out = (uint32_t)spm[tb_+tc_*2+1]; /* cycle N slot 1 */ \
+                lo_out = spm[reg[8]+reg[5]*2];            /* cycle N slot 0 */ \
+                hi_out = spm[reg[8]+reg[5]*2+1];          /* cycle N slot 1 */ \
                 /*NOP*/ /* cycle N+1 slot 0 (AC-7 sep; real ISA NOP) */ \
                 /*NOP*/ /* cycle N+1 slot 1 (AC-7 sep; real ISA NOP) */ \
             } while(0)
@@ -2123,20 +2140,14 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 spm[DEDUP_META+2]=n_do; spm[DEDUP_META+3]=n_io; \
             } while(0)
             // PE-internal resume state — DEC-1 register-resident
-            // (Plan 3d Round 2). Save to reg[16..27] only; the moved
-            // DEDUP_META slots are NOT mirrored to SPM. The DEC-1
-            // phase cookie (spm[DEDUP_META+8]) and magic 29's
-            // per-step refresh of the moved-slot SPM copy together
-            // ensure the registers are correctly seeded at every
-            // per-step boundary.
-            #define M23_SAVE_RESUME do { \
-                reg[16]=(int)pv; reg[17]=pk; \
-                reg[18]=dc;      reg[19]=ic; \
-                reg[20]=dw;      reg[21]=iw; \
-                reg[22]=(int)clo; reg[23]=(int)chi; \
-                reg[24]=state;   reg[25]=pdone; \
-                reg[26]=(int)nv; reg[27]=nk; \
-            } while(0)
+            // (Plan 3d Round 2 + Round 3). Cross-call locals
+            // (pv/pk/dc/ic/dw/iw/clo/chi/state/pdone/nv/nk) are now
+            // C++ references aliasing reg[16..27], so writes during
+            // the body update register storage directly. SAVE_RESUME
+            // becomes a documentation-only no-op marking the SAVE
+            // chokepoint; the actual register state IS the live
+            // resume state.
+            #define M23_SAVE_RESUME do { } while(0)
             #define M23_SAVE do { M23_SAVE_OUT; M23_SAVE_RESUME; } while(0)
             // M23_SAVE_LIGHT (Plan 2b Milestone C1, p2b): omit the
             // M23_SAVE_RESUME writes at yield points where pv/pk/clo/
@@ -2154,112 +2165,101 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             if (state == 2) goto m23_C;
 
             // --- State X: merge same-vd diags ---
+            // M23_RD shares output slots with M23_RI: reg[1]=vd/lo,
+            // reg[2]=k/hi (different code paths — RD only fires in
+            // m23_X, RI only in m23_B/m23_C).
 m23_X:      if (p >= DEDUP_TILE) { state = 0; goto m23_save_full_and_exit; }
-            { uint32_t vd; int k;
-              M23_RD(vd, k, m23_X_diags_done);
-              if (pv == 0xFFFFFFFFU) { pv = vd; pk = k; goto m23_X; }
-              if (vd == pv) { if (k > pk) pk = k; goto m23_X; }
-              nv = vd; nk = k;
-              goto m23_B;
+            M23_RD(reg[1], reg[2], m23_X_diags_done);
+            if (pv == (int)0xFFFFFFFF) { pv = reg[1]; pk = reg[2]; goto m23_X; }
+            if (reg[1] == pv) { if (reg[2] > pk) pk = reg[2]; goto m23_X; }
+            nv = reg[1]; nk = reg[2];
+            goto m23_B;
 m23_X_diags_done:
-              if (pv != 0xFFFFFFFFU) { nv = 0xFFFFFFFFU; goto m23_B; }
-              goto m23_C;
-            }
+            if (pv != (int)0xFFFFFFFF) { nv = (int)0xFFFFFFFF; goto m23_B; }
+            goto m23_C;
 
-m23_B:      // Advance intv past pv (State B)
+m23_B:      // Advance intv past pv (State B).
+            // M23_RI outputs: reg[1]=lo, reg[2]=hi (per Round 3 ABI).
+            // M23_PI outputs: reg[3]=lo, reg[4]=hi (per Round 3 ABI).
             state = 1;
 m23_B_loop:
-            if (clo == 0xFFFFFFFFU) {
+            if (clo == (int)0xFFFFFFFF) {
                 if (ai) goto m23_B_done;
-                { uint32_t lo, hi;
-                  M23_RI(lo, hi, m23_B_done);
-                  if (p >= DEDUP_TILE) {
-                      clo = lo; chi = hi; goto m23_save_full_and_exit;
-                  }
-                  clo = lo; chi = hi;
+                M23_RI(reg[1], reg[2], m23_B_done);
+                if (p >= DEDUP_TILE) {
+                    clo = reg[1]; chi = reg[2]; goto m23_save_full_and_exit;
                 }
+                clo = reg[1]; chi = reg[2];
             }
             // Merge overlapping intervals via peek
 m23_B_peek:
-            { uint32_t l2, h2;
-              M23_PI(l2, h2, m23_B_peek_done);
-              if (l2 <= chi) {
-                  uint32_t d1, d2;
-                  M23_RI(d1, d2, m23_B_peek_done);
-                  if (h2 > chi) chi = h2;
-                  if (p >= DEDUP_TILE) { goto m23_save_full_and_exit; }
-                  goto m23_B_peek;
-              }
+            M23_PI(reg[3], reg[4], m23_B_peek_done);
+            if ((uint32_t)reg[3] <= (uint32_t)chi) {
+                M23_RI(reg[1], reg[2], m23_B_peek_done);
+                if ((uint32_t)reg[4] > (uint32_t)chi) chi = reg[4];
+                if (p >= DEDUP_TILE) { goto m23_save_full_and_exit; }
+                goto m23_B_peek;
             }
 m23_B_peek_done:
-            if (chi > pv) goto m23_B_done;
+            if ((uint32_t)chi > (uint32_t)pv) goto m23_B_done;
             // Flush cur_intv (behind pv). AC-8 mvd site: two
             // contiguous SPM writes from paired (clo, chi) registers
             // — lowerable to a single `mvd` double-word store.
-            spm[io_off + n_io*2] = (int)clo;
-            spm[io_off + n_io*2+1] = (int)chi;
+            spm[io_off + n_io*2] = clo;
+            spm[io_off + n_io*2+1] = chi;
             n_io++;
-            clo = 0xFFFFFFFFU;
+            clo = (int)0xFFFFFFFF;
             goto m23_B_loop;
 m23_B_done:
             // Forbidden check: skip diag if inside current intv.
-            // Plan 3d l8e (partial — AC-3): inverted to a goto skip;
-            // bool forb local eliminated.
-            if (clo != 0xFFFFFFFFU && clo <= pv && pv < chi)
+            if (clo != (int)0xFFFFFFFF
+                && (uint32_t)clo <= (uint32_t)pv
+                && (uint32_t)pv  <  (uint32_t)chi)
                 goto m23_skip_emit_d;
-            {
-                  spm[do_off + n_do*2] = (int)pv;
-                  spm[do_off + n_do*2+1] = pk;
-                  n_do++;
-            }
+            spm[do_off + n_do*2] = pv;
+            spm[do_off + n_do*2+1] = pk;
+            n_do++;
         m23_skip_emit_d:
-            if (nv == 0xFFFFFFFFU) { pv = 0xFFFFFFFFU; goto m23_C; }
+            if (nv == (int)0xFFFFFFFF) { pv = (int)0xFFFFFFFF; goto m23_C; }
             pv = nv; pk = nk;
             goto m23_X;
 
             // --- State C: drain remaining intervals ---
 m23_C:      state = 2;
 m23_C_loop: if (p >= DEDUP_TILE) { goto m23_save_full_and_exit; }
-            if (clo == 0xFFFFFFFFU) {
-                { uint32_t lo, hi;
-                  M23_RI(lo, hi, m23_C_done_all);
-                  if (p >= DEDUP_TILE) {
-                      clo = lo; chi = hi; goto m23_save_full_and_exit;
-                  }
-                  clo = lo; chi = hi;
+            if (clo == (int)0xFFFFFFFF) {
+                M23_RI(reg[1], reg[2], m23_C_done_all);
+                if (p >= DEDUP_TILE) {
+                    clo = reg[1]; chi = reg[2]; goto m23_save_full_and_exit;
                 }
+                clo = reg[1]; chi = reg[2];
             }
 m23_C_peek:
-            { uint32_t lo, hi;
-              M23_PI(lo, hi, m23_C_flush_last);
-              if (lo <= chi) {
-                  uint32_t d1, d2;
-                  M23_RI(d1, d2, m23_C_flush_last);
-                  if (hi > chi) chi = hi;
-                  if (p >= DEDUP_TILE) { goto m23_save_full_and_exit; }
-                  goto m23_C_peek;
-              }
-              // Disjoint: flush cur_intv, start new. AC-8 mvd site:
-              // two contiguous SPM writes from paired (clo, chi)
-              // registers — lowerable to a single `mvd` double-word
-              // store.
-              spm[io_off + n_io*2] = (int)clo;
-              spm[io_off + n_io*2+1] = (int)chi;
-              n_io++;
-              { uint32_t d1, d2;
-                M23_RI(d1, d2, m23_C_done_all);
-                clo = d1; chi = d2;
+            M23_PI(reg[3], reg[4], m23_C_flush_last);
+            if ((uint32_t)reg[3] <= (uint32_t)chi) {
+                M23_RI(reg[1], reg[2], m23_C_flush_last);
+                if ((uint32_t)reg[4] > (uint32_t)chi) chi = reg[4];
                 if (p >= DEDUP_TILE) { goto m23_save_full_and_exit; }
-              }
-              goto m23_C_peek;
+                goto m23_C_peek;
             }
+            // Disjoint: flush cur_intv, start new. AC-8 mvd site:
+            // two contiguous SPM writes from paired (clo, chi)
+            // registers — lowerable to a single `mvd` double-word
+            // store.
+            spm[io_off + n_io*2] = clo;
+            spm[io_off + n_io*2+1] = chi;
+            n_io++;
+            M23_RI(reg[1], reg[2], m23_C_done_all);
+            clo = reg[1]; chi = reg[2];
+            if (p >= DEDUP_TILE) { goto m23_save_full_and_exit; }
+            goto m23_C_peek;
 m23_C_flush_last:
-            if (clo != 0xFFFFFFFFU) {
+            if (clo != (int)0xFFFFFFFF) {
                 // AC-8 mvd site: contiguous (clo, chi) double-word
                 // flush at state-C drain termination.
-                spm[io_off + n_io*2] = (int)clo;
-                spm[io_off + n_io*2+1] = (int)chi;
-                n_io++; clo = 0xFFFFFFFFU;
+                spm[io_off + n_io*2] = clo;
+                spm[io_off + n_io*2+1] = chi;
+                n_io++; clo = (int)0xFFFFFFFF;
             }
 m23_C_done_all:
             pdone = 1; goto m23_save_full_and_exit;
