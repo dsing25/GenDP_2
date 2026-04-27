@@ -45,10 +45,10 @@ Every control-trace opcode in the simulator accepts `gr_lo[r]` /
 `gr_hi[r]` operands via the register-address encoding at
 `pe.cpp:709-723` (src/dest side) and — after stage 3b.0's simulator
 extension — for the SPM-offset register side of `mv`/`mvd`/`mvi`/
-`mvi2`/`si` via `pe.cpp:363-372` and `pe.cpp:470-478`. Covered classes:
-data-movement (mv/mvd/mvi/mvi2/si/set_8), arithmetic (add/sub/addi/
-subi), shifts (shifti_l/shifti_r), logical (ANDI/ORI), branches
-(bne/beq/bge/blt), jump, set_PC. `reg_lo`/`reg_hi` are NOT supported
+`mvi2`/`mv2`/`si` via `pe.cpp:363-372` and `pe.cpp:470-478`. Covered
+classes: data-movement (mv/mvd/mvi/mvi2/mv2/si/set_8), arithmetic
+(add/sub/addi/subi), shifts (shifti_l/shifti_r), logical (ANDI/ORI),
+branches (bne/beq/bge/blt), jump, set_PC. `reg_lo`/`reg_hi` are NOT supported
 anywhere, and `mvdq` is NOT implemented on PE at all
 (`pe.cpp:2820-2825` aborts CTRL_MVDQ). Any ISA emission whose semantics require only the low or
 high 16 bits of a packed-half home (see the packed-half table below)
@@ -74,7 +74,7 @@ Packed-half values (magic-101 ABI preserved per DEC-5).
   gr[4]     -- nd_word_off (full-width).
   gr[5]     -- hPing_word_base (full-width; swapped with gr[6] in G).
   gr[6]     -- hPong_word_base (full-width; swapped with gr[5] in G).
-  gr[7]     -- seq_base_idx = graphSeq*16 + seq_off (2-bit mvi2
+  gr[7]     -- seq_base_idx = graphSeq*16 + seq_off (2-bit mv2
                index, full-width).
   gr[8]     -- vP_word_base / scratch (full-width).
   gr[9]     -- graphSeq_word_base (full-width; kernel constant).
@@ -84,7 +84,7 @@ Packed-half values (magic-101 ABI preserved per DEC-5).
   gr[12]    -- scratch. When section B loads (next_off|next_len) into
                gr[12:13] via mvd, `gr[12].lo` carries next_off and
                `gr[12].hi` duplicates next_len until stripped.
-  gr[13]    -- scratch (MUL output, seq[col] mvi2 result, lazy-F cmp
+  gr[13]    -- scratch (MUL output, seq[col] mv2 result, lazy-F cmp
                flag, misc).
   gr[14].lo -- overallMax (persists across outer loop).
      .hi  -- scratch / unused.
@@ -96,7 +96,7 @@ packed halves are legal either via subregister operands or via prior
 `mv gr[temp] = gr_hi[r]` into a clean full-width temp.
   next_len (gr[3].hi) - section H (3b): entry `beq 0, gr_hi[3],
     push_done`; outer push-c bound `gr[2] < gr_hi[3]`.
-  col (gr[2].lo) - section D (3d): `mvi2 SPM[gr[7] + gr_lo[2]]` for
+  col (gr[2].lo) - section D (3d): `mv2 SPM[gr[7] + gr_lo[2]]` for
     seq[col]; loop-head `bge gr_lo[2], gr_hi[2], col_done`; G `addi
     gr_lo[2] += 1`.
   seq_len (gr[2].hi) - section D (3d): loop-head branch rhs.
@@ -132,7 +132,9 @@ Stall rules (AC-1, DEC-7, rederived against current trunk).
       source: pe.cpp:302-304,323,520-531
   mv into SPM (single-word store): same as mvd store
       source: data_buffer.cpp:240-269,285-290
-  mvi2 (PE 2-bit SPM -> gr/reg):   same as mvd load (+2 cycles)
+  mvi2 (PE 2-bit SPM swizzled -> gr/reg): same as mvd load (+2 cycles)
+      source: pe.cpp:62-151,490-495
+  mv2  (PE 2-bit SPM unswizzled -> gr/reg): same as mvd load (+2 cycles)
       source: pe.cpp:62-151,490-495
   set_PC (PE compute dispatch):    fires next cycle
       source: pe.cpp:180-187,2731-2736
@@ -174,7 +176,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils import InstructionWriter, write_magic, \
     data_movement_instruction, compute_instruction
 from opcodes import (gr, gr_hi, gr_lo, reg, SPM, halt, none, set_PC,
-                     bne, beq, bge, blt, jump, si, mv, mvd, mvi2, addi, subi,
+                     bne, beq, bge, blt, jump, si, mv, mvd, mv2, addi, subi,
                      shifti_l, shifti_r, ANDI, set_8, add,
                      MULTIPLICATION, HALT, INVALID, COPY,
                      MAX_EPU8, MAX_REDUCE, ADDS_EPU8, SUBS_EPU8, SLLI_64,
@@ -675,14 +677,15 @@ def pe_0_instruction(f):
     #   - Copy gr[2].hi (seq_len) into gr[12] (full width) BEFORE the loop
     #     so the D-head bge can compare gr[2].lo to gr[12].lo without
     #     straddling a subregister/full-gr boundary.
-    #   - D-head per iter: mvi2 seq[col] → gr[13], bge col >= seq_len.
+    #   - D-head per iter: mv2 seq[col] → gr[13], bge col >= seq_len.
     #   - magic(109): runs E + lazy-F + F for this column.
     #   - G-tail per iter: swap gr[5]/gr[6] via gr[11] temp, addi
     #     gr[2].lo += 1, jump back to col head.
     #
-    # Simulator note: mvi2's SPM-offset subregister support was added this
-    # stage (pe.cpp:2861 now passes src_resolved into the addr_regfile
-    # read of reg_1), so `gr_lo[2]` encodes correctly as the mvi2 offset.
+    # Simulator note: mvi2/mv2 SPM-offset subregister support was added
+    # this stage (pe.cpp:2861 now passes src_resolved into the
+    # addr_regfile read of reg_1), so `gr_lo[2]` encodes correctly as
+    # the mv2 offset.
 
     # Copy seq_len to gr[12] (full). mv gr[12] = gr_hi[2] sign-extends the
     # 16-bit seq_len into the full 32-bit gr[12]; seq_len is positive, so
@@ -696,10 +699,11 @@ def pe_0_instruction(f):
 
     col_pc = f.pc
 
-    # mvi2 gr[13] = SPM[gr[7] + gr[2].lo] — seq[col] as 2-bit extract.
-    f.write(data_movement_instruction(gr, SPM, 0, 0, 13, 0, 1, 0, 7, spm_lo(2), mvi2))
+    # mv2 gr[13] = SPM[gr[7] + gr[2].lo] — seq[col] as 2-bit extract
+    # (unswizzled; magic 100 loads SPM via plain memcpy).
+    f.write(data_movement_instruction(gr, SPM, 0, 0, 13, 0, 1, 0, 7, spm_lo(2), mv2))
     f.write(NOP)
-    # SPM latency (2 cycles) + mvi2 delivery.
+    # SPM latency (2 cycles) + mv2 delivery.
     f.write(NOP); f.write(NOP)
     f.write(NOP); f.write(NOP)
 
@@ -714,7 +718,7 @@ def pe_0_instruction(f):
 
     # === Section E (lowered): prologue + 19-iter main inner DP loop =========
     # State at entry: gr[5]=hPing_base, gr[6]=hPong_base (per current
-    # col parity), gr[13]=seq[col] (just mvi2'd), gr[2].lo=col,
+    # col parity), gr[13]=seq[col] (just mv2'd), gr[2].lo=col,
     # gr[12].lo=seq_len. reg[0:1]=vBias, reg[2:3]=vGapO, reg[4:5]=vGapE,
     # reg[6:7]=vZero (from section A).
     # At exit: reg[8:9]=vH, reg[10:11]=vF, reg[12:13]=e (next iter's),

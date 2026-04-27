@@ -44,6 +44,9 @@ barrier = 24
 mvi2 = 25
 call = 26
 ret = 27
+# mv2: unswizzled, virtual-addressed 2-bit extract (GSSW). mvi2 stays
+# as the swizzled/interleaved 2-bit extract used by WFA/GWFA.
+mv2 = 29
 # these instruction tags here are for data movement
 # use sys_def.h for compute tags
 

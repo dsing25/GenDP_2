@@ -2249,15 +2249,62 @@ m23_end:    ;
         int bp_offset = bp_addr & 0xF;
         int word_addr = bp_addr >> 4;
 
-        // Issue SPM read. Previous behavior applied apply_address_swizzle
-        // here so the ISA mvi2 would read interleaved-swizzled data loaded
-        // by the WFA/GWFA-style magic inits. GSSW's magic 100 loads via
-        // plain memcpy (unswizzled) and magic 101's C++ mvi2 helper
-        // (gssw_mvi2_ld) reads raw spm[bp >> 4], so for GSSW we need
-        // the ISA mvi2 to use the same unswizzled virtual addressing.
-        // No other generator emits ISA mvi2 today, so skipping the swizzle
-        // here is safe; add a flag bit (or a new opcode) if a future
-        // swizzle-aware kernel needs it.
+        // mvi2 reads the interleaved-swizzled SPM layout populated by the
+        // WFA/GWFA magic initializers. Use mv2 for GSSW's unswizzled,
+        // per-PE-virtual 2-bit extract.
+        int access_addr = apply_address_swizzle(word_addr);
+        last_spm_load_addr = access_addr;
+        spmReqPort = new OutstandingRequest();
+        spmReqPort->addr = access_addr;
+        spmReqPort->peid = id;
+        spmReqPort->access_t = SpmAccessT::READ;
+        spmReqPort->single_data = true;
+        spmReqPort->isVirtualAddr = false;
+
+        // Set up outstanding req for destination
+        int dest_addr;
+        if (reg_immBar_flag_0)
+            dest_addr =
+                addr_regfile_unit->at(sext_imm_0)
+                + addr_regfile_unit->at(reg_0);
+        else
+            dest_addr = sext_imm_0
+                + addr_regfile_unit->at(reg_0);
+        assert(outstanding_reqs.size() < (size_t)SPM_ACCESS_LATENCY);
+        OutstandingReq req;
+        req.valid = true;
+        req.single_load = true;
+        req.dst = dest;
+        req.addr = dest_addr;
+        req.spm_addr = access_addr;
+        req.bp_shift = bp_offset << 1;
+        req.two_bit_extract = true;
+        outstanding_reqs.push_back(req);
+
+        if (reg_auto_increasement_flag_0)
+            addr_regfile_unit->st(reg_0, addr_regfile_unit->at(reg_0) + 1);
+        if (reg_auto_increasement_flag_1)
+            addr_regfile_unit->st(reg_1, addr_regfile_unit->at(reg_1) + 1);
+        (*PC)++;
+    } else if (opcode == CTRL_MV2) {
+#ifdef PROFILE
+        printf("Move with 2-bit Extract (unswizzled) ");
+#endif
+        assert(src == CTRL_SPM);
+        // Same as mvi2, but reads SPM with virtual per-PE addressing
+        // (no swizzle). Used by GSSW where magic 100 loads SPM via plain
+        // memcpy.
+        int bp_addr;
+        if (reg_immBar_flag_1)
+            bp_addr =
+                addr_regfile_unit->at(sext_imm_1)
+                + addr_regfile_unit->at(reg_1, src_resolved);
+        else
+            bp_addr = sext_imm_1
+                + addr_regfile_unit->at(reg_1, src_resolved);
+        int bp_offset = bp_addr & 0xF;
+        int word_addr = bp_addr >> 4;
+
         last_spm_load_addr = word_addr;
         spmReqPort = new OutstandingRequest();
         spmReqPort->addr = word_addr;
@@ -2266,7 +2313,6 @@ m23_end:    ;
         spmReqPort->single_data = true;
         spmReqPort->isVirtualAddr = true;
 
-        // Set up outstanding req for destination
         int dest_addr;
         if (reg_immBar_flag_0)
             dest_addr =

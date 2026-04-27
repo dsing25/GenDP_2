@@ -7,10 +7,6 @@ for ASAN), regenerates each kernel's reference where needed, runs sim,
 and compares output. Prints a per-kernel pass/fail table and a total
 elapsed time at the end.
 
-Skips WFA (mvi2-swizzle regression from commit 9b75164 — unrelated to
-this simulator path). To re-include WFA once that's fixed, add an
-entry to the KERNELS list below.
-
 Usage:
     cd gendp/
     python3 scripts/check_all.py
@@ -163,6 +159,23 @@ def check_poa():
         else ('FAIL', f'{diffs} diff lines')
 
 
+def check_wfa():
+    seq_file = Path('/data4/kaplannp/GenDP2/kernel/Wfa/Datasets/seq10k.seq')
+    if not seq_file.exists():
+        return ('SKIP', f'{seq_file} missing')
+    r = run(['python3', 'scripts/wfa_check_correctness.py',
+             str(seq_file), '-n', '50'])
+    # wfa_check_correctness prints one "Test i/N: PASS (score=...)" or
+    # "Test i/N: FAIL (sim=...)" per case.
+    passed = sum(1 for ln in r.stdout.splitlines()
+                 if 'PASS (score=' in ln)
+    failed = sum(1 for ln in r.stdout.splitlines()
+                 if 'FAIL (sim=' in ln)
+    if r.returncode != 0 or failed > 0:
+        return ('FAIL', f'{passed} passed, {failed} failed')
+    return ('PASS', f'n=50, {passed} passed')
+
+
 def check_gssw():
     r = run(['python3', 'scripts/gssw_check_correctness.py',
              '1', '-t', '16'])
@@ -182,6 +195,7 @@ KERNELS = [
     ('BSW',   check_bsw),
     ('Chain', check_chain),
     ('PHMM',  check_phmm),
+    ('WFA',   check_wfa),
     ('GSSW',  check_gssw),
     ('POA',   check_poa),     # POA last: it's the slowest (~2:22)
 ]
@@ -214,7 +228,6 @@ def main():
     for name, status, detail, elapsed in results:
         print(f"  {name:8s} {status:6s} {elapsed:6.1f}s  {detail}")
     print(f"\nTotal wall time: {time.time() - t_total:.1f}s")
-    print("Skipped: WFA (mvi2 swizzle regression, commit 9b75164).")
 
     sys.exit(0 if all(r[1] == 'PASS' for r in results) else 1)
 
