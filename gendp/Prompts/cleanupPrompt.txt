@@ -1,0 +1,34 @@
+
+CLEANUP
+
+I would like to make some changes to the code which will make it easier to implement in gendp ISA.
+These will be simplifications of the advanced language features replaced with ISA like operations.
+
+0. I want to load the query characters as 2 bit format instead of chars. The code should be
+   reconfigured to use shifts where necessary and read the 2 bit character instead of the byte
+1. extend1 currently uses SIMD processing to do many char equivalence checks in parallel. Instead I
+	just want to check one char at a time
+2. currently we store (vertex, diagId) as a 64 bit int. I want to use 16 bits for each, so we only
+	need 32 bits to represent the full structure.
+3. Lets get rid of kvec and any _v types like diag_v. Instead, just use an array of diag_t. diag_t*.
+	And you'll need to store n for each diag_t*
+4. We can remove the case where endV==-1 because there is always a target in minigraph. Is that
+	correct?
+5. I want to rewrite batch so it doesn't work in two steps. Instead of identifying when the batch
+	starts and ends then then calling extend batch, I want do do something like this:
+	```
+	while i < n {
+		lastNodeId = vd[i]
+		//Do the first couple before entering loop.
+		//something like lines 350
+		while vd[i] == lastNodeId {
+			extend
+			next (including some maxes with the last two elements, and one flat out write)
+			do checks to make sure you haven't overextended
+			possibly push to queue
+			i++
+		}
+		//maybe some post processing 
+	}
+	```
+	Let's talk about this idea before you plan it. Do you think it'll work? What problems are there?

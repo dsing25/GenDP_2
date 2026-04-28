@@ -1,0 +1,48 @@
+# High level
+We want to remove the magic instructions from the pe. We will do it in two steps. First we modify
+the magic instruction such that it only uses operations that we can support in gendp. Second we
+write this to gendp ISA. If you look at commit f6358e76f423f40c187fd51f7b6585bad3f604f0, you'll get
+an idea of what we're trying to do. 
+
+# Phase 0, function support
+Looking at the code, it will be very useful to have limited function call capabilities. We don't
+need a stack or anything like that, but I would like the ability to have single function calls. Lets
+create two new opcodes, call and ret, and a new register, ras, which is not part of the regular
+register file and cannot be accessed except by these instructions. call writes current PC to ras,
+and then sets the PC to the argument (generally a constant value). ret sets PC to the value of ras.
+these functions must always be called in pairs in lockstep, so two calls and two rets. It is not
+legal to have one thread execute call while the other is e.g. executing addi.
+
+# Phase 1, Move gwfa_tile_compute into pe.cpp
+Currently pe.cpp imports gwfa.h, but this gwfa.h will eventually be deleted. The entire
+implementation will be in pe.cpp. You'll first need to make a few changes in gwfa.c before you can
+transfer the code. As you make the changes, test them in kernel with run.py
+1. inline phase1_fused_spm within gwfa_tile_compute
+2. define gwf_extend1 as a nested function within gwfa_tile_compute (don't worry that this redefines
+   it. It's just temporary so that we have all the code in one place and can transfer to pe.cpp
+3. Do the same nested definition of emit_b
+4. inline all instances of gwf_gen_vd used in gwfa_tile_compute
+5. Change all the gwf_diag_t* arrays to be uint32_t arrays. Note they will be interleaved, the first
+   uint32 represents the nodeid/diagonal pair, and hte second uint32 represents the depth extended,
+   k. The software will now need to manage this, knowing that odd indices are k and even are vd.
+6. At this point the function gwfa_tile_compute should be completely self sufficient. You should be
+   able to inline it into pe.cpp and blow away the include to gwfa.h
+7. Now you should verify with wfa_check_correctness.py
+
+# Phase 2, Register Mapped ISA
+Here we will work within the magic instruction, but slowly converting to something that can be
+supported in ISA. That means no functions (but macros are ok if they're very simple). No variables
+except for compile time constants. Everything must be a register in the pe register file. For
+memory, the only thing we have access to is the SPM buffer. We have constants which tell us the
+offset of things in this buffer. You should think about the compute and control traces, but we can
+start with just control trace. Try to pair instructions that can be executed together in the same
+cycle, and reorder where possible to get more ILP. Operations need to be pretty simple and
+supportable by ISA. e.g. a[b[(x +CONST)*STRIDE + offset]] needs to be broken down into components,
+t1=x+const; t1 = t1*STRIDE; t1 = t1+offset; t2 = t1+b; t3 = ld t2; t2=t3+a; result = ld t2;
+Something like that. When this is done, verify it rigorously and then pause and wait for my 
+feedback. I will help optimize it, and possibly move some things to a compute trace. then we'll work
+on mapping it to the ISA in Phase 3.
+
+# Phase 3, Write gendp ISA
+The end goal here is to remove the pe magic instructions and do them entirely within ISA. We will
+discuss this more after you've finished the prior phases

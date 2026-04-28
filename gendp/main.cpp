@@ -12,6 +12,7 @@
 #ifdef GWFA_BUILD
 #include "gwfa_sim.h"
 #endif
+#include "gssw_sim.h"
 #include <getopt.h>
 #include <chrono>
 #include <ctime>
@@ -31,6 +32,7 @@ void help() {
         "            5 - wfa\n"
         "            6 - bankThrasher\n"
         "            7 - gwfa\n"
+        "            8 - gssw\n"
         "        -i <input file>\n"
         "            default: NULL\n"
         "        -o <output file>\n"
@@ -80,6 +82,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 #endif
+    else if (kernel == 8) gssw_simulation(inputFileName, outputFileName, fp, show_output, simulation_cases);
 
     timenow = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::cout << "End Simulation: " << ctime(&timenow) << std::endl;

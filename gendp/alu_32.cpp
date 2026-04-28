@@ -73,6 +73,53 @@ int alu_32::execute_8bit(int input_0, int input_1, int op) {
                 output_simd[i] = __builtin_popcount(static_cast<unsigned char>(input_0_simd[i]));
             break;
         }
+		case ADDS_EPU8: { // saturating unsigned 8-bit add
+			for (i = 0; i < SIMD_WIDTH8; i++) {
+				unsigned la = (unsigned char)input_0_simd[i];
+				unsigned lb = (unsigned char)input_1_simd[i];
+				unsigned s  = la + lb;
+				if (s > 255u) s = 255u;
+				output_simd[i] = (int8_t)s;
+			}
+			break;
+		}
+		case SUBS_EPU8: { // saturating unsigned 8-bit sub
+			for (i = 0; i < SIMD_WIDTH8; i++) {
+				unsigned la = (unsigned char)input_0_simd[i];
+				unsigned lb = (unsigned char)input_1_simd[i];
+				output_simd[i] = (int8_t)((la > lb) ? (la - lb) : 0u);
+			}
+			break;
+		}
+		case MAX_EPU8: { // unsigned 8-bit max
+			for (i = 0; i < SIMD_WIDTH8; i++) {
+				unsigned la = (unsigned char)input_0_simd[i];
+				unsigned lb = (unsigned char)input_1_simd[i];
+				output_simd[i] = (int8_t)((la > lb) ? la : lb);
+			}
+			break;
+		}
+		case MAX_REDUCE: { // horizontal unsigned max of 4 lanes -> scalar (byte 0)
+			unsigned m = (unsigned char)input_0_simd[0];
+			for (i = 1; i < SIMD_WIDTH8; i++) {
+				unsigned la = (unsigned char)input_0_simd[i];
+				if (la > m) m = la;
+			}
+			memset(output_simd, 0, SIMD_WIDTH8 * sizeof(int8_t));
+			output_simd[0] = (int8_t)m;
+			break;
+		}
+		case COMP_GT: { // simd any-lane unsigned gt -> scalar 0/1 (byte 0)
+			int any = 0;
+			for (i = 0; i < SIMD_WIDTH8; i++) {
+				unsigned la = (unsigned char)input_0_simd[i];
+				unsigned lb = (unsigned char)input_1_simd[i];
+				if (la > lb) { any = 1; break; }
+			}
+			memset(output_simd, 0, SIMD_WIDTH8 * sizeof(int8_t));
+			output_simd[0] = (int8_t)any;
+			break;
+		}
 		case INVALID: {
 			for (i=0; i<SIMD_WIDTH8; i++)
 				output_simd[i] = 0;
@@ -104,12 +151,10 @@ int alu_32::execute(int input_0, int input_1, int op) {
 			out = input_0 * input_1;
 			break;
 		}
-		case CARRY: {
-			sum = in_0_tmp + in_1_tmp;
-			if (sum >= pow(2, 32)) out = 1;
-			else out = 0;
-			break;
-		}
+		// SLLI_64 (opcode 3) is paired compute; pe.cpp intercepts it before
+		// the ALU is called. If we ever reach here with op=SLLI_64 it means
+		// the bypass failed — return 0 to make the bug obvious rather than
+		// returning a stale CARRY result.
 		case BORROW: {
 			// out = (input_0 >= input_1) ? 0 : 1;
 			out = (input_0 - input_1) >= 0 ? 0 : 1;
@@ -131,7 +176,7 @@ int alu_32::execute(int input_0, int input_1, int op) {
 			out = tmp << 16;
 			break;
 		}
-		case LSHIFT_1: { 
+		case LSHIFT_1: {
 			if (input_0 < 0) tmp = pow(2, 32) + input_0;
 			else tmp = input_0;
 			out = tmp << 1;
@@ -191,6 +236,10 @@ int alu_32::execute(int input_0, int input_1, int op) {
 		case POPCOUNT: {
 		    out = __builtin_popcount(static_cast<unsigned int>(input_0));
 		    break;
+		}
+		case COMP_GT: { // scalar greater-than -> 0/1
+			out = (input_0 > input_1) ? 1 : 0;
+			break;
 		}
 		default: {
 			fprintf(stderr, "ALU32: Invalid operation code %d\n", op);
@@ -291,6 +340,53 @@ int alu_32::execute_4input_8bit(int input_0, int input_1, int input_2, int input
                                  __builtin_popcount(static_cast<unsigned char>(input_3_simd[i]));
             break;
         }
+		case ADDS_EPU8: {
+			for (i = 0; i < SIMD_WIDTH8; i++) {
+				unsigned la = (unsigned char)input_0_simd[i];
+				unsigned lb = (unsigned char)input_1_simd[i];
+				unsigned s  = la + lb;
+				if (s > 255u) s = 255u;
+				output_simd[i] = (int8_t)s;
+			}
+			break;
+		}
+		case SUBS_EPU8: {
+			for (i = 0; i < SIMD_WIDTH8; i++) {
+				unsigned la = (unsigned char)input_0_simd[i];
+				unsigned lb = (unsigned char)input_1_simd[i];
+				output_simd[i] = (int8_t)((la > lb) ? (la - lb) : 0u);
+			}
+			break;
+		}
+		case MAX_EPU8: {
+			for (i = 0; i < SIMD_WIDTH8; i++) {
+				unsigned la = (unsigned char)input_0_simd[i];
+				unsigned lb = (unsigned char)input_1_simd[i];
+				output_simd[i] = (int8_t)((la > lb) ? la : lb);
+			}
+			break;
+		}
+		case MAX_REDUCE: {
+			unsigned m = (unsigned char)input_0_simd[0];
+			for (i = 1; i < SIMD_WIDTH8; i++) {
+				unsigned la = (unsigned char)input_0_simd[i];
+				if (la > m) m = la;
+			}
+			memset(output_simd, 0, SIMD_WIDTH8 * sizeof(int8_t));
+			output_simd[0] = (int8_t)m;
+			break;
+		}
+		case COMP_GT: {
+			int any = 0;
+			for (i = 0; i < SIMD_WIDTH8; i++) {
+				unsigned la = (unsigned char)input_0_simd[i];
+				unsigned lb = (unsigned char)input_1_simd[i];
+				if (la > lb) { any = 1; break; }
+			}
+			memset(output_simd, 0, SIMD_WIDTH8 * sizeof(int8_t));
+			output_simd[0] = (int8_t)any;
+			break;
+		}
 	}
 	memcpy(&output, output_simd, SIMD_WIDTH8 * sizeof(int8_t));
 	return output;
@@ -318,12 +414,7 @@ int alu_32::execute_4input(int input_0, int input_1, int input_2, int input_3, i
 			out = input_0 * input_1;
 			break;
 		}
-		case CARRY: {
-			sum = in_0_tmp + in_1_tmp;
-			if (sum >= pow(2, 32)) out = 1;
-			else out = 0;
-			break;
-		}
+		// SLLI_64 (opcode 3) intercepted in pe.cpp before 4-input ALU dispatch.
 		case BORROW: {
 			out = (input_0 > input_1) ? 0 : 1;
 			break;
@@ -406,7 +497,11 @@ int alu_32::execute_4input(int input_0, int input_1, int input_2, int input_3, i
 		case POPCOUNT: {
 			out = __builtin_popcount(input_0);
 			break;
-		}		
+		}
+		case COMP_GT: {
+			out = (input_0 > input_1) ? 1 : 0;
+			break;
+		}
 		case INVALID: {
 			out = 0;
 			break;

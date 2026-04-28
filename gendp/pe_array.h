@@ -18,10 +18,24 @@ class pe_array {
 
     public:
 
-        pe_array(int input_size, int output_size);
+        pe_array(int input_size, int output_size,
+                 int pc_mode = PC_MODE_SHARED);
         ~pe_array();
-        
+
+        int pc_mode;        // PC_MODE_SHARED or PC_MODE_DUAL (forwarded to PEs)
         int main_addressing_register[MAIN_ADDR_REGISTER_NUM];
+        // WAW tracking for main gr (one slot per idx). cycle == -1 means
+        // never written (or was reset between cases). halves bit0=lo,
+        // bit1=hi; CTRL_GR sets both.
+        int main_gr_last_cycle[MAIN_ADDR_REGISTER_NUM];
+        unsigned char main_gr_halves[MAIN_ADDR_REGISTER_NUM];
+        const char* main_gr_origin[MAIN_ADDR_REGISTER_NUM];
+
+        // Single chokepoint for main_addressing_register writes that
+        // detects WAW: two writes to overlapping bit-ranges of the same
+        // gr in one simulation cycle. Disjoint half writes (lo + hi) are
+        // permitted. Setup writes (cycle == 0) are exempt.
+        void set_main_gr(int idx, int val, int pos, const char* origin);
         unsigned long main_instruction_buffer[CTRL_INSTR_BUFFER_NUM][CTRL_INSTR_BUFFER_GROUP_SIZE];
         unsigned long compute_instruction_buffer[COMP_INSTR_BUFFER_GROUP_NUM][COMP_INSTR_BUFFER_GROUP_SIZE];
         

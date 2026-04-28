@@ -1,0 +1,37 @@
+# Overview
+I would like to add a new feature to gendp called subregisters. Essentially, for the gr register in
+pe and pe_array I want to be able to access the left and right halves of gr[X]. For example, if we
+had gr[15], this is a 32 bit register. I want to be able to access gr[15] >> 16 as gr[47], and I
+want to access gr[15] && 0xFFFF as gr[31]. More generally, gr[x] is 32 bits, gr[x+16] is the lower
+16 bits and gr[x+32] is the higher 16 bits. This is particularly useful for GWFA where we pack node
+id and offset into a single 32 bit value because it allows us to save time bit shifting to get the
+correct value.
+# Details
++ You'll need to add 2 more bits for reg_0 and reg_1 in the scripts_utils.py as well as all over for
+   instruction parsing
++ I recommend a new accessor, gr.at(X) which will return the register[X] if it is less than 16, but
+   if more, then it will return the appropriate half register. For now, gr[48:63] are reserved for
+   future use. It should throw an error if they are accessed.
++ Because for the most part the code (and the alu) operate on signed int32, the at operator should
+   always return signed int32. After extracting a 16 bit value, it will pad the rest with the most
+   significant bit (in c++ we just cast to int32)
++ Likewise we will need an accessor for writing to gr, gr.st(idx, val). if idx indexes a 16 bit
+   field, then we will need to cast the 32 bit register to 16 bit. If the value does not fit in 16
+   bit representation an exception should be raised and the program will terminate.
++ You should update all the code in the simulator to use these accessors instead of direct brackets.
+
+# Verification
++ Run gwfa_correctness_check
++ Run wfa_correctness_check
++ Run run_backtest.sh
+
+#Addendum
+I actually take it back. I don't want to add extra bits to reg_0 and reg_1, instead I would like to
+add two new destinations, gr_lo and gr_hi. this will overflow the number of destination bits we have
+available, so I want to repurpose out_instr and in_instr. First, refactor the previous kernels,
+bsw, poa, chain, and pairhmm so that instead of passing instructions at the begining, they just
+flash them instantly into the instruction buffers. Now you should not need these two destinations,
+and you can remove them, as well as all code associated with those ports. MAKE SURE YOU VERIFY HERE.
+Run run_backtest. Make sure you did not break the previous kernels.
+Once you are sure nothing is broken, then you can add the two destinations. We'll use this instead
+of the additional gr fields.

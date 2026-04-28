@@ -9,7 +9,7 @@ Usage: python3 scripts/gwfa_check_correctness.py <mode> [-t N]
 
 Prereqs:
   - Build sim: make clean && make -j
-  - Golden scores at kernel/Gwfa/Datasets/Gwfa295/trueScores.txt
+  - Golden scores at /data4/kaplannp/GenDP2/kernel/Gwfa/Datasets/Gwfa295/trueScores.txt
 """
 
 import sys
@@ -23,7 +23,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent  # gendp/
 KERNEL_DIR = REPO_ROOT / 'kernel' / 'Gwfa'
-DUMP_DIR = KERNEL_DIR / 'Datasets' / 'Gwfa295'
+DUMP_DIR = Path('/data4/kaplannp/GenDP2/kernel/Gwfa/Datasets/Gwfa295')
 GOLDEN_SCORES = DUMP_DIR / 'trueScores.txt'
 GOLDEN_DEBUG = DUMP_DIR / 'wfDebugTrue0.txt'
 SIM_PATH = REPO_ROOT / 'sim'
@@ -307,8 +307,8 @@ def main():
         print(f"Golden scores not found at "
               f"{GOLDEN_SCORES}")
         print("Expected at: "
-              "kernel/Gwfa/Datasets/Gwfa295/"
-              "trueScores.txt")
+              "/data4/kaplannp/GenDP2/kernel/Gwfa/"
+              "Datasets/Gwfa295/trueScores.txt")
         sys.exit(1)
 
     golden = load_golden(GOLDEN_SCORES)

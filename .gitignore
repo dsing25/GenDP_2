@@ -38,8 +38,12 @@ wfDebug.txt
 .vscode
 .zprofile
 .zshrc
-*Prompt*
 .profile
 .ripgreprc
-isaLikeAll*
 .codex
+lastFailedGdb
+lastFailedSeq.seq
+magic_spm_out.txt
+.gitconfig
+wfa_stdout_test.txt
+wfa_stderr_test.txt

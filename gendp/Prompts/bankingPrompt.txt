@@ -1,0 +1,110 @@
+I want to add banking to the pe SPM. Right now it has 4 banks, but eventually I want it to have 8. 
+Each bank will be 4K ints (so half of a current bank). When two PEs try to access the same bank,
+there will be a bank conflict. In this case one of the PEs will stall, meaning it will not move it's
+PC or execute any instructions until it is granted access. I will provide more detail and break down
+the plan.
+
+# Preliminaries
+Familiarize yourself with the code base. Think deeply to make sure you understand how things work
+now. Especially the SPM data paths. Read docs.md and claude.md. docs.md will be especially
+helpful for coding the ISA.
+
+# milestone 1
+We will design a new dummy test case called bankThrasher. It will create bank conflicts.
++ build a new dummy trace in gendp isa including a driver called bankThrasher.cpp. The dummy trace 
+  will be very simple. PE0 reads addr 0, PE1 reads addr 1, PE2 reads addr 2, PE3 reads addr 4.
+  + When we don't model conflicts, this gives no bank conflicts
+  + When we do model, we should see 4X performance degradation
+  + When we add the extra low order interleaved bank we will see 2X performance degradation from
+    original
+  + When we add the performance counter for shared line, we should see that it occurs for half of
+    the stalls
+  Therefore, you will use this test at all stages of your development
++ When we run bankThrasher before your change we will see the bank counter = the number of cycles +
+  maybe a few differences for setup
++ After your changes we will see a 4X drop in the counter because of the banking conflicts.
++ You will use bankThrasher as a test case to evaluate your changes at the end.
++ write a test harness and run bankThrasher taking note of the count
+
+# milestone 2
+Modify the PE so that when it writes/loads from SPM, instead of directly accessing the SPM, it
+writes to a new variable `spmReqPort`. Then after the loop in pe_array.cpp:1191 when all of the PEs
+have done their computation for the cycle, the pe_array.cpp will loop through the pes in round robin
+order and arbitrate which pes get to write.
++ make OutstandingReq from within the Spm class a public class so that it can be used in PE.
++ add an OustandingReq spmReqPort to pe
++ modify the store/load codes when going to SPM to instead go to this `spmReqPort`
++ after the loop which runs all the pes pe_array.cpp:1191, add a loop which will iterate through pes
+  starting from cycle % 4 and then wrapping around. This will ensure round robin arbitration later.
+  Send each OustandingReq to the SPM, and remove it from the pe
++ Add a comment on this new loop "SPM bank arbitration" or something like that
++ Note we haven't introduced bank conflicts yet. All the requests will go through no problem
++ Verify wfa rigorous
+
+# milestone 3
+Add the arbitration.
++ I want to add some performance counters. Essentially global ints which can be incremented when 
+  events happen. Then, when simulation finishes, these should all be printed out at the end when the
+  simulator exits afer XXX cycles. I
+  believe systemC has something like this. You may choose to use a class to register these, I don't
+  really care, but try to make it somewhat clean, but not complex. I will likely add more counters
+  later.
++ Modify the SPM so instead of having one available OutstandingReq per PE, it has one OutstandingReq
+  per bank (just 4 for now).
++ add a "portIsBusy(addr)" function to the SPM. It should use the appropriate bins of the
+  address to determine which bank it goes to, check if there is already a request in that bank, and
+  if there is, then it should return true.
+  NOTE: you may choose to include a argument for virtual/physical addres, or translate to one or the
+  other before and then write. I don't care. Whichever is cleaner
++ in the arbitration loop, first check if SPM.portIsBusy(addr). If not, then send your request, and
+  clear. If it is busy, do not clear your outstanding request, but increment a performance counter,
+  "BankConflictStall". Also, if the line you are requesting is already in the Outstanding requests 
+  (note that the SPM has lines of 64 but is int addressable, so If I access 0 and 1, that will be 
+  the same line), then you should increment the counter "SameLineBankConflictStall".
++ in pe_array.cpp:1191 loop, where we iterrate through the pes, you should add a check. 
+  `if (!pe.stalled()) { continue on and run the pe }`. You'll need to add this stalled() method, and
+  for now, all it should do is check if there is an outstanding request. If there is, then stall,
+  else no stall.
++ At this point you should have implemented bank conflicts, and you should see a 4X drop in
+  performance on bankThrasher. Please verify and debug if necessary.
++ Also run wfa. You will likely see some bank conflicts here. Please report the number you saw
++ verify wfa rigorous
+
+# milestone 4
+Increase bank count.
+We have SPM_BANK_SIZE and possibly other references to bank size. For the most part these refer to
+the BANK_GROUP_SIZE and should be renamed. This BANK_GROUP_SIZE will remain 8k, but we will now
+also have SPM_BANK_SIZE which will be 4k. Essentially, the bank group refers to a pair of banks.
+This pair is high order interleaved with the other pairs, so it is "private" to a pe in virtual
+addressing mode. However, the pair itself is low order bit interleaved. So
+PE0 has  banks 0/1,
+PE1 gets banks 2/3,
+PE2 gets banks 4/5, 
+PE3 gets banks 6/7,
+A sequence "abcdef..." would alternate a to bank 0, then b to bank 1, c to bank 0, d to bank 1 and
+so on until BANK_GROUP_SIZE after which q to bank 2, r to bank 3, s to bank 2, t to bank 3 etc
+until 2*BANK_GROUP_SIZE
++ Start by renaming SPM_BANK_SIZE and related variables, and adding BANK_GROUP_SIZE
++ run a quick verification of wfa
++ increase the number of outstandingReq ports on the SPM
++ change the SPM portbusy logic to appropriately route the address to proper port and see if there
+  is a conflict
++ verify with wfa rigorous
++ You should see a drop in the number of stalls from before
+
+# verification and other tests
++ run this test to verify correctness quickly `python scripts/wfa_instruction_generator.py &&make clean &&
+	make -j && python scripts/wfa_check_correctness.py ../../kernel/Datasets/oneHundredSeq500Len.seq -n
+	1`
++ to be more rigorous run with -n 50 and then review the diffs of magic_wfs_out.txt and
+wfaTrace.txt. These two files should match exactly, except for a trailing wavefront in
+magic_wfs_out.txt
++ bankThrasher should be used to test your bank stalls and performance counters are working properly
+
+# Other tips/instructions
++ simple is better.
++ stop after each milestone for me to verify your work
++ Ask many questions in the planning phase so I can help explain what I want
++ Make your plan very detailed an thourough including examples of the code you want to write.
++ try to break milestones into steps for yourself and verify frequently with the quick verification
+  test

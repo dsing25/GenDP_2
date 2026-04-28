@@ -227,7 +227,13 @@ void poa_simulate(pe_array *pe_array_unit, poa poa_input, int n, FILE* fp, int s
 void poa_simulation(char *inputFileName, char *outputFileName, FILE *fp, int show_output, int simulation_cases) {
 
     int i, j;
-    pe_array *pe_array_unit = new pe_array(16384, 400 * 1024 * 1024);
+    // POA's pe_X traces have a single-slot trailing branch at the end
+    // of each PE (bge 127 gr[6] 2) whose VLIW partner is a non-CF data
+    // movement that must keep executing. Use independent slot PCs so
+    // the SHARED-mode sync doesn't pull the partner forward and skip
+    // the trailing out=reg[24] / gr[6]=0 / out=reg[23] writes.
+    pe_array *pe_array_unit =
+        new pe_array(16384, 400 * 1024 * 1024, PC_MODE_DUAL);
 
     unsigned long poa_compute_instruction[POA_COMPUTE_INSTRUCTION_NUM][COMP_INSTR_BUFFER_GROUP_SIZE];
     unsigned long poa_main_instruction[CTRL_INSTR_BUFFER_NUM];

@@ -1,0 +1,27 @@
+# High Level
+We have two register files in both the pe and the pe_array, first the gr register file for the data
+movement traces, and second the reg register file for the compute trace. The reg file can be
+accessed by compute and data movement, but the gr is only accessed by the data movement. In order to
+synchronize between compute and data movement at more fine grain granularity, I want to remove the
+gr regfile, and have only reg.
+
+# Details
++ gr has high and lo. I will want hi and low support within reg as well.
++ this change should apply to pes only, seeing as the pe_array has no compute trace to begin with.
++ There may be issues with this plan I have not thought out. Please reach out with questions and
+   concerns in the planning phase
++I want to remove the gr
+   location, the gr_lo and gr_hi. Reuse the number code for gr_lo and gr_hi to represent reg_lo and
+   reg_hi
++ The combined regfile will have 48 32 bit registers, each of which has a low and a hi.
++ We will need to add a bit to the rs fields in the data movement instructions and compute
+   instructions. This will add 7 bits to the compute ins and 2 bits to the data movement ins.
++ The previous gr registers will now be the uper 32-47 registers of the compute  trace
+
+# Legacy mode
++ The traces have all been written with gr and reg using those locations. The simulator itself will
+   not have legacy mode, but I want the instruction trace generator (i.e. the filewriter class) to
+   have a legacy flag specified in construction.
++ In legacy mode, a write to gr[x] is translated to write to reg[x+32]. a write to reg[x] is 
+   left as is. The instruction generator may still use the gr field, but it will be translated by
+   the instruction generator into terms of reg

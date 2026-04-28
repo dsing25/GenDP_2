@@ -15,6 +15,7 @@ extern "C" {
 #include "gwfa_stub.h"
 #endif
 #include <iostream>
+#include "gssw_simd4.h"
 #ifdef PLAN3D_TRACE_SNAPSHOT
 #include <fstream>
 namespace {
@@ -33,20 +34,49 @@ inline std::ofstream& plan3d_snap_pe23() {
 }
 #endif
 
+// SPM port restriction (PE side): an SPM load may write only to gr (incl
+// gr_lo/gr_hi), reg, or out_port; an SPM store may take its data only from
+// gr (incl gr_lo/gr_hi) or reg. Anything else would require driving the
+// shared SPM port from a path that hardware does not provide.
+static bool pe_spm_target_ok(int pos, bool is_load) {
+    if (pos == CTRL_REG || pos == CTRL_GR
+        || pos == CTRL_GR_LO || pos == CTRL_GR_HI) return true;
+    if (is_load && pos == CTRL_OUT_PORT) return true;
+    return false;
+}
+
 bool check_legal_mv(int src, int dest) {
-    //TODO come back and add this. Right now some traces (cough cough poa) are illegal
-    //can't move between SPM and out or in ports
-    //if ((src == CTRL_SPM && (dest == CTRL_IN_PORT || dest == CTRL_OUT_PORT)) ||
-    //    (dest == CTRL_SPM && (src == CTRL_IN_PORT || src == CTRL_OUT_PORT))) {
-    //    return false;
-    //}
+    // SPM load: src is SPM, dest is the writeback target.
+    if (src == CTRL_SPM && dest != CTRL_SPM) return pe_spm_target_ok(dest, true);
+    // SPM store: dest is SPM, src is the data source.
+    if (dest == CTRL_SPM && src != CTRL_SPM) return pe_spm_target_ok(src, false);
     return true;
 }
 
-pe::pe(int _id, SPM* spm) {
+// Returns true if `instruction` is a data-movement op whose src or dest
+// type field is CTRL_SPM. Used by pe::run() to detect two SPM accesses
+// issued by a single PE in one VLIW cycle (illegal — one memory port).
+// Magic instructions bypass the normal port and are never counted.
+static bool slot_does_spm_access(unsigned long instruction) {
+    if (instruction & ((unsigned long)1 << 63)) return false;  // magic
+    int opcode = instruction & ((1 << CTRL_OPCODE_WIDTH) - 1);
+    bool is_dm = (opcode == 4 || opcode == 5
+                  || opcode == CTRL_MVD || opcode == CTRL_MVI
+                  || opcode == CTRL_MVDQ || opcode == CTRL_MVDQI
+                  || opcode == CTRL_MVI2);
+    if (!is_dm) return false;
+    constexpr int W = INSTRUCTION_WIDTH;
+    constexpr int A = MEMORY_COMPONENTS_ADDR_WIDTH;
+    int dest_pos = (instruction >> (W - A)) & ((1 << A) - 1);
+    int src_pos  = (instruction >> (W - 2 * A)) & ((1 << A) - 1);
+    return src_pos == CTRL_SPM || dest_pos == CTRL_SPM;
+}
+
+pe::pe(int _id, SPM* spm, int _pc_mode) {
 
     SPM_unit = spm;
     id = _id;
+    pc_mode = _pc_mode;
     comp_reg_load = 0, comp_reg_store = 0, addr_reg_load = 0, addr_reg_store = 0, SPM_load = 0, SPM_store = 0,
     comp_instr_load = 0, comp_instr_store = 0,
     comp_reg_load_addr = 0, comp_reg_store_addr = 0, addr_reg_load_addr = 0, addr_reg_store_addr = 0, SPM_load_addr = 0, SPM_store_addr = 0,
@@ -64,6 +94,18 @@ pe::~pe() {
     delete regfile_unit;
 }
 
+void pe::reset_waw_trackers() {
+    for (int k = 0; k < ADDR_REGISTER_NUM; k++) {
+        addr_regfile_unit->last_write_cycle[k] = -1;
+        addr_regfile_unit->halves_written[k] = 0;
+        addr_regfile_unit->last_write_origin[k] = nullptr;
+    }
+    for (int k = 0; k < REGFILE_ADDR_NUM; k++) {
+        regfile_unit->last_write_cycle[k] = -1;
+        regfile_unit->last_write_origin[k] = nullptr;
+    }
+}
+
 void pe::reset() {
     SPM_unit->reset();
     addr_regfile_unit->reset();
@@ -77,7 +119,7 @@ void pe::reset() {
     PC[0] = 0;
     PC[1] = 0;
     ras = 0;
-    outstanding_req.clear();
+    outstanding_reqs.clear();
     spmReqPort = nullptr;
     halted = false;
     // Clear forwarded in_port/out_port values so a reused PE does not
@@ -87,83 +129,77 @@ void pe::reset() {
 }
 
 void pe::recieve_spm_data(int data[LINE_SIZE]){
-    if (!outstanding_req.valid){
+    if (outstanding_reqs.empty()){
         fprintf(stderr, "Error: No outstanding request present, but recieve_spm_data called for PE[%d]\n", id);
         exit(-1);
     }
+    // FIFO pop: the oldest pending load is the one whose data just landed.
+    const OutstandingReq req = outstanding_reqs.front();
+    outstanding_reqs.pop_front();
 #ifdef PROFILE
     printf("PE[%d] @%d recv SPM: ", id, cycle);
 #endif
-    switch (outstanding_req.dst){
+    switch (req.dst){
         case CTRL_REG:
-            if (outstanding_req.single_load) {
+            if (req.single_load) {
                 {
-                int val =
-                    data[outstanding_req.spm_addr & 1];
-                if (outstanding_req.two_bit_extract)
-                    val = (val >> outstanding_req.bp_shift)
-                        & 0x3;
-                regfile_unit->register_file[
-                    outstanding_req.addr] = val;
+                int val = data[req.spm_addr & 1];
+                if (req.two_bit_extract)
+                    val = (val >> req.bp_shift) & 0x3;
+                regfile_unit->set_delayed(req.addr, val);
                 }
 #ifdef PROFILE
                 printf("reg[%d] = %d\n",
-                    outstanding_req.addr,
-                    data[outstanding_req.spm_addr & 1]);
+                    req.addr, data[req.spm_addr & 1]);
 #endif
             } else {
-                for (int i = 0;
-                     i < LINE_SIZE; i++)
-                    regfile_unit->register_file[
-                        outstanding_req.addr + i] =
-                        data[i];
+                for (int i = 0; i < LINE_SIZE; i++)
+                    regfile_unit->set_delayed(req.addr + i, data[i]);
 #ifdef PROFILE
                 printf("reg[%d,%d] = [%d,%d]\n",
-                    outstanding_req.addr,
-                    outstanding_req.addr+1,
-                    data[0], data[1]);
+                    req.addr, req.addr+1, data[0], data[1]);
 #endif
             }
             break;
         case CTRL_GR:
         case CTRL_GR_LO:
         case CTRL_GR_HI:
-            {
-            int val =
-                data[outstanding_req.spm_addr & 1];
-            if (outstanding_req.two_bit_extract) {
-                val = (val >> outstanding_req.bp_shift)
-                    & 0x3;
-            }
-            addr_regfile_unit->st(
-                outstanding_req.addr, val,
-                outstanding_req.dst);
-            }
+            if (req.single_load) {
+                int val = data[req.spm_addr & 1];
+                if (req.two_bit_extract)
+                    val = (val >> req.bp_shift) & 0x3;
+                addr_regfile_unit->st_delayed(req.addr, val, req.dst);
 #ifdef PROFILE
-            printf("gr[%d] = %d\n",
-                outstanding_req.addr,
-                data[outstanding_req.spm_addr & 1]);
+                printf("gr[%d] = %d\n",
+                    req.addr, data[req.spm_addr & 1]);
 #endif
+            } else {
+                // mvd to gr: deliver both words to consecutive gr
+                // indices (previously only word 0 was written, leaving
+                // the second half untouched — broke lowered GSSW).
+                for (int i = 0; i < LINE_SIZE; i++)
+                    addr_regfile_unit->st_delayed(req.addr + i, data[i], req.dst);
+#ifdef PROFILE
+                printf("gr[%d,%d] = [%d,%d]\n",
+                    req.addr, req.addr + 1, data[0], data[1]);
+#endif
+            }
             break;
         case CTRL_OUT_PORT:
             {
-            int val =
-                data[outstanding_req.spm_addr & 1];
-            if (outstanding_req.two_bit_extract)
-                val = (val >> outstanding_req.bp_shift)
-                    & 0x3;
+            int val = data[req.spm_addr & 1];
+            if (req.two_bit_extract)
+                val = (val >> req.bp_shift) & 0x3;
             store_data = val;
             }
 #ifdef PROFILE
-            printf("out = %d\n",
-                data[outstanding_req.spm_addr & 1]);
+            printf("out = %d\n", data[req.spm_addr & 1]);
 #endif
             break;
         default:
-            fprintf(stderr, "Error: Unsupported dst %d for SPM load in PE[%d]\n", outstanding_req.dst, id);
+            fprintf(stderr, "Error: Unsupported dst %d for SPM load in PE[%d]\n", req.dst, id);
             exit(-1);
     }
-    outstanding_req.clear();
 #ifdef PROFILE
     //if (id == 0){
     //    printf("\nzkn @%d:%d\n", cycle-1, data[0]);
@@ -211,6 +247,11 @@ void pe::run(int simd) {
     regfile_unit->read(regfile_unit->read_addr, regfile_unit->read_data);
     regfile_unit->write_addr[0] = output_addr[0] < REGFILE_ADDR_NUM ? output_addr[0] : -1;
     regfile_unit->write_addr[1] = output_addr[1] < REGFILE_ADDR_NUM ? output_addr[1] : -1;
+    // Suppress regfile write when the slot is halted — a HALT op[0]
+    // shouldn't clobber reg[output_addr] with garbage. (Previously any
+    // idle HALT with output_addr=0 silently wrote 0 to reg[0].)
+    if (op[0][0] == HALT) regfile_unit->write_addr[0] = -1;
+    if (op[1][0] == HALT) regfile_unit->write_addr[1] = -1;
 
     int cu_inputs[2][6];
     for (i = 0; i < 6; i++){
@@ -247,27 +288,54 @@ void pe::run(int simd) {
         op[1][1] = get_base_opcode(op[1][1]);
     }
 
-    if (simd) {
-        regfile_unit->write_data[0] = cu_32.execute_8bit(op[0], cu_inputs[0]);
-        regfile_unit->write_data[1] = cu_32.execute_8bit(op[1], cu_inputs[1]);        
-    } else {
-        regfile_unit->write_data[0] = cu_32.execute(op[0], cu_inputs[0]);
-        regfile_unit->write_data[1] = cu_32.execute(op[1], cu_inputs[1]);   
-    }
-
-
-    // Write compute outputs to gr if addressed (addr >= 32)
+    // Per-slot dispatch: SIMD + gr source -> scalar ALU (GSSW lowering).
+    // If any compute input references a gr (input_addr >= 32) while simd
+    // mode is active, the lane-packing treatment would corrupt 32-bit gr
+    // values — fall back to the scalar ALU for that slot. COMP_GT is the
+    // documented exception: it legitimately reads simd reg lanes and writes
+    // a scalar 0/1 into gr, so keep it on the simd path regardless.
+    auto slot_has_gr_src = [&](int s) {
+        for (int j = 0; j < 6; j++) if (input_addr[s][j] >= 32) return true;
+        return false;
+    };
     for (int s = 0; s < 2; s++) {
-        int addr = output_addr[s];
-        if (addr >= 64)
-            addr_regfile_unit->st(addr - 64, regfile_unit->write_data[s], CTRL_GR_HI);
-        else if (addr >= 48)
-            addr_regfile_unit->st(addr - 48, regfile_unit->write_data[s], CTRL_GR_LO);
-        else if (addr >= 32)
-            addr_regfile_unit->st(addr - 32, regfile_unit->write_data[s]);
+        // SLLI_64: paired 64-bit left shift. Both slots see the same opcode;
+        // cu_inputs[s][1]=reg[srcReg], cu_inputs[s][2]=reg[srcReg+1]; the
+        // shift amount arrives via the immediate path in cu_inputs[s][0].
+        // Slot 0 emits the new low word, slot 1 emits the new high word.
+        if (op[s][0] == SLLI_64) {
+            unsigned shift_imm = (unsigned)cu_inputs[s][0] & 0x3F;  // 0..63
+            uint32_t lo = (uint32_t)cu_inputs[s][1];
+            uint32_t hi = (uint32_t)cu_inputs[s][2];
+            uint64_t pair = ((uint64_t)hi << 32) | lo;
+            uint64_t shifted = (shift_imm >= 64) ? 0ULL : (pair << shift_imm);
+            regfile_unit->write_data[s] = (s == 0)
+                ? (int)(uint32_t)shifted
+                : (int)(uint32_t)(shifted >> 32);
+            continue;
+        }
+        bool use_simd = simd
+            && !(slot_has_gr_src(s) && op[s][0] != COMP_GT);
+        if (use_simd)
+            regfile_unit->write_data[s] = cu_32.execute_8bit(op[s], cu_inputs[s]);
+        else
+            regfile_unit->write_data[s] = cu_32.execute(op[s], cu_inputs[s]);
     }
-    regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 0);
-    regfile_unit->write(regfile_unit->write_addr, regfile_unit->write_data, 1);
+
+
+    // Stage compute writes to gr — defer commit until after control decode
+    // so that control reads see pre-cycle gr values (concurrent semantics).
+    int comp_gr_idx[2] = {-1, -1};
+    int comp_gr_pos[2] = {0, 0};
+    for (int s = 0; s < 2; s++) {
+        if (op[s][0] == HALT) continue;
+        int addr = output_addr[s];
+        if (addr >= 64)      { comp_gr_idx[s] = addr - 64; comp_gr_pos[s] = CTRL_GR_HI; }
+        else if (addr >= 48) { comp_gr_idx[s] = addr - 48; comp_gr_pos[s] = CTRL_GR_LO; }
+        else if (addr >= 32) { comp_gr_idx[s] = addr - 32; comp_gr_pos[s] = CTRL_GR; }
+    }
+    // regfile_unit->write_addr/write_data already hold staged compute reg
+    // writes — leave them; commit moved below to after control decode.
 #ifdef PROFILE
     printf("\nPE[%d]\t", id);
 #endif
@@ -282,8 +350,72 @@ void pe::run(int simd) {
         exit(-1);
     }
     int old_PC = PC[0];
+    // Structural hazard: PE has one SPM port — at most one SPM access per
+    // VLIW cycle. Check both slots before either dispatches.
+    if (slot_does_spm_access(ctrl_instr_buffer_unit->buffer[PC[0]][0])
+        && slot_does_spm_access(ctrl_instr_buffer_unit->buffer[PC[1]][1])) {
+        fprintf(stderr,
+            "PE[%d] cycle %d PC=[%d/%d]: two SPM accesses in one VLIW"
+            " cycle — only one memory port per PE.\n",
+            id, cycle, PC[0], PC[1]);
+        exit(-1);
+    }
+    // Inter-slot RAW fix: both control slots must observe the same
+    // pre-cycle gr/reg state. Slot 1 decodes first and may commit gr/reg
+    // writes during decode (e.g. gr_lo/gr_hi, arithmetic dest=gr); without
+    // intervention slot 0 would read those new values. Snapshot, run slot
+    // 1, capture its deltas, restore so slot 0 reads pre-cycle, run slot
+    // 0, then reapply slot 1's deltas. Slot-0 same-idx writes still hit
+    // the WAW tracker (last_write_cycle from slot 1 is preserved across
+    // restore) so overlap crashes correctly.
+    int gr_snap[ADDR_REGISTER_NUM];
+    int reg_snap[REGFILE_ADDR_NUM];
+    memcpy(gr_snap, addr_regfile_unit->buffer,
+           ADDR_REGISTER_NUM * sizeof(int));
+    memcpy(reg_snap, regfile_unit->register_file,
+           REGFILE_ADDR_NUM * sizeof(int));
+
     decode(ctrl_instr_buffer_unit->buffer[PC[1]][1], &PC[1], src_dest[1], &ctrl_op[1], simd, &ctrl_write_addrs[0], &ctrl_write_data[0]);
+
+    // Capture slot 1's gr/reg deltas (changes vs snapshot).
+    int s1_gr_changed[ADDR_REGISTER_NUM];
+    int s1_gr_val[ADDR_REGISTER_NUM];
+    int s1_n_gr = 0;
+    for (int k = 0; k < ADDR_REGISTER_NUM; k++) {
+        if (addr_regfile_unit->buffer[k] != gr_snap[k]) {
+            s1_gr_changed[s1_n_gr] = k;
+            s1_gr_val[s1_n_gr] = addr_regfile_unit->buffer[k];
+            s1_n_gr++;
+        }
+    }
+    int s1_reg_changed[REGFILE_ADDR_NUM];
+    int s1_reg_val[REGFILE_ADDR_NUM];
+    int s1_n_reg = 0;
+    for (int k = 0; k < REGFILE_ADDR_NUM; k++) {
+        if (regfile_unit->register_file[k] != reg_snap[k]) {
+            s1_reg_changed[s1_n_reg] = k;
+            s1_reg_val[s1_n_reg] = regfile_unit->register_file[k];
+            s1_n_reg++;
+        }
+    }
+
+    // Restore so slot 0 sees pre-cycle. Direct buffer write — leaves the
+    // WAW tracker (last_write_cycle) intact, so a slot-0 write to any idx
+    // slot 1 wrote will still crash via the instrumented st()/set().
+    memcpy(addr_regfile_unit->buffer, gr_snap,
+           ADDR_REGISTER_NUM * sizeof(int));
+    memcpy(regfile_unit->register_file, reg_snap,
+           REGFILE_ADDR_NUM * sizeof(int));
+
     decode(ctrl_instr_buffer_unit->buffer[PC[0]][0], &PC[0], src_dest[0], &ctrl_op[0], simd, &ctrl_write_addrs[1], &ctrl_write_data[1]);
+
+    // Reapply slot 1's deltas. Any idx slot 0 also wrote would already
+    // have crashed via WAW. So at this point the two delta sets are
+    // disjoint and we can reapply slot 1's via direct write.
+    for (int k = 0; k < s1_n_gr; k++)
+        addr_regfile_unit->buffer[s1_gr_changed[k]] = s1_gr_val[k];
+    for (int k = 0; k < s1_n_reg; k++)
+        regfile_unit->register_file[s1_reg_changed[k]] = s1_reg_val[k];
 
     // Branch-as-group: both VLIW slots must agree on control flow
     auto is_ctrl_flow = [](int op) {
@@ -320,14 +452,36 @@ void pe::run(int simd) {
         exit(-1);
     }
 
-    // One control flow taken: sync other slot
+    // One control flow taken: sync other slot (SHARED mode only).
+    // PC_MODE_DUAL leaves PC[0]/PC[1] independent — required by POA,
+    // whose pe_X traces have a single-slot trailing branch that must
+    // not pull the other slot's PC forward.
     bool took0 = (PC[0] != old_PC + 1);
     bool took1 = (PC[1] != old_PC + 1);
-    if (cf0 && took0 && !cf1) PC[1] = PC[0];
-    if (cf1 && took1 && !cf0) PC[0] = PC[1];
+    if (pc_mode == PC_MODE_SHARED) {
+        if (cf0 && took0 && !cf1) PC[1] = PC[0];
+        if (cf1 && took1 && !cf0) PC[0] = PC[1];
+    }
 
     // Track if PE is halted (both slots executing halt instruction)
     halted = (ctrl_op[0] == CTRL_HALT && ctrl_op[1] == CTRL_HALT);
+
+    // Commit deferred compute writes now that control decode has consumed
+    // its pre-cycle gr/reg view. Instrumented st()/set() detects any WAW
+    // collision against control writes that already committed during decode.
+    for (int s = 0; s < 2; s++) {
+        if (comp_gr_idx[s] >= 0)
+            addr_regfile_unit->st(comp_gr_idx[s],
+                regfile_unit->write_data[s], comp_gr_pos[s], "comp");
+    }
+    if (regfile_unit->write_addr[0] >= 0
+        && regfile_unit->write_addr[0] < REGFILE_ADDR_NUM)
+        regfile_unit->set(regfile_unit->write_addr[0],
+            regfile_unit->write_data[0], "comp");
+    if (regfile_unit->write_addr[1] >= 0
+        && regfile_unit->write_addr[1] < REGFILE_ADDR_NUM)
+        regfile_unit->set(regfile_unit->write_addr[1],
+            regfile_unit->write_data[1], "comp");
 
     addr_regfile_unit->write(ctrl_write_addrs, ctrl_write_data, CTRL_REGFILE_WRITE_PORTS);
 
@@ -369,14 +523,16 @@ void pe::comp_instr_load_from_ddr(int n_instr, unsigned long* data) {
 }
 
 
-LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data, bool swizzle) {
+LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data, bool swizzle, int rs2_pos) {
 
     LoadResult data{};
     data.data[0] = 0;
     int source_addr = 0;
-    
-    if (reg_immBar_flag) source_addr = addr_regfile_unit->at(rs1) + addr_regfile_unit->at(rs2);
-    else source_addr = rs1 + addr_regfile_unit->at(rs2);
+
+    // rs2_pos selects full gr / gr_lo / gr_hi for the SPM-offset register.
+    // Default CTRL_GR preserves legacy full-32-bit behavior for non-SPM paths.
+    if (reg_immBar_flag) source_addr = addr_regfile_unit->at(rs1) + addr_regfile_unit->at(rs2, rs2_pos);
+    else source_addr = rs1 + addr_regfile_unit->at(rs2, rs2_pos);
 
 #ifdef DEBUG
     printf("src: %d reg_immBar_flag: %d reg_imm_1: %d reg_1: %d src_addr: %d\n", source_pos, reg_immBar_flag, rs1, rs2, source_addr);
@@ -476,12 +632,14 @@ LoadResult pe::load(int source_pos, int reg_immBar_flag, int rs1, int rs2, int s
     return data;
 }
 
-void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_data, bool swizzle) {
+void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_data, bool swizzle, int rs2_pos) {
 
     int dest_addr = 0;
 
-    if (reg_immBar_flag) dest_addr = addr_regfile_unit->at(rs1) + addr_regfile_unit->at(rs2);
-    else dest_addr = rs1 + addr_regfile_unit->at(rs2);
+    // rs2_pos selects full gr / gr_lo / gr_hi for the SPM-offset register.
+    // Default CTRL_GR preserves legacy full-32-bit behavior for non-SPM paths.
+    if (reg_immBar_flag) dest_addr = addr_regfile_unit->at(rs1) + addr_regfile_unit->at(rs2, rs2_pos);
+    else dest_addr = rs1 + addr_regfile_unit->at(rs2, rs2_pos);
 
 #ifdef DEBUG
     printf("dest: %d reg_immBar_flag: %d reg_imm_1: %d reg_1: %d src_addr: %d\n", dest_pos, reg_immBar_flag, rs1, rs2, dest_addr);
@@ -496,12 +654,16 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
                 " store in PE[%d]\n", dest_pos, id);
             exit(-1);
         }
-        assert(!outstanding_req.valid);
-        outstanding_req.valid = true;
-        outstanding_req.single_load = single_data;
-        outstanding_req.dst = dest_pos;
-        outstanding_req.addr = dest_addr;
-        outstanding_req.spm_addr = last_spm_load_addr;
+        // Allow up to SPM_ACCESS_LATENCY (=2) loads in flight per PE.
+        // Responses are consumed FIFO in recieve_spm_data.
+        assert(outstanding_reqs.size() < (size_t)SPM_ACCESS_LATENCY);
+        OutstandingReq req;
+        req.valid = true;
+        req.single_load = single_data;
+        req.dst = dest_pos;
+        req.addr = dest_addr;
+        req.spm_addr = last_spm_load_addr;
+        outstanding_reqs.push_back(req);
         //still log the dest we're sending to
 #ifdef PROFILE
         switch (dest_pos) {
@@ -592,6 +754,59 @@ void pe::store(int dest_pos, int src_pos, int reg_immBar_flag, int rs1, int rs2,
     }
 }
 
+// ===== Inlined GSSW kernel (8-wide paired-4-lane SIMD version) =====
+// Block-copied to avoid linking gssw.c. Each logical 8-lane vector
+// occupies a pair of adjacent 32-bit regs / SPM words.
+
+#define GSSW_SEG_LEN    19                           // ceil(148 / 8)
+#define GSSW_VEC_WORDS  2                            // 2 SPM words per pair
+// 8-byte (1 pair) padding between pvE/pvF and pvF/best absorbs the
+// lazy-F last-iter overflow writes so they don't corrupt pvF[0]/best[0].
+#define GSSW_SPM_PAD    8
+#define GSSW_PROF_OFF   0
+#define GSSW_HPING_OFF  (4 * GSSW_SEG_LEN * 8)       // 4 nt × segLen pairs × 8B
+#define GSSW_HPONG_OFF  (GSSW_HPING_OFF + GSSW_SEG_LEN * 8)
+#define GSSW_E_OFF      (GSSW_HPONG_OFF + GSSW_SEG_LEN * 8)
+#define GSSW_F_OFF      (GSSW_E_OFF     + GSSW_SEG_LEN * 8 + GSSW_SPM_PAD)
+#define GSSW_BEST_OFF   (GSSW_F_OFF     + GSSW_SEG_LEN * 8 + GSSW_SPM_PAD)
+#define GSSW_GRAPH_OFF  (GSSW_BEST_OFF  + GSSW_SEG_LEN * 8)
+
+struct gssw_spm_graph_meta_t {
+    uint32_t num_nodes;
+    uint32_t total_nexts;
+    uint32_t total_seq;
+    uint32_t _pad;
+};
+
+struct gssw_spm_node_desc_t {
+    int16_t seq_off;
+    int16_t seq_len;
+    int16_t next_off;
+    int16_t next_len;
+    // Pair slots: 2 uint32 words per logical 8-lane vector.
+    uint32_t hSeed[GSSW_SEG_LEN * GSSW_VEC_WORDS];
+    uint32_t eSeed[GSSW_SEG_LEN * GSSW_VEC_WORDS];
+};
+
+// Word-offset constants (byte offsets / 4) — used by magic 101.
+// Each array holds SEG_LEN pair slots = 2*SEG_LEN SPM words.
+#define GSSW_PROF_WOFF   (GSSW_PROF_OFF  / 4)         // 0
+#define GSSW_HPING_WOFF  (GSSW_HPING_OFF / 4)         // 152
+#define GSSW_HPONG_WOFF  (GSSW_HPONG_OFF / 4)         // 190
+#define GSSW_E_WOFF      (GSSW_E_OFF     / 4)         // 228
+#define GSSW_F_WOFF      (GSSW_F_OFF     / 4)         // 266
+#define GSSW_BEST_WOFF   (GSSW_BEST_OFF  / 4)         // 304
+#define GSSW_META_WOFF   (GSSW_GRAPH_OFF / 4)         // 342
+#define GSSW_NODES_WOFF  (GSSW_META_WOFF + 4)         // 346 (after 4 meta words)
+#define GSSW_ND_WORDS    (2 + 2 * GSSW_SEG_LEN * GSSW_VEC_WORDS)  // 78 words
+#define GSSW_ND_HSEED_W  2                            // hSeed words offset within nd
+#define GSSW_ND_ESEED_W  (2 + GSSW_SEG_LEN * GSSW_VEC_WORDS)      // 40
+
+// The register-mapped kernel now lives inside magic 101.
+// See magic 101 handler below.
+
+// ===== End inlined GSSW kernel =====
+
 int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int simd, int* ctrl_write_addr, int* ctrl_write_datum) {
     if (instruction == 0x20f7800000000) {
         fprintf(stderr, "WARNING: PE[%d] PC=%d cycle=%d executing uninitialized instruction.\n", id, *PC, cycle);
@@ -649,6 +864,31 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
     bool is_magic = (instruction & magic_mask);
     int  magic_payload = instruction & magic_payload_mask;
+
+    // Resolve bank selector encoded in the top 2 bits of the 7-bit reg idx.
+    // Top 2 bits pick the file; low 5 bits are the physical index (0..31).
+    //   idx[0:31]   -> CTRL_GR              (full 32-bit gr[idx])
+    //   idx[32:63]  -> CTRL_GR_LO           (gr[idx-32] lo half)
+    //   idx[64:95]  -> CTRL_GR_HI           (gr[idx-64] hi half)
+    //   idx[96:127] -> CTRL_RESOLVED_REG    (compute reg[idx-96], PE only)
+    // The resolved pos overrides src/dest ONLY when the src/dest type field
+    // is CTRL_GR; for other types (SPM, fifo, reg-legacy, etc.) the type
+    // field governs and top bits of reg_idx are ignored. Note: legacy
+    // src/dest = CTRL_REG (0) keeps its existing "compute regfile via mv/li
+    // path" meaning for load/store and its "don't-care → read gr" meaning
+    // for arithmetic/branch sites.
+    auto resolve_reg_field = [](int& reg_idx) -> int {
+        int high = reg_idx >> 5;
+        reg_idx &= 0x1F;
+        if (high == 0) return CTRL_GR;
+        if (high == 1) return CTRL_GR_LO;
+        if (high == 2) return CTRL_GR_HI;
+        return CTRL_RESOLVED_REG;
+    };
+    int src_resolved  = resolve_reg_field(reg_1);
+    int dest_resolved = resolve_reg_field(reg_0);
+    if (src  == CTRL_GR) src  = src_resolved;
+    if (dest == CTRL_GR) dest = dest_resolved;
 
     src_dest[0] = src;
     src_dest[1] = dest;
@@ -2686,14 +2926,17 @@ m23_end:    ;
             }
 #endif
         m19_done: ;
+        } else if (magic_id == 102) {
+            printf("qqq %d qqq\n",
+                   addr_regfile_unit->at(15));
         }
         (*PC)++;
     } else if (opcode == 0) {              // add rd rs1 rs2
         rd = reg_imm_0;
         rs1 = reg_imm_1;
         rs2 = reg_1;
-        add_a = addr_regfile_unit->at(rs1);
-        add_b = addr_regfile_unit->at(rs2);
+        add_a = read_gr_src(src, rs1);
+        add_b = read_gr_src(src, rs2);
         sum = add_a + add_b;
         set_output_dest(dest, rd, sum);
 #ifdef PROFILE
@@ -2704,8 +2947,8 @@ m23_end:    ;
         rd = reg_imm_0;
         rs1 = reg_imm_1;
         rs2 = reg_1;
-        add_a = addr_regfile_unit->at(rs1);
-        add_b = addr_regfile_unit->at(rs2);
+        add_a = read_gr_src(src, rs1);
+        add_b = read_gr_src(src, rs2);
         sum = add_a - add_b;
         set_output_dest(dest, rd, sum);
 #ifdef PROFILE
@@ -2717,26 +2960,54 @@ m23_end:    ;
         imm = sext_imm_1;
         rs2 = reg_1;
         add_a = imm;
-        add_b = addr_regfile_unit->at(rs2);
+        add_b = read_gr_src(src, rs2);
         sum = add_a + add_b;
         set_output_dest(dest, rd, sum);
 #ifdef PROFILE
         printf("addi gr[%d] %d gr[%d] (%d %d %d)\t", rd, imm, rs2, sum, add_a, add_b);
 #endif
         (*PC)++;
-//     } else if (opcode == 3) {       // set_8 rd rs2
-//         rd = reg_imm_0;
-//         rs2 = reg_1;
-//         memcpy(rs, &main_addressing_register[rs2], 4*sizeof(int8_t));
-
-//         for (i = 0; i < 4; i++) {
-//             rs[i] = main_addressing_register[rs2] & 0xFF;
-//         }
-//         memcpy(&main_addressing_register[rd], rs, 4*sizeof(int8_t));
-// #ifdef PROFILE
-//         printf("set_8 gr[%d] gr[%d] (%d %lx)\n", rd, rs2, main_addressing_register[rs2], main_addressing_register[rd]);
-// #endif
-//         (*PC)++;
+    } else if (opcode == CTRL_MUL) {       // mul rd rs2 imm/gr[imm]
+        // gr[rd] = op_a * gr[rs2] where op_a is sext_imm_1 (immBar=0)
+        // or gr[imm_1] (immBar=1). Slot-0 only by programmer contract.
+        rd = reg_imm_0;
+        rs2 = reg_1;
+        add_a = reg_immBar_flag_1 ? read_gr_src(src, reg_imm_1) : sext_imm_1;
+        add_b = read_gr_src(src, rs2);
+        sum = add_a * add_b;
+        set_output_dest(dest, rd, sum);
+#ifdef PROFILE
+        printf("mul gr[%d] %s%d gr[%d] (%d %d %d)\t", rd,
+               reg_immBar_flag_1 ? "gr[" : "", reg_immBar_flag_1 ? reg_imm_1 : sext_imm_1,
+               rs2, sum, add_a, add_b);
+#endif
+        (*PC)++;
+    } else if (opcode == CTRL_SET_8) {   // set_8 reg[rd]/gr[rd] = imm8 broadcast
+        // Writes (imm8 & 0xFF) * 0x01010101 into the destination so one op
+        // materializes a 4-lane byte constant for the SIMD compute path
+        // (e.g. vBias=0x04040404 in magic 101's GSSW kernel).
+        rd = reg_imm_0;
+        int imm8 = sext_imm_1 & 0xFF;
+        int broadcast = (int)((uint32_t)imm8 * 0x01010101u);
+        if (dest == CTRL_REG) {
+            if (rd < 0 || rd >= REGFILE_ADDR_NUM) {
+                fprintf(stderr, "PE[%d] set_8 reg[%d] out of range\n", id, rd);
+                exit(-1);
+            }
+            regfile_unit->set(rd, broadcast, "set_8");
+        } else if (dest == CTRL_GR
+                || dest == CTRL_GR_LO
+                || dest == CTRL_GR_HI) {
+            set_output_dest(dest, rd, broadcast);
+        } else {
+            fprintf(stderr, "PE[%d] set_8 to dest %d not supported\n",
+                id, dest);
+            exit(-1);
+        }
+#ifdef PROFILE
+        printf("set_8 dest=%d [%d] = 0x%08x\t", dest, rd, broadcast);
+#endif
+        (*PC)++;
     } else if (opcode == 4) {       // li dest imm/reg(reg(++))
 #ifdef PROFILE
     if (simd)
@@ -2746,7 +3017,9 @@ m23_end:    ;
 #endif
         LoadResult immediate_data{};
         immediate_data.data[0] = sext_imm_1;
-        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, immediate_data, simd, ctrl_write_addr, ctrl_write_datum);
+        // dest_resolved is the subregister selector (CTRL_GR / CTRL_GR_LO / CTRL_GR_HI)
+        // for reg_0 / SPM-offset register; enables gr_lo[r] / gr_hi[r] SPM offsets.
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, immediate_data, simd, ctrl_write_addr, ctrl_write_datum, true, false, dest_resolved);
         if (reg_auto_increasement_flag_0)
             addr_regfile_unit->st(reg_0, addr_regfile_unit->at(reg_0) + 1);
         (*PC)++;
@@ -2754,8 +3027,8 @@ m23_end:    ;
 #ifdef PROFILE
         printf("Move ");
 #endif
-        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd);
-        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum);
+        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, true, false, src_resolved);
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, true, false, dest_resolved);
 
         bool leagal_mv = check_legal_mv(src, dest);
         if (!leagal_mv) {
@@ -2774,9 +3047,9 @@ m23_end:    ;
 #ifdef PROFILE
         printf("bne %d %d %d", rs1, rs2, sext_imm_0);
 #endif
-        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->at(rs1);
+        if (reg_immBar_flag_1) comp_0 = read_gr_src(src, rs1);
         else comp_0 = sext_imm_1;
-        comp_1 = addr_regfile_unit->at(rs2);
+        comp_1 = read_gr_src(src, rs2);
 #ifdef PROFILE
         printf(" (%d %d)", comp_0, comp_1);
 #endif
@@ -2797,9 +3070,9 @@ m23_end:    ;
 #ifdef PROFILE
         printf("beq %d %d %d", rs1, rs2, sext_imm_0);
 #endif
-        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->at(rs1);
+        if (reg_immBar_flag_1) comp_0 = read_gr_src(src, rs1);
         else comp_0 = sext_imm_1;
-        comp_1 = addr_regfile_unit->at(rs2);
+        comp_1 = read_gr_src(src, rs2);
 #ifdef PROFILE
         printf(" (%d %d)", comp_0, comp_1);
 #endif
@@ -2820,9 +3093,9 @@ m23_end:    ;
 #ifdef PROFILE
         printf("bge %d %d %d", rs1, rs2, sext_imm_0);
 #endif
-        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->at(rs1);
+        if (reg_immBar_flag_1) comp_0 = read_gr_src(src, rs1);
         else comp_0 = sext_imm_1;
-        comp_1 = addr_regfile_unit->at(rs2);
+        comp_1 = read_gr_src(src, rs2);
 #ifdef PROFILE
         printf(" (%d %d)", comp_0, comp_1);
 #endif
@@ -2843,9 +3116,9 @@ m23_end:    ;
 #ifdef PROFILE
         printf("blt %d %d %d", rs1, rs2, sext_imm_0);
 #endif
-        if (reg_immBar_flag_1) comp_0 = addr_regfile_unit->at(rs1);
+        if (reg_immBar_flag_1) comp_0 = read_gr_src(src, rs1);
         else comp_0 = sext_imm_1;
-        comp_1 = addr_regfile_unit->at(rs2);
+        comp_1 = read_gr_src(src, rs2);
 #ifdef PROFILE
         printf(" (%d %d)", comp_0, comp_1);
 #endif
@@ -2881,10 +3154,9 @@ m23_end:    ;
         printf("wait.\t");
 #endif
     } else if (opcode == CTRL_SHIFTI_R) {      // SHIFT_R
-        assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
-        int operand1 = addr_regfile_unit->at(rs2);
+        int operand1 = read_gr_src(src, rs2);
         //we want arithmetic shift right as below, but this is compiler dependent. Not in c++ std
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
@@ -2895,10 +3167,9 @@ m23_end:    ;
         printf("rShift gr[%d] = gr[%d] >> %d (%d) \n", rd, rs2, reg_imm_1, operand1);
 #endif
     } else if (opcode == CTRL_SHIFTI_L) {      // SHIFT_L
-        assert(dest == CTRL_GR);  // only support gr
         rd = reg_imm_0;
         rs2 = reg_1;
-        int operand1 = addr_regfile_unit->at(rs2);
+        int operand1 = read_gr_src(src, rs2);
         //we want arithmetic shift right as below, but this is compiler dependent. Not in c++ std
         //int shift_result = operand1 >> reg_imm_1;
         //so instead of above, we do the following for portability:
@@ -2911,7 +3182,7 @@ m23_end:    ;
     } else if (opcode == CTRL_ANDI) {      // AND
         rd = reg_imm_0;
         rs2 = reg_1;
-        int operand1 = addr_regfile_unit->at(rs2);
+        int operand1 = read_gr_src(src, rs2);
         int and_result = operand1 & reg_imm_1;
         set_output_dest(dest, rd, and_result);
         (*PC)++;
@@ -2922,7 +3193,7 @@ m23_end:    ;
         rd = reg_imm_0;
         imm = sext_imm_1;
         rs2 = reg_1;
-        add_a = addr_regfile_unit->at(rs2);
+        add_a = read_gr_src(src, rs2);
         add_b = imm;
         sum = add_a - add_b;
         set_output_dest(dest, rd, sum);
@@ -2936,8 +3207,8 @@ m23_end:    ;
 #endif
         assert(src == CTRL_SPM || dest == CTRL_SPM); //only support to/from spm
         bool single_data = false;
-        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, single_data);
-        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, single_data);
+        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, single_data, false, src_resolved);
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, single_data, false, dest_resolved);
 
         bool leagal_mv = check_legal_mv(src, dest);
         if (!leagal_mv) {
@@ -2962,8 +3233,8 @@ m23_end:    ;
 #endif
         // mvi requires source or destination to be SPM
         assert(src == CTRL_SPM || dest == CTRL_SPM);
-        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, true, true);
-        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, true, true);
+        data = load(src, reg_immBar_flag_1, sext_imm_1, reg_1, simd, true, true, src_resolved);
+        store(dest, src, reg_immBar_flag_0, sext_imm_0, reg_0, data, simd, ctrl_write_addr, ctrl_write_datum, true, true, dest_resolved);
 
         bool legal_mv = check_legal_mv(src, dest);
         if (!legal_mv) {
@@ -2981,21 +3252,27 @@ m23_end:    ;
         printf("Move with 2-bit Extract ");
 #endif
         assert(src == CTRL_SPM);
-        // Compute bp-level address from operands
+        // Compute bp-level address from operands.
+        // src_resolved gives the subregister selector for the reg_1
+        // offset register (CTRL_GR / CTRL_GR_LO / CTRL_GR_HI) so
+        // mvi2 can use gr_lo[r] / gr_hi[r] as a packed-half offset
+        // — required for GSSW stage 3d where col = gr[2].lo and
+        // gr[2].hi = seq_len would otherwise fold into the addr.
         int bp_addr;
         if (reg_immBar_flag_1)
             bp_addr =
                 addr_regfile_unit->at(sext_imm_1)
-                + addr_regfile_unit->at(reg_1);
+                + addr_regfile_unit->at(reg_1, src_resolved);
         else
             bp_addr = sext_imm_1
-                + addr_regfile_unit->at(reg_1);
+                + addr_regfile_unit->at(reg_1, src_resolved);
         int bp_offset = bp_addr & 0xF;
         int word_addr = bp_addr >> 4;
 
-        // Swizzle and issue SPM read
-        int access_addr =
-            apply_address_swizzle(word_addr);
+        // mvi2 reads the interleaved-swizzled SPM layout populated by the
+        // WFA/GWFA magic initializers. Use mv2 for GSSW's unswizzled,
+        // per-PE-virtual 2-bit extract.
+        int access_addr = apply_address_swizzle(word_addr);
         last_spm_load_addr = access_addr;
         spmReqPort = new OutstandingRequest();
         spmReqPort->addr = access_addr;
@@ -3013,14 +3290,67 @@ m23_end:    ;
         else
             dest_addr = sext_imm_0
                 + addr_regfile_unit->at(reg_0);
-        assert(!outstanding_req.valid);
-        outstanding_req.valid = true;
-        outstanding_req.single_load = true;
-        outstanding_req.dst = dest;
-        outstanding_req.addr = dest_addr;
-        outstanding_req.spm_addr = access_addr;
-        outstanding_req.bp_shift = bp_offset << 1;
-        outstanding_req.two_bit_extract = true;
+        assert(outstanding_reqs.size() < (size_t)SPM_ACCESS_LATENCY);
+        OutstandingReq req;
+        req.valid = true;
+        req.single_load = true;
+        req.dst = dest;
+        req.addr = dest_addr;
+        req.spm_addr = access_addr;
+        req.bp_shift = bp_offset << 1;
+        req.two_bit_extract = true;
+        outstanding_reqs.push_back(req);
+
+        if (reg_auto_increasement_flag_0)
+            addr_regfile_unit->st(reg_0, addr_regfile_unit->at(reg_0) + 1);
+        if (reg_auto_increasement_flag_1)
+            addr_regfile_unit->st(reg_1, addr_regfile_unit->at(reg_1) + 1);
+        (*PC)++;
+    } else if (opcode == CTRL_MV2) {
+#ifdef PROFILE
+        printf("Move with 2-bit Extract (unswizzled) ");
+#endif
+        assert(src == CTRL_SPM);
+        // Same as mvi2, but reads SPM with virtual per-PE addressing
+        // (no swizzle). Used by GSSW where magic 100 loads SPM via plain
+        // memcpy.
+        int bp_addr;
+        if (reg_immBar_flag_1)
+            bp_addr =
+                addr_regfile_unit->at(sext_imm_1)
+                + addr_regfile_unit->at(reg_1, src_resolved);
+        else
+            bp_addr = sext_imm_1
+                + addr_regfile_unit->at(reg_1, src_resolved);
+        int bp_offset = bp_addr & 0xF;
+        int word_addr = bp_addr >> 4;
+
+        last_spm_load_addr = word_addr;
+        spmReqPort = new OutstandingRequest();
+        spmReqPort->addr = word_addr;
+        spmReqPort->peid = id;
+        spmReqPort->access_t = SpmAccessT::READ;
+        spmReqPort->single_data = true;
+        spmReqPort->isVirtualAddr = true;
+
+        int dest_addr;
+        if (reg_immBar_flag_0)
+            dest_addr =
+                addr_regfile_unit->at(sext_imm_0)
+                + addr_regfile_unit->at(reg_0);
+        else
+            dest_addr = sext_imm_0
+                + addr_regfile_unit->at(reg_0);
+        assert(outstanding_reqs.size() < (size_t)SPM_ACCESS_LATENCY);
+        OutstandingReq req;
+        req.valid = true;
+        req.single_load = true;
+        req.dst = dest;
+        req.addr = dest_addr;
+        req.spm_addr = word_addr;
+        req.bp_shift = bp_offset << 1;
+        req.two_bit_extract = true;
+        outstanding_reqs.push_back(req);
 
         if (reg_auto_increasement_flag_0)
             addr_regfile_unit->st(reg_0, addr_regfile_unit->at(reg_0) + 1);
@@ -3068,6 +3398,21 @@ void pe::set_output_dest(int dest, int rd, int value) {
                 " PC=%d cycle=%d\n", dest, *PC, cycle);
         exit(-1);
     }
+}
+
+// Read an operand selected by a src pos code.
+//   CTRL_GR_LO / CTRL_GR_HI -> sign-extended half of gr[idx]
+//   CTRL_RESOLVED_REG       -> compute regfile read (only produced by the
+//                              decoder's resolve_reg_field for a gr-field
+//                              reg idx in [96:127])
+//   anything else (incl. CTRL_GR and legacy CTRL_REG=0 don't-care)
+//                           -> full-width gr[idx]
+int pe::read_gr_src(int src, int idx) {
+    if (src == CTRL_GR_LO || src == CTRL_GR_HI)
+        return addr_regfile_unit->at(idx, src);
+    if (src == CTRL_RESOLVED_REG)
+        return regfile_unit->register_file[idx];
+    return addr_regfile_unit->at(idx);
 }
 
 int pe::get_gr_10() {

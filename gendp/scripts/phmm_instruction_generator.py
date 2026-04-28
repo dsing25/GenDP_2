@@ -129,12 +129,9 @@ def phmm_main_instruction():
     f.write(data_movement_instruction(gr, gr, 1, 0, 7, 0, 0, 0, 1, 7, addi))                                # gr[7]++
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(0, 0, 0, 0, -6, 0, 1, 0, 7, 4, bne))                                  # bne gr[7] gr[4] -6
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
-    f.write(data_movement_instruction(gr, gr, 1, 0, 7, 0, 1, 0, 3, 3, add))                                 # gr[7] = gr[3] + gr[3]
-    for i in range(3):
-        f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                              # No-op
-        f.write(data_movement_instruction(gr, gr, 1, 0, 7, 0, 1, 0, 7, 3, add))                             # gr[7] = gr[7] + gr[3]
-    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
+    # gr[7] = 5*gr[3] via mul (was 5 cascaded adds with NOPs).
+    # Slot 0 = mul, Slot 1 = si (independent destinations, safe to pair).
+    f.write(data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 5, 3, mul))                                 # gr[7] = 5 * gr[3]
     f.write(data_movement_instruction(gr, 0, 0, 0, 8, 0, 0, 0, 20, 0, si))                                  # gr[8] = 20
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))                                  # No-op
     f.write(data_movement_instruction(gr, gr, 1, 0, 4, 0, 0, 0, 1, 4, addi))                                # gr[4]+=1

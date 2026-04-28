@@ -1,0 +1,106 @@
+# High Level
+Previously we moved the GWFA batch extend section (phase1). Now I want to do the same thing for the
+queue based stuff (phase2).
+
+# Context. How we did this in phase 1
+We moved the extend section to onto the pe in multiple stages:
+1. We split the code into parts that run on the pe and parts that run on the pe_array
+2. We tiled so that the pe_array loads data to the spm, and the pe executes it.
+3. We moved the body of the code from gwfa.c into the magic instruction in the pe
+4. We refactored the magic instruction code to use only very simple operations (e.g. add, sub, ld)
+   and to use the register file instead of local variables.
+5. We translated this code into gendp ISA, which was pretty simple because we'd already removed
+   complicated operations, so it was almost ISA already.
+The same steps should generally be followed for queue section (phase2).
+
+For reference, you can examine past prompts in Prompts/. gwfaBatchExtendTilingPrompt.txt,
+batchExtendToIsaPrompt.txt
+
+# Pseudocode for how the tiling should happen:
+## Preliminaries
+   + Recall MM is main memory/DRAM. The memory hierarchy is S1->S2->MM
+   + We need a new parameter, TILE_SIZE, which could be different from the tilesize used for batch
+      processing. For now, set it to 64.
+   + We need a global location at the end of the SPM. Just one int used for flagging completion. It
+      should be the very last entry in the SPM (or if that's used, 3rd to last or whatever). It will
+      be initialized as 0 by pe_array, and then all PEs will write to it if termination is reached.
+      Race conditions in this case are fine. Only PEs write, and only once. Only controller reads.
+PE_ARRAY MAIN TRACE:
+   while (not exit condition and score < s_term){
+      Do batch extend ineractively with PE. Note this produces some stuff in the queue A in MM (which right now is just a c array)
+      //BEGIN do phase 2 queue ops
+      //TODO everything in here is stuff we're adding
+      pop the first 4*TILE_SIZE (currently set to 64) diagonals into the pe SPMS. If you have less
+         than 256 diagonals to process, then just load up until the end of queue. Including their
+         index into sequence offset
+      pe.compute()
+      if termination flag, jump to FINISH
+      handle the queries that reached the end of node:
+         for each diag in tile finished diags:
+            nv = graph_arcs[diag.node] // graph lookup
+            if endQ == 1:
+               for i < nv:
+                  write a diag to b, the unsorted list of diags
+            else: endQ == 0
+               for i < nv:
+                  arc = graph[node+i]
+                  if arc.w.first char == query char:
+                     n_ext++
+                     if !hash_table[arc.w]:
+                        mark hash_table[arc.w] present
+                        push diag to A
+                  else:
+                     if !hash_table[arc.w]:
+                        push two diags
+               if n_ext != nv:
+                  push deletion
+      writeback completed b tile to b
+      writeback intv to next_intv_buff
+      //END do phase 2 queue ops
+      Do sort on the pe_array with magic
+   }
+   FINISH
+
+SPM memory layout:
+   NUM_ELEMENTS: what it holds (note the element size may be greater than one)
+   TILE_SIZE: input diagonals, contains (diag,node) as well as offset into query TODO possibly k?
+   //results
+   TILE_SIZE*3: pushed diags. each input can produce 3 outputs, so oversized.
+   TILE_SIZE: intvs to be added
+   TILE_SIZE: finished diags. We store tuples, (diag, bool endQ). 
+
+
+PE TRACE:
+   for each diagonal in the tile:
+      extend1(diagonal)
+      if (k + 1 < vl && i + 1 < s_ql) {
+         Create the three new diagonals and write them to the pushed diags tile
+      } else if (i + 1 < s_ql) {
+         Create the new intv and write it to tile
+         write the diag to finished diags region in SPM. endQ=0 Controller will do the graph lookup
+      } else if (v == GWFA_END_V && k + 1 == vl) {
+         set the termination flag at the end of the SPM
+      } else if (k + 1 < vl) {
+         write one diag to tile pushed diags
+      } else {
+         write this diag to finished diags with endQ=1
+      }
+         
+
+
+      
+   
+
+# Verification
+1. To verify changes to the gwfa.c code:
+   run.py 1: quickly verifies for 15 inputs. Should be used frequently to test small changes
+   run.py 2: verifies score for all inputs. This and run.py 3 should be used to verify before moving
+             on to a next step
+   run.py 3: used to debug. Only looks at one input, but gives the full trace of all the diags. You
+             can compare this to the groundtruth with diff or vimdiff. It is used for debug and for
+             verifaction before completing a step.
+2. to verify changes to gendp simulator code (including pe.cpp and pe_array) or to instruction trace
+   make sure you make clean and recompile. You should also regenerate instructions with
+   gwfa_instruction_generator.py. After that use gwfa_check_correctness.py, which has the same
+   options as run.py, and should be used the same way.
+

@@ -4,6 +4,7 @@
 #include "compute_unit_32.h"
 #include "crossbar.h"
 #include "simulator.h"
+#include <deque>
 
 class FIFO;
 
@@ -33,10 +34,11 @@ class pe {
             }
         };
 
-        pe(int id, SPM* spm);
+        pe(int id, SPM* spm, int pc_mode = PC_MODE_SHARED);
         ~pe();
 
         int id;
+        int pc_mode;        // PC_MODE_SHARED or PC_MODE_DUAL
         int PC[2], comp_PC;
         int ras = 0;
         int src_dest[2][2];
@@ -44,14 +46,18 @@ class pe {
         void run(int simd);
 
         int decode(unsigned long instruction, int* PC, int src_dest[], int* op, int simd, int* ctrl_write_addr, int* ctrl_write_datum);
-        LoadResult load(int pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data=true, bool swizzle=false);
-        void store(int pos, int src, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_datak=true, bool swizzle=false);
+        LoadResult load(int pos, int reg_immBar_flag, int rs1, int rs2, int simd, bool single_data=true, bool swizzle=false, int rs2_pos=CTRL_GR);
+        void store(int pos, int src, int reg_immBar_flag, int rs1, int rs2, LoadResult data, int simd, int* ctrl_write_addr, int* ctrl_write_datum, bool single_datak=true, bool swizzle=false, int rs2_pos=CTRL_GR);
         void ctrl_instr_load_from_ddr(int addr, unsigned long data[]);
         void comp_instr_load_from_ddr(int n_instr, unsigned long data[]);
         int get_gr_10();
         void reset();
 
         void recieve_spm_data(int data[LINE_SIZE]);
+
+        // Reset per-cycle WAW trackers; called by pe_array::run() between
+        // test cases since cycle resets and stale markers would false-fire.
+        void reset_waw_trackers();
 
         void show_comp_reg();
 
@@ -75,6 +81,7 @@ class pe {
     private:
         //helper
         void set_output_dest(int dest, int rd, int value);
+        int read_gr_src(int src, int idx);
 
         unsigned long instruction[2];
         // ld/st control signal
@@ -97,7 +104,11 @@ class pe {
         crossbar crossbar_unit;
 
         //-1 means there is no outstanding request
-        OutstandingReq outstanding_req;
+        // SPM load destination queue. Up to SPM_ACCESS_LATENCY (=2) loads
+        // may be in flight concurrently; responses return in FIFO issue
+        // order. store() pushes at enqueue; recieve_spm_data() pops the
+        // front when SPM completes.
+        std::deque<OutstandingReq> outstanding_reqs;
 
         // Set by load() when reading SPM, consumed by store()
         int last_spm_load_addr = 0;

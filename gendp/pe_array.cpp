@@ -29,6 +29,16 @@ extern "C" {
 #define MAX_RANGE NUM_FRACTION_BITS
 #define NUM_INTEGER_BITS 5
 
+// SPM port restriction (controller side): an SPM access on the array
+// controller may transfer to/from gr (incl gr_lo/gr_hi), reg, s1c, or s2.
+// S2 uses a dedicated LSQ path that callers special-case before reaching
+// here; this helper is for the simple-port path.
+static bool ctrl_spm_target_ok(int pos) {
+    return pos == CTRL_REG || pos == CTRL_GR
+        || pos == CTRL_GR_LO || pos == CTRL_GR_HI
+        || pos == CTRL_S1C   || pos == CTRL_S2;
+}
+
 #ifndef GWFA_DBG_DEFAULT
 #define GWFA_DBG_DEFAULT 0
 #endif
@@ -48,7 +58,10 @@ PerfCounter lsqFullStalls = 0;
 PerfCounter peHalted = 0;
 PerfCounter forwardableBankConflict = 0;
 PerfCounter controllerSpinCycles = 0;
-PerfCounter fin0DupDiags = 0;
+PerfCounter peComputeHaltCycles = 0;
+PerfCounter peComputeNops = 0;
+PerfCounter peCtrlNops = 0;
+PerfCounter controllerNops = 0;
 
 // --- Plan 3b l4fv AC-10 observability helpers (out-of-magic-body) ---
 // Suite-level "exactly once per PE across the suite" trace dedup for
@@ -94,11 +107,12 @@ static void m31_trace_zero_nis_once(int pe) {
 #endif
 }
 
-pe_array::pe_array(int input_size, int output_size) {
+pe_array::pe_array(int input_size, int output_size, int _pc_mode) {
 
     int i;
     input_buffer_size = input_size;
     output_buffer_size = output_size;
+    pc_mode = _pc_mode;
 
     input_buffer = (int*)calloc(input_buffer_size, sizeof(int));
     output_buffer = (int*)calloc(output_buffer_size, sizeof(int));
@@ -110,10 +124,15 @@ pe_array::pe_array(int input_size, int output_size) {
     memset(va_regfile, 0, sizeof(va_regfile));
     memset(s1c, 0, sizeof(s1c));
     mm = nullptr;
+    for (int j = 0; j < MAIN_ADDR_REGISTER_NUM; j++) {
+        main_gr_last_cycle[j] = -1;
+        main_gr_halves[j] = 0;
+        main_gr_origin[j] = nullptr;
+    }
     //+1 allows addressing full range. 1 is dummy data. Not legal in real hardware
     SPM_unit = new SPM(SPM_ADDR_NUM+1, &active_event_producers);
     for (i = 0; i < PE_NUM; i++)
-        pe_unit[i] = new pe(i, SPM_unit);
+        pe_unit[i] = new pe(i, SPM_unit, pc_mode);
     pe_unit[3]->fifo_out[0] = &fifo_unit[0][0];
     pe_unit[3]->fifo_out[1] = &fifo_unit[0][1];
     load_data = 0;
@@ -148,6 +167,54 @@ void pe_array::reset_controller_state() {
     load_data = 0;
     store_data = 0;
     from_fifo = 0;
+    for (int i = 0; i < MAIN_ADDR_REGISTER_NUM; i++) {
+        main_gr_last_cycle[i] = -1;
+        main_gr_halves[i] = 0;
+        main_gr_origin[i] = nullptr;
+    }
+}
+
+void pe_array::set_main_gr(int idx, int val, int pos,
+                           const char* origin) {
+    if (idx < 0 || idx >= MAIN_ADDR_REGISTER_NUM) {
+        fprintf(stderr,
+            "main set_gr: idx %d out of range [0,%d)\n",
+            idx, MAIN_ADDR_REGISTER_NUM);
+        exit(-1);
+    }
+    if (cycle > 0) {
+        int mask = (pos == CTRL_GR_LO) ? 0x1
+                 : (pos == CTRL_GR_HI) ? 0x2 : 0x3;
+        if (main_gr_last_cycle[idx] != cycle)
+            main_gr_halves[idx] = 0;
+        if (main_gr_halves[idx] & mask) {
+            fprintf(stderr,
+                "main WAW: gr[%d] written twice in cycle %d"
+                " (prev: %s, now: %s)\n",
+                idx, cycle,
+                main_gr_origin[idx] ? main_gr_origin[idx] : "?",
+                origin);
+            exit(-1);
+        }
+        main_gr_halves[idx] |= mask;
+        main_gr_last_cycle[idx] = cycle;
+        main_gr_origin[idx] = origin;
+    }
+    if (pos == CTRL_GR) {
+        main_addressing_register[idx] = val;
+    } else if (pos == CTRL_GR_LO) {
+        int old = main_addressing_register[idx];
+        main_addressing_register[idx] =
+            (old & (int)0xFFFF0000) | (val & 0xFFFF);
+    } else if (pos == CTRL_GR_HI) {
+        int old = main_addressing_register[idx];
+        main_addressing_register[idx] =
+            (old & 0x0000FFFF) | ((val & 0xFFFF) << 16);
+    } else {
+        fprintf(stderr,
+            "main set_gr: invalid pos %d\n", pos);
+        exit(-1);
+    }
 }
 
 void pe_array::write_spm_magic(int addr, int value) {
@@ -348,17 +415,15 @@ void pe_array::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, LoadRe
 #endif
 
     if (dest_pos == 1) {
-        main_addressing_register[dest_addr] = data.data[0];
+        set_main_gr(dest_addr, data.data[0], CTRL_GR, "main_store");
         if (dest_addr == 0) printf("%d\n", data.data[0]);
     } else if (dest_pos == CTRL_GR_LO) {
-        int old = main_addressing_register[dest_addr];
-        main_addressing_register[dest_addr] = (old & (int)0xFFFF0000) | (data.data[0] & 0xFFFF);
+        set_main_gr(dest_addr, data.data[0], CTRL_GR_LO, "main_store");
 #ifdef PROFILE
         printf("gr_lo[%d].\n", dest_addr);
 #endif
     } else if (dest_pos == CTRL_GR_HI) {
-        int old = main_addressing_register[dest_addr];
-        main_addressing_register[dest_addr] = (old & 0x0000FFFF) | ((data.data[0] & 0xFFFF) << 16);
+        set_main_gr(dest_addr, data.data[0], CTRL_GR_HI, "main_store");
 #ifdef PROFILE
         printf("gr_hi[%d].\n", dest_addr);
 #endif
@@ -1017,11 +1082,29 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
     bool is_magic = (instruction & magic_mask);
     int  magic_payload = instruction & magic_payload_mask;
 
+    // See pe::decode for rationale. Top 2 bits of the 7-bit reg idx select
+    // the file: 00=gr, 01=gr_lo, 10=gr_hi, 11=CTRL_RESOLVED_REG (PE-only;
+    // controller errors out). Low 5 bits are the physical idx (0..31).
+    // Applied only when src/dest type is CTRL_GR; other types keep raw idx.
+    auto resolve_reg_field = [](int& reg_idx) -> int {
+        int high = reg_idx >> 5;
+        reg_idx &= 0x1F;
+        if (high == 0) return CTRL_GR;
+        if (high == 1) return CTRL_GR_LO;
+        if (high == 2) return CTRL_GR_HI;
+        return CTRL_RESOLVED_REG;
+    };
+    int src_resolved  = resolve_reg_field(reg_1);
+    int dest_resolved = resolve_reg_field(reg_0);
+    if (src  == CTRL_GR) src  = src_resolved;
+    if (dest == CTRL_GR) dest = dest_resolved;
+
 #ifdef PROFILE
     printf("PC = %d @%d:%016lx\t", *PC, cycle, instruction);
 #endif
     if (main_instruction_setting == MAIN_INSTRUCTION_2) {
         if (((opcode == 4 || opcode == 5) && (dest == 5 || dest == 6 || dest == 11 || dest == 12 || dest == 13 || dest == 14)) || opcode == 14) {
+            if (opcode == 14) controllerNops++;
             (*PC)++;
 #ifdef PROFILE
             printf("\n");
@@ -2278,16 +2361,6 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
                 s1c[21] = gr[7];                          // total_diags
 
-                // --- Non-ISA performance counter: duplicate fin0 diags ---
-                {
-                    int tf = s1c[20];
-                    for (int i = 0; i < tf; i++)
-                        for (int j = i + 1; j < tf; j++)
-                            if (s1c[32+2*i] == s1c[32+2*j] &&
-                                s1c[32+2*i+1] == s1c[32+2*j+1])
-                                fin0DupDiags++;
-                }
-                // --- End non-ISA performance counter ---
 
                 // === Section 4: Prefetch arc_off pairs S2 → S1c ===
                 // s1c[ARC_META+2*d]=arc_off[v], s1c[ARC_META+2*d+1]=arc_off[v+1]
@@ -8153,6 +8226,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
 
             magic_wfs_out << std::endl;
+        } else if (magic_id == 100) {
+            // GSSW init: copy pre-packed SPM bytes from
+            // host ptr va_regfile[0] into PE 0's SPM.
+            const uint8_t *src =
+                (const uint8_t*)(uintptr_t)va_regfile[0];
+            uint64_t sz = va_regfile[1];
+            if (src && sz > 0
+                && sz <= (uint64_t)SPM_BANK_GROUP_SIZE * 4) {
+                memcpy(&SPM_unit->buffer[0], src, sz);
+            }
         } else {
             fprintf(stderr, "ERROR: PE_ARRAY PC=%d cycle=%d unknown magic id %d (payload %d mask 0x%x).\n",
                     *PC, cycle, magic_id, magic_payload, magic_mask);
@@ -8214,6 +8297,21 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         printf("addi gr[%d] %d gr[%d] (%d %d %d)\n", rd, imm, rs2, sum, add_a, add_b);
 #endif
         (*PC)++;
+    } else if (opcode == CTRL_MUL) {       // mul rd rs2 imm/gr[imm]
+        // gr[rd] = op_a * gr[rs2] where op_a is sext_imm_1 (immBar=0)
+        // or gr[imm_1] (immBar=1). Slot-0 only by programmer contract.
+        rd = reg_imm_0;
+        rs2 = reg_1;
+        add_a = reg_immBar_flag_1 ? read_gr_src(src, reg_imm_1) : sext_imm_1;
+        add_b = read_gr_src(src, rs2);
+        sum = add_a * add_b;
+        set_output_dest(dest, rd, sum);
+#ifdef PROFILE
+        printf("mul gr[%d] %s%d gr[%d] (%d %d %d)\n", rd,
+               reg_immBar_flag_1 ? "gr[" : "", reg_immBar_flag_1 ? reg_imm_1 : sext_imm_1,
+               rs2, sum, add_a, add_b);
+#endif
+        (*PC)++;
     } else if (opcode == 3) {       // set_8 rd rs2
         rd = reg_imm_0;
         rs2 = reg_1;
@@ -8222,7 +8320,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         for (i = 0; i < 4; i++) {
             rs[i] = main_addressing_register[rs2] & 0xFF;
         }
-        memcpy(get_output_dest(dest,rd), rs, 4*sizeof(int8_t));
+        if (dest == CTRL_GR) {
+            int new_val;
+            memcpy(&new_val, rs, 4*sizeof(int8_t));
+            set_main_gr(rd, new_val, CTRL_GR, "set_8");
+        } else {
+            memcpy(get_output_dest(dest, rd), rs, 4*sizeof(int8_t));
+        }
 #ifdef PROFILE
         printf("set_8 gr[%d] gr[%d] (%d %lx)\n", rd, rs2, main_addressing_register[rs2], main_addressing_register[rd]);
 #endif
@@ -8289,6 +8393,21 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             lsq->enqueueSpmToS2(
                 spmAddr, s2Addr, true);
         } else {
+            // SPM port restriction: if either side is SPM, the other side
+            // must be a permitted target (gr/reg/s1c/s2). The S2<->SPM
+            // path is already handled above via LSQ.
+            if (src == CTRL_SPM && !ctrl_spm_target_ok(dest)) {
+                fprintf(stderr,
+                    "main PC=%d mv: illegal SPM load dest %d"
+                    " (allowed: gr/reg/s1c/s2)\n", *PC, dest);
+                exit(-1);
+            }
+            if (dest == CTRL_SPM && !ctrl_spm_target_ok(src)) {
+                fprintf(stderr,
+                    "main PC=%d mv: illegal SPM store src %d"
+                    " (allowed: gr/reg/s1c/s2)\n", *PC, src);
+                exit(-1);
+            }
             data = load(src, reg_immBar_flag_1,
                         sext_imm_1, reg_1, simd);
             store(dest, reg_immBar_flag_0,
@@ -8637,6 +8756,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #endif
         (*PC)++;
     } else if (opcode == 14) {      // None
+        controllerNops++;
         (*PC)++;
 #ifdef PROFILE
         printf("No-op.\n");
@@ -8737,13 +8857,11 @@ int* pe_array::get_output_dest(int dest, int rd){
 
 void pe_array::set_output_dest(int dest, int rd, int val) {
     if (dest == CTRL_GR) {
-        main_addressing_register[rd] = val;
+        set_main_gr(rd, val, CTRL_GR, "set_output");
     } else if (dest == CTRL_GR_LO) {
-        int old = main_addressing_register[rd];
-        main_addressing_register[rd] = (old & (int)0xFFFF0000) | (val & 0xFFFF);
+        set_main_gr(rd, val, CTRL_GR_LO, "set_output");
     } else if (dest == CTRL_GR_HI) {
-        int old = main_addressing_register[rd];
-        main_addressing_register[rd] = (old & 0x0000FFFF) | ((val & 0xFFFF) << 16);
+        set_main_gr(rd, val, CTRL_GR_HI, "set_output");
     } else if (dest == CTRL_OUT_BUF) {
         output_buffer[rd] = val;
     } else if (dest == CTRL_OUT_PORT) {
@@ -8755,6 +8873,13 @@ void pe_array::set_output_dest(int dest, int rd, int val) {
 }
 
 int pe_array::read_gr_src(int src, int idx) {
+    if (src == CTRL_RESOLVED_REG) {
+        fprintf(stderr,
+                "pe_array::read_gr_src: controller has no compute "
+                "regfile; gr-field reg idx 96+%d PC=%d\n",
+                idx, main_PC);
+        exit(-1);
+    }
     int val = main_addressing_register[idx];
     if (src == CTRL_GR_LO) return (int)(int16_t)(val & 0xFFFF);
     if (src == CTRL_GR_HI) return (int)(int16_t)((val >> 16) & 0xFFFF);
@@ -8801,6 +8926,23 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
     int reg_1 = (instruction & reg_1_mask) >> CTRL_OPCODE_WIDTH;
     int opcode = instruction & opcode_mask;
 
+    // See pe::decode for rationale. Top 2 bits of the 7-bit reg idx select
+    // the file: 00=gr, 01=gr_lo, 10=gr_hi, 11=CTRL_RESOLVED_REG (PE-only;
+    // controller errors out). Low 5 bits are the physical idx (0..31).
+    // Applied only when src/dest type is CTRL_GR; other types keep raw idx.
+    auto resolve_reg_field = [](int& reg_idx) -> int {
+        int high = reg_idx >> 5;
+        reg_idx &= 0x1F;
+        if (high == 0) return CTRL_GR;
+        if (high == 1) return CTRL_GR_LO;
+        if (high == 2) return CTRL_GR_HI;
+        return CTRL_RESOLVED_REG;
+    };
+    int src_resolved  = resolve_reg_field(reg_1);
+    int dest_resolved = resolve_reg_field(reg_0);
+    if (src  == CTRL_GR) src  = src_resolved;
+    if (dest == CTRL_GR) dest = dest_resolved;
+
 #ifdef PROFILE
     printf("PC = %d\t", *PC);
 #endif
@@ -8820,7 +8962,7 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
         }
         // Arithmetic (opcodes 0-3) now runs pre-PE via
         // decode(). Skip here to avoid double-execution.
-        if (opcode <= 3 || opcode == CTRL_CALL
+        if (opcode <= 3 || opcode == CTRL_MUL || opcode == CTRL_CALL
             || opcode == CTRL_RET || opcode == CTRL_RETNE) {
 #ifdef PROFILE
             printf("\n");
@@ -8857,7 +8999,7 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
         add_a = main_addressing_register[rs1];
         add_b = main_addressing_register[rs2];
         sum = add_a + add_b;
-        main_addressing_register[rd] = sum;
+        set_main_gr(rd, sum, CTRL_GR, "add");
 #ifdef PROFILE
         printf("add gr[%d] gr[%d] gr[%d] (%d %d %d)\n", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -8868,7 +9010,7 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
         add_a = main_addressing_register[rs1];
         add_b = main_addressing_register[rs2];
         sum = add_a - add_b;
-        main_addressing_register[rd] = sum;
+        set_main_gr(rd, sum, CTRL_GR, "sub");
 #ifdef PROFILE
         printf("sub gr[%d] gr[%d] gr[%d] (%d %d %d)\n", rd, rs1, rs2, sum, add_a, add_b);
 #endif
@@ -8879,7 +9021,7 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
         add_a = imm;
         add_b = main_addressing_register[rs2];
         sum = add_a + add_b;
-        main_addressing_register[rd] = sum;
+        set_main_gr(rd, sum, CTRL_GR, "addi");
 #ifdef PROFILE
         printf("addi gr[%d] %d gr[%d] (%d %d %d)\n", rd, imm, rs2, sum, add_a, add_b);
 #endif
@@ -8891,7 +9033,11 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
         for (i = 0; i < 4; i++) {
             rs[i] = main_addressing_register[rs2] & 0xFF;
         }
-        memcpy(&main_addressing_register[rd], rs, 4*sizeof(int8_t));
+        {
+            int new_val;
+            memcpy(&new_val, rs, 4*sizeof(int8_t));
+            set_main_gr(rd, new_val, CTRL_GR, "set_8");
+        }
 #ifdef PROFILE
         printf("set_8 gr[%d] gr[%d] (%d %lx)\n", rd, rs2, main_addressing_register[rs2], main_addressing_register[rd]);
 #endif
@@ -9185,6 +9331,31 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     int flag = 0;
     cycle = 0;
 
+    // Reset per-case perf counters so each pa->run() reports its own case
+    totalSpmRequests = 0;
+    bankConflictStalls = 0;
+    lsqFullStalls = 0;
+    peHalted = 0;
+    forwardableBankConflict = 0;
+    controllerSpinCycles = 0;
+    peComputeHaltCycles = 0;
+    peComputeNops = 0;
+    peCtrlNops = 0;
+    controllerNops = 0;
+
+    // Reset WAW trackers across runs — cycle resets to 0 here, so stale
+    // last_cycle values from a prior case would otherwise spuriously match
+    // and false-positive WAW. Also reset PE-side trackers for the same
+    // reason.
+    for (int k = 0; k < MAIN_ADDR_REGISTER_NUM; k++) {
+        main_gr_last_cycle[k] = -1;
+        main_gr_halves[k] = 0;
+        main_gr_origin[k] = nullptr;
+    }
+    for (int p = 0; p < PE_NUM; p++) {
+        if (pe_unit[p]) pe_unit[p]->reset_waw_trackers();
+    }
+
     while (1) {
         cycle++;
         old_PC = main_PC;
@@ -9209,12 +9380,41 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             if (pairStalls) lsqFullStalls++;
         }
 
+        // Inter-slot RAW fix for the controller: slot 1 decodes first
+        // and may commit gr writes (set_main_gr, auto-inc, magic-instr
+        // setups) before slot 0 reads. Snapshot main_addressing_register,
+        // run slot 1, capture deltas, restore so slot 0 reads pre-cycle,
+        // run slot 0, then reapply slot 1's deltas. Slot-0 same-idx
+        // writes still hit the WAW tracker via set_main_gr; we also
+        // detect direct-write overlaps (auto-inc, magic) via delta
+        // intersection at the end.
+        int gr_snap_main[MAIN_ADDR_REGISTER_NUM];
+        memcpy(gr_snap_main, main_addressing_register,
+               MAIN_ADDR_REGISTER_NUM * sizeof(int));
+
         if (!pairStalls) {
             flag = decode(
                 main_instruction_buffer[main_PC][1],
                 &main_PC, simd, setting,
                 main_instruction_setting);
         }
+
+        // Capture slot 1 deltas vs snapshot.
+        int s1_changed[MAIN_ADDR_REGISTER_NUM];
+        int s1_val[MAIN_ADDR_REGISTER_NUM];
+        int s1_n = 0;
+        for (int k = 0; k < MAIN_ADDR_REGISTER_NUM; k++) {
+            if (main_addressing_register[k] != gr_snap_main[k]) {
+                s1_changed[s1_n] = k;
+                s1_val[s1_n] = main_addressing_register[k];
+                s1_n++;
+            }
+        }
+        // Restore so slot 0 reads pre-cycle. Direct write — leaves
+        // main_gr_last_cycle intact so a slot-0 set_main_gr to a slot-1
+        // touched idx still WAW-crashes.
+        memcpy(main_addressing_register, gr_snap_main,
+               MAIN_ADDR_REGISTER_NUM * sizeof(int));
 
         // Pre-PE decode of slot[0]: arithmetic + non-I/O
         // ops. Uses MI_1 filter to skip I/O-dest instrs
@@ -9285,6 +9485,23 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                 ; // main_PC already correct
         }
 
+        // Reapply slot 1 deltas. Detect overlap with slot 0 writes by
+        // comparing against pre-restore snapshot — if both slots wrote
+        // the same idx (e.g. via auto-inc that bypasses set_main_gr),
+        // catch it here.
+        for (int k = 0; k < s1_n; k++) {
+            int idx = s1_changed[k];
+            if (main_addressing_register[idx] != gr_snap_main[idx]) {
+                fprintf(stderr,
+                    "main WAW: gr[%d] written by both slots in cycle %d"
+                    " (slot1=%d, slot0=%d)\n",
+                    idx, cycle, s1_val[k],
+                    main_addressing_register[idx]);
+                exit(-1);
+            }
+            main_addressing_register[idx] = s1_val[k];
+        }
+
         pe_unit[0]->load_data = store_data;
 
         if (setting == PE_4_SETTING) {
@@ -9336,7 +9553,12 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         }
         peHalted += num_halted;
 
-        // SPM bank arbitration with conflict detection (round-robin)
+        // SPM bank arbitration with conflict detection (round-robin).
+        // With 2-stage pipelining per bank, portIsBusy means "pipeline full".
+        // A separate bankUsedThisCycle guard enforces the one-port-per-bank
+        // per-cycle structural limit so PE-vs-PE and PE-vs-LSQ can't both
+        // hit the same bank in the same cycle.
+        bool bankUsedThisCycle[SPM_NUM_BANKS] = {};
         int start_pe = cycle % 4;
         for (int offset = 0; offset < 4; offset++) {
             int pe_idx = (start_pe + offset) % 4;
@@ -9347,38 +9569,52 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
             // Check if SPM bank is available
             int bank = SPM_unit->getBank(
                 req->addr, req->peid, req->isVirtualAddr);
-            if (SPM_unit->portIsBusy(
-                    req->addr, req->peid, req->isVirtualAddr)) {
+            bool busy = bankUsedThisCycle[bank] ||
+                SPM_unit->portIsBusy(
+                    req->addr, req->peid, req->isVirtualAddr);
+            if (busy) {
                 bankConflictStalls++;
-                // Perf counter: check if conflict is same-line (forwardable)
-                OutstandingRequest* pend = SPM_unit->requests[bank];
+                // Perf counter: check if conflict is same-line (forwardable).
+                // Scan all pipeline slots for this bank.
                 int newPhys = req->isVirtualAddr
                     ? (req->peid * SPM_BANK_GROUP_SIZE + req->addr)
                     : req->addr;
-                int pendPhys = pend->isVirtualAddr
-                    ? (pend->peid * SPM_BANK_GROUP_SIZE + pend->addr)
-                    : pend->addr;
-                if (lineAddr(newPhys) == lineAddr(pendPhys))
-                    forwardableBankConflict++;
+                for (int s = 0; s < SPM_ACCESS_LATENCY; s++) {
+                    OutstandingRequest* pend =
+                        SPM_unit->requests[bank][s];
+                    if (pend == nullptr) continue;
+                    int pendPhys = pend->isVirtualAddr
+                        ? (pend->peid * SPM_BANK_GROUP_SIZE + pend->addr)
+                        : pend->addr;
+                    if (lineAddr(newPhys) == lineAddr(pendPhys)) {
+                        forwardableBankConflict++;
+                        break;
+                    }
+                }
             } else {
                 // Grant access
                 SPM_unit->access(req->addr, req->peid,
                     req->access_t, req->single_data,
                     req->data, req->isVirtualAddr);
+                bankUsedThisCycle[bank] = true;
                 delete pe_unit[pe_idx]->spmReqPort;
                 pe_unit[pe_idx]->spmReqPort = nullptr;
             }
         }
 
-        // LSQ drain
+        // LSQ drain. spmBankBusy means "can't issue to this bank": either the
+        // PE arbiter already used the port this cycle or the bank's pipeline
+        // is full.
         {
             bool spmBankBusy[SPM_NUM_BANKS] = {};
-            // Only mark banks with in-flight SPM requests. Any pending
-            // PE spmReqPort entries necessarily target banks that are
-            // already busy (otherwise they would have issued above).
-            for (int b = 0; b < SPM_NUM_BANKS; b++)
-                spmBankBusy[b] =
-                    (SPM_unit->requests[b] != nullptr);
+            for (int b = 0; b < SPM_NUM_BANKS; b++) {
+                bool full = true;
+                for (int s = 0; s < SPM_ACCESS_LATENCY; s++)
+                    if (SPM_unit->requests[b][s] == nullptr) {
+                        full = false; break;
+                    }
+                spmBankBusy[b] = bankUsedThisCycle[b] || full;
+            }
             lsq->tick(SPM_unit, s2, spmBankBusy);
         }
 
@@ -9404,14 +9640,18 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         }
     }
 
-    printf("=== Performance Counters ===\n");
+    printf("=== Case Performance Counters ===\n");
+    printf("CaseCycles: %d\n", cycle);
     printf("TotalSpmRequests: %d\n", totalSpmRequests);
+    printf("PeCtrlHalted: %d\n", peHalted);
+    printf("PeCompHalted: %d\n", peComputeHaltCycles);
+    printf("PeCtrlNops: %d\n", peCtrlNops);
+    printf("PeCompNops: %d\n", peComputeNops);
     printf("BankConflictStalls: %d\n", bankConflictStalls);
     printf("ForwardableBankConflict: %d\n", forwardableBankConflict);
     printf("LsqFullStalls: %d\n", lsqFullStalls);
-    printf("PeHalted: %d\n", peHalted);
     printf("SyncSpinBNEs: %d\n", controllerSpinCycles);
-    printf("Fin0DupDiags: %d\n", fin0DupDiags);
+    printf("ControllerNops: %d\n", controllerNops);
 
     // fprintf(stderr, "Finish simulation.\n");
 }

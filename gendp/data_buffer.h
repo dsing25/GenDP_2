@@ -122,9 +122,34 @@ class addr_regfile {
         }
 
         // Subregister write. pos: CTRL_GR=full,
-        // CTRL_GR_LO=lo16, CTRL_GR_HI=hi16
-        void st(int idx, int val, int pos = CTRL_GR) {
+        // CTRL_GR_LO=lo16, CTRL_GR_HI=hi16. Detects WAW: two writes to
+        // overlapping bit-ranges of the same gr in one global simulation
+        // cycle is a hardware-illegal hazard. Disjoint half-writes
+        // (gr_lo + gr_hi to the same idx) are permitted because the two
+        // halves are independently addressable. Setup writes (cycle == 0)
+        // are exempt for per-PE init.
+        void st(int idx, int val, int pos = CTRL_GR,
+                const char* owner_tag = "anon") {
             assert(idx >= 0 && idx < buffer_size);
+            extern int cycle;
+            if (cycle > 0) {
+                int mask = (pos == CTRL_GR_LO) ? 0x1
+                         : (pos == CTRL_GR_HI) ? 0x2 : 0x3;
+                if (last_write_cycle[idx] != cycle)
+                    halves_written[idx] = 0;
+                if (halves_written[idx] & mask) {
+                    fprintf(stderr,
+                        "%s WAW: gr[%d] written twice in cycle %d"
+                        " (prev: %s, pos overlap)\n",
+                        owner_tag, idx, cycle,
+                        last_write_origin[idx]
+                            ? last_write_origin[idx] : "?");
+                    exit(-1);
+                }
+                halves_written[idx] |= mask;
+                last_write_cycle[idx] = cycle;
+                last_write_origin[idx] = owner_tag;
+            }
             if (pos == CTRL_GR) {
                 buffer[idx] = val; return;
             }
@@ -145,8 +170,34 @@ class addr_regfile {
             exit(-1);
         }
 
+        // Untracked write — for delayed-effect writes whose originating
+        // instruction is from an earlier cycle (SPM load completion).
+        void st_delayed(int idx, int val, int pos = CTRL_GR) {
+            assert(idx >= 0 && idx < buffer_size);
+            if (pos == CTRL_GR) {
+                buffer[idx] = val; return;
+            }
+            if (pos == CTRL_GR_LO) {
+                uint16_t v = (uint16_t)(int16_t)val;
+                buffer[idx] = (buffer[idx] & (int)0xFFFF0000) | v;
+                return;
+            }
+            if (pos == CTRL_GR_HI) {
+                uint16_t v = (uint16_t)(int16_t)val;
+                buffer[idx] = (buffer[idx] & 0xFFFF)
+                    | ((uint32_t)v << 16);
+                return;
+            }
+            fprintf(stderr,
+                "addr_regfile::st_delayed invalid pos %d\n", pos);
+            exit(-1);
+        }
+
         int *buffer;
         int buffer_size;
+        int *last_write_cycle;          // per-idx WAW tracker
+        unsigned char *halves_written;  // bit0=lo, bit1=hi written this cyc
+        const char **last_write_origin;  // last writer for diagnostics
 
 };
 
@@ -176,8 +227,12 @@ class SPM : EventProducer{
         int *buffer;
         int buffer_size;
 
-        OutstandingRequest* requests[SPM_NUM_BANKS];  // 8 banks now
-        int cycles_left[SPM_NUM_BANKS];  // Tracks latency countdown for each bank
+        // 2-stage pipeline per bank: up to SPM_ACCESS_LATENCY in-flight
+        // requests per bank, so a new request can be issued each cycle
+        // without waiting for the prior one to finish. Full-pipeline means
+        // all slots occupied.
+        OutstandingRequest* requests[SPM_NUM_BANKS][SPM_ACCESS_LATENCY];
+        int cycles_left[SPM_NUM_BANKS][SPM_ACCESS_LATENCY];
 
         PushableProducerSet active_producers;
 

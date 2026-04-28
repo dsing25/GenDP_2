@@ -19,6 +19,17 @@
 #define MAIN_INSTRUCTION_2 2
 #define PE_4_SETTING 4
 #define PE_64_SETTING 64
+
+// PE control-PC mode (per pe_array instance, set at construction).
+// SHARED: when only one VLIW slot is a control-flow op and takes its
+//   branch, the other slot's PC is force-synced to the branch target.
+//   This is the default and what GSSW/WFA/PHMM/Chain/BSW expect.
+// DUAL:  the two slot PCs evolve fully independently — no cross-slot
+//   sync. Required by POA, whose pe_X traces have an asymmetric
+//   single-slot branch at the end of each PE that must NOT pull the
+//   other slot's PC forward.
+#define PC_MODE_SHARED 0
+#define PC_MODE_DUAL   1
 #define SIMD_WIDTH8 4
 #define PE_NUM 64
 #define FIFO_GROUP_NUM 16
@@ -41,7 +52,7 @@
 #define CTRL_PEID 656
 #define MAIN_ADDR_REGISTER_NUM 32
 #define CTRL_INSTR_BUFFER_NUM 8192
-#define COMP_INSTR_BUFFER_GROUP_NUM 33
+#define COMP_INSTR_BUFFER_GROUP_NUM 48
 #define CTRL_INSTR_BUFFER_GROUP_SIZE 2
 #define COMP_INSTR_BUFFER_GROUP_SIZE 2
 
@@ -66,8 +77,8 @@
 #define COMP_OPCODE_WIDTH 5
 #define MEMORY_COMPONENTS_ADDR_WIDTH 4
 #define IMMEDIATE_WIDTH 16
-#define GLOBAL_REGISTER_ADDR_WIDTH 5
-#define CTRL_OPCODE_WIDTH 6
+#define GLOBAL_REGISTER_ADDR_WIDTH 7
+#define CTRL_OPCODE_WIDTH 5
 #define INSTRUCTION_WIDTH ((MEMORY_COMPONENTS_ADDR_WIDTH + IMMEDIATE_WIDTH + GLOBAL_REGISTER_ADDR_WIDTH + 2) * 2 + CTRL_OPCODE_WIDTH)
 
 #define NUM_THREADS 5
@@ -105,9 +116,17 @@
 #define COPY_I 24 // Dummy TODO implement
 #define POPCOUNT 25 // partial dummy TODO
 #define CMP_2INP 26 // dummy TODO
+// GSSW-lowering additions. CARRY (slot 3) was unused by any generator and is
+// reclaimed for SLLI_64 to stay within the 5-bit COMP_OPCODE_WIDTH budget.
+#define SLLI_64    3    // paired 64-bit unsigned left shift (reg[r:r+1])
+#define ADDS_EPU8  27   // saturating unsigned 8-bit add (simd only)
+#define SUBS_EPU8  28   // saturating unsigned 8-bit sub (simd only)
+#define MAX_EPU8   29   // unsigned 8-bit max (simd only)
+#define MAX_REDUCE 30   // horizontal max of 4 lanes -> scalar byte (simd only)
+#define COMP_GT    31   // scalar gt / simd any-lane gt; writes 0/1 scalar
 
 inline bool is_immediate_opcode(int opcode) {
-    return (opcode == ADD_I || opcode == COPY_I);
+    return (opcode == ADD_I || opcode == COPY_I || opcode == SLLI_64);
 }
 
 inline int get_base_opcode(int opcode) {
@@ -147,6 +166,10 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_CALL 26
 #define CTRL_RET 27
 #define CTRL_RETNE 28
+// mv2: unswizzled, virtual-addressed 2-bit extract (GSSW path).
+#define CTRL_MV2 29
+// gr[rd] = gr[rs2] * (immBar_1 ? gr[imm_1] : sext_imm_1). Slot-0 only.
+#define CTRL_MUL 30
 
 // DEST/SRCS
 #define CTRL_REG 0
@@ -166,6 +189,14 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_GR_HI 10     // upper 16-bit subregister of gr (shares code with OUT_INSTR)
 #define CTRL_S2 15
 //FIFO [11, 12, 13, 14]
+
+// Internal-only resolved pos code for "compute reg addressed via gr-field"
+// (reg idx bits [6:5]=11, i.e. wire reg_idx in [96:127] with src/dest type = CTRL_GR).
+// Never appears on the wire; produced only by the decoder's resolve_reg_field.
+// Kept distinct from CTRL_REG (=0) so arithmetic/branch sites that pass src=0
+// as a don't-care still fall through to gr reads, while an explicit gr-field
+// encoding routes to the compute regfile.
+#define CTRL_RESOLVED_REG 16
 
 // Address swizzling parameters for mvi instruction
 #define N_SWIZZLE_BITS 2

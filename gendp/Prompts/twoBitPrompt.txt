@@ -1,0 +1,31 @@
+# Overview
+Currently the wfa simulation stores a pattern and a text in the SPM. Both are sequences of base 
+pairs, in the set "ATGC". Therefore they could be encoded as 2 bit values, but instead we have been
+encoding them as 32 bits each. I would like to change this representation to 2 bits.
+
+# The problem
+We are set up for 64 bit addressing from the SPM, and then we take one or both of the 32 values and
+put them in 32 bit registers. Now we need to be able to load a 2 bit value into a 32 bit register.
+Essentially, given a 32 bit word full of 2 bit base pairs (bp), I want to do word >> shift to move
+the bp to the least significant bit, and then result & 0x3, mask it so we have only that 2 bit, and
+then we put this in a register.
+
+# Requirements
+I want you to develop a new instruction, mvi2 which does the following given addr:
+```
+NUM_BP_TO_WORD = 16
+addressingBits = addr >> log2(NUM_BP_TO_WORD);
+wordOffsetBits = addr & MASK_WITH_LG_NUM_BP_TO_WORD_LOW_BITS_SET_1
+result = regular mvi(addressingBits)
+result >>= (wordOffsetBits<<2)
+return result & 0x3
+```
+You'll need to update the instruction trace to use mvi2 instead of mvi, and you'll need to update 
+the place where you load the pattern/text into banks so that they are now stored in 2 bit format 
+with the first 16 chars all going to the same line. You'll also need to probably change the SPM so 
+that its requests have another field to store if they should shift/mask at the end and what the 
+shift should be. Maybe two fields. Open to other solutions as well. 
+
+To verify run:
+python scripts/wfa_instruction_generator.py &&make clean && make -j && python scripts/wfa_check_correctness.py ../../kernel/Datasets/oneHundredSeq500Len.seq -n 5
+

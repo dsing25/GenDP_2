@@ -1,0 +1,63 @@
+BATCH STEP
+# High level
+We want to move the computation of diagonals to the 4 PEs and let the controller orchestrate writing
+from MM into SPM and back from SPM into MM.
+# In more detail
+The flow will look like this:
+pe_array controller loads a[cursor:cursor+N_TILE_DIAGS] into PE0,
+a[cursor+N_TILE_DIAGS:cursor+2*N_TILE_DIAGS] into PE1, and so on for PE2 and PE3. 
+Note all of these are being written to PE local memory as they are not shared between PEs.
+For the rest of this description I will sometimes only consider PE0 for simplicity, but of course 
+we'll need to do the same for 1,2,3.
+After the diags are written, the controller will read through and for each unique node, it will load
+the seq offset and the node length.
+Now the controller sets PE pc and starts spinning waiting to synchronize.
+The PE will iterate through the loaded data and perform extend/next in batch mode. It writes to b
+stored within the scratchpad, and whenever a diag extends too far it is not written to b (or can be
+removed from b). If diagonals extend to the end of the node, then we add that diagonal to another
+list called A. Note the PE will need to write the number of diagonals it wrote to b and A because
+these numbers are determined dynamically. len b < 3*B.
+Now the controller writes all the diagonals produced by pe0 to the result diag array in MM starting
+at cursor. 
+Then the controller reads through the diag IDs in A and it does a graph lookup to find the nodes it
+extends into. It pushes to A, and uses the ha hastable thing as it does to remember what it has
+already pushed.
+Then it does the same for pe1.
+Finally the controller repeats loading a new tile.
+
+The pe has the following memory structure:
+PE_PRIVATE
+a : size N_TILE_DIAGS * SIZE_DIAG //the array controller loads diagonals here
+/* Note, seq_offsets and seq_len should be interleaved. I say it's two arrays, but really it should
+  just be one alternating so that we can do one mvd to load the seq offset and the seq len at the same
+  time
+*/
+seq_offsets : size N_TILE_DIAGS //overprovisioned. Most of the time this will be much smaller
+                                // because multiple diags share the same node. Loaded by
+								//pe_controller
+seq_len : size N_TILE_DIAGS //same idea as seq_offsets. loaded by controller. Indexed the same as
+                            //seq offsets
+b : size N_TILE_DIAGS * SIZE_DIAG * 3 // this is the output buffer for new diags. Multiply by three
+									  // because the most it could grow is 3 diags per diag in a
+A : size N_TILE_DIAGS // stores the diag ids that extended to the end of the node. We won't need to
+					  // store k because k is node len, so we're fine. No mul 3 cause every diag can
+					  // only generate one new extension
+SPM_PUBLIC:
+We will store the query and the graph sequence in 2 bit format starting at index 32KB in the SPM.
+(The entire SPM is 64KB, so half ends up being reserved for these sequences.
+
+# The Step by step implementation
+1. set N_TILE_DIAGS = 64. start by writing to the SPM for pe0 only, but keep the computation on the 
+   controller. It will just read from the SPM. So we are doing tiled computation with a buffer, but
+   that buffer is the SPM. Do this magically writing to the SPM buffer and bypassing the banking.
+2. Split these into multiple magic instructions. We'll have a load instruction, then a compute
+   instruction, finally a writeback isntruction. All magic in the controller. Then we have another
+   magic instruction to do whatever is left of the computation (the sorting/queue popping etc)
+3. now move the magic instruction for computation to the pe, so the pe_array needs to do a set PC to
+   make it do the computation. Only do this for pe0. No parallization among multiple PEs. Pe0 will
+   have a magic instruction which does the batch computation for a tile.
+4. Add 4 way tiling. Each PE trace has the magic instruction to do computation on a tile. The
+   pe_array runs it's load instruction to load the PEs with data, then sets pc of all pes to
+   compute, waits to synchronize (pes should set gr11 I think when done). Then pe_array does
+   writeback from SPM and iterates through the extended diags to push them into new nodes.
+

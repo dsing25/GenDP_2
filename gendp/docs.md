@@ -6,10 +6,12 @@
 3. [Control Instruction Format](#control-instruction-format)
 4. [Source and Destination Codes](#source-and-destination-codes)
 5. [Opcode Reference](#opcode-reference)
-6. [Scratchpad Memory (SPM)](#scratchpad-memory-spm)
-7. [S2 Memory and Controller LSQ](#s2-memory-and-controller-lsq)
-8. [Synchronization](#synchronization)
-9. [Programming Patterns](#programming-patterns)
+6. [Compute Instructions](#compute-instructions)
+7. [VLIW Slot Restrictions](#vliw-slot-restrictions)
+8. [Scratchpad Memory (SPM)](#scratchpad-memory-spm)
+9. [S2 Memory and Controller LSQ](#s2-memory-and-controller-lsq)
+10. [Synchronization](#synchronization)
+11. [Programming Patterns](#programming-patterns)
 
 ---
 
@@ -72,28 +74,40 @@ The control trace can set the compute trace's PC, enabling coarse-grained synchr
 The control trace uses a VLIW design with **two slots** that execute as a pair. Instructions are written in pairs:
 
 ```python
-# Instructions are written in pairs
-f.write(data_movement_instruction(...))  # Slot 0 (written first, executes SECOND)
-f.write(data_movement_instruction(...))  # Slot 1 (written second, executes FIRST)
+# Instructions are written in pairs (Slot 0 first, Slot 1 second)
+f.write(data_movement_instruction(...))  # Slot 0
+f.write(data_movement_instruction(...))  # Slot 1
 ```
 
-**Critical Execution Order**: The simulator processes the **second-written instruction (Slot 1) first**, then the **first-written instruction (Slot 0)**. This counter-intuitive order matters for hazards involving arithmetic operations that write to `gr`:
+**Concurrent semantics**: Both slots execute on the same cycle and read
+register state from **before** that cycle. The simulator implements this
+by snapshot/restore in `pe::decode_ctrl` (see `pe.cpp:335`): slot 1 is
+decoded first, gr/reg are snapped back to pre-cycle, slot 0 is decoded,
+then slot 1's deltas are reapplied. There is **no data forwarding** —
+both slots see the same pre-cycle inputs.
+
+**Same-cycle RAW is illegal**: as of `simulatorRulesPrompt.md` (commit
+978d23d) the simulator enforces this. A pair where slot A writes a
+register and slot B reads it produces a runtime error rather than silent
+stale-data.
 
 ```python
-# INCORRECT - read sees NEW value because increment (Slot 1) executes first
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))   # Slot 0: read SPM[gr[1]] - executes 2nd, sees new gr[1]
-f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))   # Slot 1: gr[1]++ - executes 1st
+# CRASH — same-cycle RAW: slot 1 writes gr[1], slot 0 reads gr[1]
+f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))   # Slot 0: reads gr[1]
+f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))   # Slot 1: writes gr[1]
 
-# CORRECT - place increment in Slot 0 so it executes AFTER the read
-f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))   # Slot 0: gr[1]++ - executes 2nd
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))   # Slot 1: read SPM[gr[1]] - executes 1st, sees old gr[1]
+# OK — produce the increment in a previous cycle, consume here
+f.write(data_movement_instruction(gr, gr, 0, 0, 1, 0, 0, 0, 1, 1, addi))   # cycle N
+f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))     # cycle N
+f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))   # cycle N+1: sees new gr[1]
+f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))     # cycle N+1
 ```
 
-**Execution Order Summary**:
-- First written instruction → stored in Slot 0 → decoded **second**
-- Second written instruction → stored in Slot 1 → decoded **first**
+**WAR is fine**: slot A reads X, slot B writes X. Both slots see the
+pre-cycle value of X; B's new value is committed at end-of-cycle.
 
-**Write Timing Note**: Arithmetic ops (`add`, `addi`, `sub`, `subi`, `shifti_*`, `andi`) write to `gr` **immediately** during decode. However, `mv`/`si` writes to `gr` are **deferred** until after both decodes complete. This means hazards between two `mv`/`si` instructions are safe (both see old values), but hazards involving arithmetic ops require careful ordering as shown above.
+**WAW crashes**: two writes to the same gr/reg in one cycle (whether
+two control slots, or control + compute) trigger the WAW tracker.
 
 ### Controller Execution
 The controller has only **one control thread**. Use `XXX_main_instruction()` functions for controller code.
@@ -102,31 +116,46 @@ The controller has only **one control thread**. Use `XXX_main_instruction()` fun
 
 ## Control Instruction Format
 
-### 64-bit Instruction Encoding
+### 63-bit Instruction Encoding
+
+The control instruction is 63 bits wide (`INSTRUCTION_WIDTH` in
+`sys_def.h`), packed in a `uint64_t`. Layout, MSB → LSB:
 
 ```
-Bit:  63    54 53  50 49  46 45   44   43       30 29  26 25   24   23       10 9   6 5    0
-     ┌───────┬──────┬──────┬────┬────┬───────────┬──────┬────┬────┬───────────┬─────┬──────┐
-     │ rsvd  │ dest │ src  │ib0│ai0 │   imm_0   │ reg0 │ib1│ai1 │   imm_1   │reg1 │opcode│
-     │ 10b   │ 4b   │ 4b   │ 1b│ 1b │   14b     │  4b  │ 1b│ 1b │   14b     │ 4b  │  6b  │
-     └───────┴──────┴──────┴────┴────┴───────────┴──────┴────┴────┴───────────┴─────┴──────┘
+[62..59] dest    (4b)
+[58..55] src     (4b)
+[54]     ib0     (1b)   — operand-0 immBar
+[53]     ai0     (1b)   — operand-0 auto-increment
+[52..37] imm_0   (16b)  — signed immediate / register index for op 0
+[36..30] reg_0   (7b)   — base register for op 0
+[29]     ib1     (1b)   — operand-1 immBar
+[28]     ai1     (1b)   — operand-1 auto-increment
+[27..12] imm_1   (16b)  — signed immediate / register index for op 1
+[11..5]  reg_1   (7b)   — base register for op 1
+[4..0]   opcode  (5b)
 ```
 
 ### Field Descriptions
 
 | Field                        | Bits | Description                                          |
 |:-----------------------------|:----:|:-----------------------------------------------------|
-| `dest`                       | 4    | Destination location code                            |
+| `dest`                       | 4    | Destination location code (`MEMORY_COMPONENTS_ADDR_WIDTH`) |
 | `src`                        | 4    | Source location code                                 |
 | `reg_immBar_0` (ib0)         | 1    | Operand 0 mode: 0=imm, 1=register indirect          |
 | `reg_auto_increase_0` (ai0)  | 1    | Auto-increment `reg_0` after use                    |
-| `imm_0`                      | 14   | Immediate value or register index (sign-extended)   |
-| `reg_0`                      | 4    | Base register for operand 0 address calculation     |
+| `imm_0`                      | 16   | Signed immediate, or register index (`IMMEDIATE_WIDTH`) |
+| `reg_0`                      | 7    | Base register / sub-register select (`GLOBAL_REGISTER_ADDR_WIDTH`) |
 | `reg_immBar_1` (ib1)         | 1    | Operand 1 mode: 0=imm, 1=register indirect          |
 | `reg_auto_increase_1` (ai1)  | 1    | Auto-increment `reg_1` after use                    |
-| `imm_1`                      | 14   | Immediate value or register index (sign-extended)   |
-| `reg_1`                      | 4    | Base register for operand 1 address calculation     |
-| `opcode`                     | 6    | Operation code                                       |
+| `imm_1`                      | 16   | Signed immediate, or register index                  |
+| `reg_1`                      | 7    | Base register / sub-register select                  |
+| `opcode`                     | 5    | Operation code (`CTRL_OPCODE_WIDTH`)                 |
+
+The 7-bit register fields encode both the gr index (bottom 5 bits, i.e.
+`gr[0..31]`) and a 2-bit "register-file half" selector in the top 2 bits:
+`00 = gr` (full 32-bit), `01 = gr_lo` (low 16 bits), `10 = gr_hi` (high
+16 bits), `11 = resolved-reg` (PE compute reg). See the gr-subregister
+note in [Source and Destination Codes](#source-and-destination-codes).
 
 ### Python Generator Function
 
@@ -172,15 +201,27 @@ else:
 | 1    | Address Register      | `gr`         | 16-entry addressing register file        |
 | 2    | Scratchpad Memory     | `SPM`        | Shared scratchpad memory                 |
 | 3    | Compute Instr Buffer  | `comp_ib`    | Compute instruction buffer               |
-| 4    | Control Instr Buffer  | `ctrl_ib`    | Control instruction buffer               |
+| 4    | Controller SPM (S1C)  | `ctrl_ib`/`s1c` | Reclaimed slot — controller-local scratchpad (S1C, 8192 words). `ctrl_ib` is the legacy alias; new code uses `s1c`. |
 | 5    | Input Buffer          | `in_buf`     | External input data buffer               |
 | 6    | Output Buffer         | `out_buf`    | External output data buffer              |
 | 7    | Input Port            | `in_port`    | Systolic input from previous PE          |
-| 8    | Input Instruction     | `in_instr`   | Systolic instruction input               |
+| 8    | Input Instruction / gr low  | `in_instr` / `gr_lo` | Same code — context determines meaning (see note)  |
 | 9    | Output Port           | `out_port`   | Systolic output to next PE               |
-| 10   | Output Instruction    | `out_instr`  | Systolic instruction output              |
+| 10   | Output Instruction / gr high | `out_instr` / `gr_hi` | Same code — context determines meaning (see note) |
 | 11-14| FIFO 0-3              | `fifo[0-3]`  | FIFO queues for data buffering           |
 | 15   | S2 Buffer             | `S2`         | Controller-local buffer                  |
+
+**`gr_lo`/`gr_hi` — half-register addressing (code 8 / 10)**: `gr` entries
+are 32-bit. Ops that want only the low or high 16 bits address that half
+with `gr_lo` (8) or `gr_hi` (10). These codes are reused (they overlap
+legacy `in_instr` / `out_instr`); the simulator dispatches on the dest
+position and opcode, so there is no ambiguity in a well-formed stream.
+Arithmetic destinations, `si`, and `set_8` can target `gr`, `gr_lo`, or
+`gr_hi`. A write to `gr_lo` leaves the high 16 bits untouched (and vice
+versa). Reading from `gr_lo`/`gr_hi` returns the sign-extended 16-bit
+half. This is how GSSW and the new `set_8` / `slli` opcodes pack two
+sub-fields into a single gr entry (e.g. `gr[1].lo = n`,
+`gr[1].hi = numNodes`).
 
 ### PE Source/Destination Support
 
@@ -218,7 +259,9 @@ else:
 | 11-14| fifo     | ✓    | ✓     | Pop on load, push on store                      |
 | 15   | S2       | ✓‡   | ✓‡    | ‡Controller `mv`/`si` and block ops (`mvdq`/`mvdqi`) |
 
-**Controller Arithmetic Destination Restriction**: Arithmetic operations (`add`, `sub`, `addi`, `subi`, `shifti_*`, `andi`) on the controller can only write to `gr` (1), `out_buf` (6), or `out_port` (9). Using other destinations (e.g., `out_instr`, `fifo`) will crash the simulator. Move operations (`mv`, `si`) have broader destination support.
+**Controller Arithmetic Destination Restriction**: Arithmetic operations (`add`, `sub`, `addi`, `subi`, `shifti_*`, `andi`, `mul`) on the controller can only write to `gr` (1), `out_buf` (6), or `out_port` (9). Using other destinations (e.g., `out_instr`, `fifo`) will crash the simulator. Move operations (`mv`, `si`) have broader destination support.
+
+**`mul` slot restriction**: The multiply unit lives in only one VLIW lane (slot 0 by convention). Encoding `mul` on slot 1 is a structural hazard, similar to `mvdq+mvdq`. Pair a `mul` with a non-`mul` op (e.g. `mv`, `si`, `addi`, NOP) on the other slot.
 
 **Note on out_instr (code 10) for Controller**: When the controller loads from `comp_ib`, the instruction is stored in an internal buffer (`PE_instruction`). Specifying `out_instr` as the destination in a `mv` operation causes the store function to do nothing, but the instruction is still transferred to PEs via the internal buffer. This is the mechanism for distributing compute instructions.
 
@@ -249,6 +292,7 @@ Controller.out_port → PE[0].in_port → PE[0].out_port → PE[1].in_port → .
 | 0    | Add                   | `add`      | gr[rd] = gr[rs1] + gr[rs2]                   |
 | 1    | Subtract              | `sub`      | gr[rd] = gr[rs1] - gr[rs2]                   |
 | 2    | Add Immediate         | `addi`     | gr[rd] = imm + gr[rs2]                       |
+| 3    | Set 8-bit Broadcast   | `set_8`    | reg[rd] = (imm8 & 0xFF) * 0x01010101         |
 | 4    | Store Immediate       | `si`       | dest[addr] = imm                             |
 | 5    | Move                  | `mv`       | dest[addr0] = src[addr1]                     |
 | 8    | Branch Not Equal      | `bne`      | if (op1 != op2) PC += offset                 |
@@ -267,12 +311,19 @@ Controller.out_port → PE[0].in_port → PE[0].out_port → PE[1].in_port → .
 | 21   | Move Interleaved      | `mvi`      | Move with address swizzling                  |
 | 22   | Move Double Quad      | `mvdq`     | Move 8 words (block)                         |
 | 23   | Move Double Quad Imm  | `mvdqi`    | Write 8 words of immediate                   |
+| 24   | Barrier               | `barrier`  | Controller: stall until LSQ drained          |
+| 25   | Move 2-bit Extract    | `mvi2`     | Load 2-bit field from packed SPM word        |
 | 26   | Call                  | `call`     | ras = PC+1; PC = target (absolute)           |
 | 27   | Return                | `ret`      | PC = ras                                     |
+| 28   | Return Not Equal      | `retne`    | if (op1 != op2) PC = ras                     |
+| 29   | Move 2-bit Extract (unswizzled) | `mv2` | Load 2-bit field from unswizzled SPM word (GSSW) |
+| 30   | Multiply              | `mul`      | gr[rd] = gr[rs2] * (immBar_1 ? gr[imm_1] : imm)  |
 
 ### Import Statement
 ```python
-from opcodes import add, sub, addi, si, mv, bne, beq, bge, blt, jump, set_PC, none, halt, shifti_r, shifti_l, ANDI, mvd, subi, mvi, mvdq, mvdqi, call, ret
+from opcodes import (add, sub, addi, set_8, si, mv, bne, beq, bge, blt, jump,
+    set_PC, none, halt, shifti_r, shifti_l, ANDI, mvd, subi, mvi, mvdq,
+    mvdqi, barrier, mvi2, call, ret, retne, mv2, mul)
 ```
 
 ---
@@ -385,7 +436,7 @@ data_movement_instruction(
     0,              # reg_0: unused
     0,              # reg_immBar_1: 0 means imm_1 is immediate
     0,              # reg_auto_increase_1: unused
-    imm,            # imm_1: immediate value (14-bit, sign-extended)
+    imm,            # imm_1: 16-bit signed immediate
     rs2,            # reg_1: source register index
     addi            # opcode: 2
 )
@@ -396,7 +447,7 @@ data_movement_instruction(
 |---------|:-------------------------------------------------------------------|
 | `dest`  | PE: `gr` (1) or `out_port` (9). Controller: `gr`, `out_buf`, `out_port` |
 | `imm_0` | `rd` - destination register index                                  |
-| `imm_1` | `imm` - immediate value (-8192 to 8191)                            |
+| `imm_1` | `imm` - 16-bit signed immediate (-32768 to 32767)                  |
 | `reg_1` | `rs2` - source register to add to                                  |
 
 **Example**:
@@ -409,6 +460,61 @@ f.write(data_movement_instruction(gr, gr, 1, 0, 7, 0, 0, 0, 1, 7, addi))
 ```
 
 **Note**: The `reg_immBar_0` flag is often set to 1 in examples but doesn't affect `addi` behavior.
+
+---
+
+#### `mul` (opcode 30) - Multiply
+
+**Summary**: Multiplies a register by either an immediate or another register.
+The `reg_immBar_1` flag selects between the two modes, so a single opcode
+serves both `mul gr,imm` and `mul gr,gr`. Slot-0 only by convention.
+
+**Syntax**:
+```
+mul gr[rd], imm,    gr[rs2]   # immBar_1=0: gr[rd] = imm * gr[rs2]
+mul gr[rd], gr[rs1], gr[rs2]  # immBar_1=1: gr[rd] = gr[rs1] * gr[rs2]
+```
+
+**Encoding**:
+```python
+data_movement_instruction(
+    dest,           # gr (1) (PE), or gr/out_buf/out_port (controller)
+    src,            # Unused (typically gr)
+    0,              # reg_immBar_0: unused
+    0,              # reg_auto_increase_0: unused
+    rd,             # imm_0: destination register index
+    0,              # reg_0: unused
+    immBar_1,       # 0: imm_1 is immediate; 1: imm_1 is gr index (rs1)
+    0,              # reg_auto_increase_1: unused
+    imm_or_rs1,     # imm_1: immediate value OR rs1 register index
+    rs2,            # reg_1: source register (always gr)
+    mul             # opcode: 30
+)
+```
+
+**Operand Mapping**:
+| Field      | Usage                                                              |
+|------------|:-------------------------------------------------------------------|
+| `dest`     | PE: `gr`. Controller: `gr`, `out_buf`, `out_port`.                 |
+| `imm_0`    | `rd` — destination gr index                                        |
+| `immBar_1` | 0 → `imm_1` is a 16-bit signed immediate. 1 → `imm_1` is gr index. |
+| `imm_1`    | Immediate multiplier OR source-A gr index, per `immBar_1`.         |
+| `reg_1`    | `rs2` — source-B gr index (always a register)                      |
+
+**Example**:
+```python
+# gr[2] = 3 * gr[11]  (multiply by immediate)
+f.write(data_movement_instruction(gr, gr, 0, 0, 2, 0, 0, 0, 3, 11, mul))
+
+# gr[5] = gr[7] * gr[11]  (multiply two registers; immBar_1=1, imm_1=7)
+f.write(data_movement_instruction(gr, gr, 0, 0, 5, 0, 1, 0, 7, 11, mul))
+```
+
+**Notes**:
+- 32-bit signed multiply, low 32 bits of the product (wraps like `add`).
+- Slot 0 only — pair with a non-`mul` op on the other slot. Two `mul`s in
+  one VLIW bundle is a structural hazard.
+- Latency = 1 cycle, same as `add`/`addi`. Standard RAW rules apply.
 
 ---
 
@@ -736,6 +842,39 @@ f.write(data_movement_instruction(gr, SPM, 0, 0, 5, 0, 0, 0, SWIZZLED_TEXT_START
 
 ---
 
+#### `mvi2` (opcode 25) - Move with 2-bit Extract
+
+**Summary**: Loads a 32-bit SPM word and returns the 2-bit field at a
+specific bit position within that word. Intended for packed 2-bit
+sequence data (e.g. DNA bases encoded as 2 bits each, 16 bases per
+word).
+
+**Syntax**:
+```
+mvi2 dest[addr0], SPM[bp_addr]
+```
+The source address is a *bit-pair* index: word index = `bp_addr >> 4`;
+byte-pair offset within the word = `bp_addr & 0xF` (values 0..15,
+shifted by `offset * 2` bits).
+
+**Behavior**:
+1. Apply `apply_address_swizzle(word_addr)` — physical addressing, like
+   `mvi`.
+2. Issue a single-word SPM read. The PE's receive path masks the
+   result with `((word >> (bp_offset * 2)) & 0x3)` before writing it
+   to the destination (`reg`, `gr`, `gr_lo`, or `gr_hi`).
+
+**Constraint**: `src` must be `SPM`. Has SPM latency (2 cycles) just
+like `mv`/`mvd`.
+
+**Example**:
+```python
+# gr[13] = 2-bit extract of seq[col] at bit-pair address gr[7]+gr[2].lo
+f.write(data_movement_instruction(gr, SPM, 1, 0, 13, 0, 1, 0, 7, 2, mvi2))
+```
+
+---
+
 #### `bne` (opcode 8) - Branch Not Equal
 
 **Summary**: Branches if two values are not equal.
@@ -1018,7 +1157,7 @@ data_movement_instruction(
 )
 ```
 
-**Note**: Performs **arithmetic** (sign-extending) right shift. The shift amount (`imm_1`) is treated as an **unsigned** 14-bit value (NOT sign-extended), so only non-negative shift amounts are meaningful.
+**Note**: Performs **arithmetic** (sign-extending) right shift. The shift amount (`imm_1`) is the 16-bit field interpreted as unsigned; only small non-negative values (< 32) are meaningful for a 32-bit register.
 
 **Examples**:
 ```python
@@ -1042,7 +1181,7 @@ shifti_l gr[rd], gr[rs2], imm    # gr[rd] = gr[rs2] << imm
 
 **Encoding**: Same as `shifti_r`, but uses opcode 17.
 
-**Note**: The shift amount (`imm_1`) is treated as an **unsigned** 14-bit value (NOT sign-extended).
+**Note**: The shift amount (`imm_1`) is the 16-bit field interpreted as unsigned. Only shift amounts < 32 are meaningful for a 32-bit register.
 
 **Examples**:
 ```python
@@ -1076,7 +1215,7 @@ data_movement_instruction(
 )
 ```
 
-**Note**: The mask (`imm_1`) is treated as an **unsigned** 14-bit value (NOT sign-extended). Maximum mask value is 16383 (0x3FFF).
+**Note**: The mask (`imm_1`) is the 16-bit immediate field. Maximum mask value is 0xFFFF.
 
 **Examples**:
 ```python
@@ -1086,6 +1225,51 @@ f.write(data_movement_instruction(gr, 0, 0, 0, 3, 0, 0, 0, 0xFF, 5, ANDI))
 # gr[2] = gr[2] & 0x3  (modulo 4)
 f.write(data_movement_instruction(gr, 0, 0, 0, 2, 0, 0, 0, 3, 2, ANDI))
 ```
+
+#### `set_8` (opcode 3) - Broadcast 8-bit Immediate
+
+**Summary**: Materializes a 4-lane byte constant in one instruction by
+broadcasting an 8-bit immediate across a 32-bit register. Added for
+GSSW-style lowering where SIMD kernels need constants like `vBias`
+(0x04040404), `vGapO` (0x06060606), etc.
+
+**Syntax**:
+```
+set_8 reg[rd], imm8            # reg[rd] = (imm8 & 0xFF) * 0x01010101
+set_8 gr[rd], imm8             # gr[rd] writes are supported too
+set_8 gr_lo[rd], imm8          # writes only the low 16 bits
+```
+
+**Encoding**:
+```python
+data_movement_instruction(
+    dest,           # reg (0), gr (1), gr_lo (8), or gr_hi (10)
+    0,              # src unused
+    0, 0,           # flags unused
+    rd,             # imm_0: destination register index
+    0,              # reg_0 unused
+    0, 0,           # flags unused
+    imm8,           # imm_1: 8-bit constant (low byte used)
+    0,              # reg_1 unused
+    set_8           # opcode: 3
+)
+```
+
+**Behavior**:
+- `dest == reg`: writes a full 32-bit lane replica to `reg[rd]`.
+- `dest == gr`: writes to the addressing register file via
+  `set_output_dest`.
+- `dest == gr_lo` / `gr_hi`: writes only the corresponding 16-bit half.
+
+**Example**:
+```python
+# vBias = 0x04040404  (4 lanes of 4)
+f.write(data_movement_instruction(reg, 0, 0, 0, 0, 0, 0, 0, 4, 0, set_8))
+# paired with another set_8 for reg[1] (the high word of an 8-lane pair):
+f.write(data_movement_instruction(reg, 0, 0, 0, 1, 0, 0, 0, 4, 0, set_8))
+```
+
+---
 
 #### `call` (opcode 26) - Function Call
 
@@ -1164,6 +1348,194 @@ f.write(data_movement_instruction(
 
 ---
 
+#### `retne` (opcode 28) - Conditional Return
+
+**Summary**: Returns (jumps to `ras`) if two values are not equal;
+otherwise falls through (PC++). Combines a comparison and a return
+into one instruction, saving a branch + ret pair.
+
+**Syntax**:
+```
+retne imm_val, gr[rs2]       # if (imm_val != gr[rs2]) PC = ras
+retne gr[rs1], gr[rs2]       # if (gr[rs1] != gr[rs2]) PC = ras
+```
+
+**Encoding** (same fields as `bne`, opcode 28 instead of 8):
+```python
+data_movement_instruction(
+    0, 0,
+    0, 0,
+    0, 0,              # imm_0 / reg_0: unused (no branch offset)
+    reg_immBar_1,      # 0: operand1 is immediate, 1: gr[imm_1]
+    0,
+    operand1,
+    rs2,
+    retne              # opcode: 28
+)
+```
+
+**Lockstep constraint**: Both VLIW slots must emit `retne` with the
+same operands. The controller and PE decode paths both reject mixed
+slot-0/slot-1 pairings for call/ret/retne.
+
+---
+
+## Compute Instructions
+
+The compute trace is separate from the control trace (PE only) and runs
+its own 64-bit VLIW encoded instructions. The array controller does
+not execute compute instructions; instead it loads them into the
+`comp_ib` buffer and dispatches them to PEs.
+
+### Compute Instruction Format
+
+```
+Bit:  63 59 58 54 53 49 48 42 41 35 34 28 27 21 20 14 13  7 6   0
+     ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┐
+     │op[0]│op[1]│op[2]│in[0]│in[1]│in[2]│in[3]│in[4]│in[5]│ out │
+     │ 5b  │ 5b  │ 5b  │ 7b  │ 7b  │ 7b  │ 7b  │ 7b  │ 7b  │ 7b  │
+     └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┘
+```
+
+- `op[0]` drives the 4-input ALU (inputs 0..3).
+- `op[1]` drives the 2-input ALU (inputs 4..5).
+- `op[2]` combines the two sub-ALU outputs into the final write.
+- Each input / output address is 7 bits (128 slots). Two ALU slots run
+  in parallel on each cycle (slot 0 and slot 1); each slot reads its
+  own 6 inputs and produces one 32-bit output.
+
+### Compute Address Space (7-bit input/output fields)
+
+| Range   | Target                                        |
+|:--------|:----------------------------------------------|
+| 0-31    | `reg[0..31]` (compute register file, 32-bit)  |
+| 32-47   | `gr[0..15]` (full 32-bit)                     |
+| 48-63   | `gr[0..15]` low 16 bits (`gr_lo`)             |
+| 64-79   | `gr[0..15]` high 16 bits (`gr_hi`)            |
+| ≥ 80    | reserved                                      |
+
+Writes to a gr half-register leave the other half untouched.
+
+### Scalar vs SIMD Mode
+
+Compute instructions are dispatched either in **scalar** mode (ALU
+operates on 32-bit inputs) or **SIMD** mode (each input treated as 4
+packed `uint8` lanes). The mode is carried on the control slot that
+precedes the compute dispatch.
+
+**SIMD + `gr` source → scalar fallback**: if SIMD mode is active AND
+any of the 6 compute inputs references a `gr` address (>= 32), that
+compute slot silently falls back to the scalar ALU. This prevents
+32-bit gr counters (multiplies, shifts, loop indices) from being
+mis-interpreted as 4 byte lanes. The only documented exception is
+`COMP_GT`, which legitimately takes two SIMD `reg` inputs and writes
+a scalar 0/1 to `gr`; it stays on the SIMD path regardless.
+
+### Compute Opcode Reference
+
+Values defined in `sys_def.h` and mirrored in `scripts/opcodes.py`.
+Columns mark whether an opcode is valid in scalar or SIMD mode.
+
+| Code | Name          | Scalar | SIMD | Description                                         |
+|:----:|:--------------|:------:|:----:|:----------------------------------------------------|
+| 0    | ADDITION      | ✓      | ✓    | `a + b`. Scalar wraps 32-bit; SIMD wraps int8 per lane. |
+| 1    | SUBTRACTION   | ✓      | ✓    | `a - b`.                                             |
+| 2    | MULTIPLICATION| ✓      | —    | Scalar only.                                         |
+| 3    | **SLLI_64**   | ✓      | —    | Paired 64-bit unsigned left shift of `(reg[r], reg[r+1])`. Must be emitted in **both** slots with the same `imm` and operands; slot 0 writes the new low half, slot 1 writes the new high half. The shift amount rides on `input[0]` via the immediate-opcode path. Reclaims former `CARRY` slot. |
+| 4    | BORROW        | ✓      | —    | `(a < b) ? 1 : 0`.                                   |
+| 5    | MAXIMUM       | ✓      | ✓    | Signed max. SIMD uses signed int8 comparison.        |
+| 6    | MINIMUM       | ✓      | ✓    | Signed min.                                          |
+| 7    | LEFT_SHIFT    | ✓      | —    | `a << 16` (fixed amount).                            |
+| 8    | RIGHT_SHIFT   | ✓      | —    | `a >> 16` (fixed amount).                            |
+| 9    | COPY          | ✓      | ✓    | `out = a`.                                           |
+| 10   | MATCH_SCORE   | ✓      | ✓    | Kernel-specific scoring LUT (bsw/poa/phmm).          |
+| 11   | LOG2_LUT      | ✓      | —    | PairHMM log2 lookup.                                 |
+| 12   | LOG_SUM_LUT   | ✓      | —    | PairHMM log-sum lookup.                              |
+| 13   | COMP_LARGER   | ✓      | ✓    | `(a > b) ? c : d` (4-input select).                  |
+| 14   | COMP_EQUAL    | ✓      | ✓    | `(a == b) ? c : d`.                                  |
+| 15   | INVALID       | ✓      | ✓    | Always 0 (nop fill).                                 |
+| 16   | HALT          | ✓      | ✓    | Compute-trace halt; compute PC does not advance.     |
+| 17   | BWISE_OR      | ✓      | ✓    | `a | b`.                                             |
+| 18   | BWISE_AND     | ✓      | ✓    | `a & b`.                                             |
+| 19   | BWISE_NOT     | ✓      | ✓    | `~a`.                                                |
+| 20   | BWISE_XOR     | ✓      | ✓    | `a ^ b`.                                             |
+| 21   | LSHIFT_1      | ✓      | —    | `a << 1`.                                            |
+| 22   | RSHIFT_WORD   | ✓      | —    | `a >> 31` (extract sign).                            |
+| 23   | ADD_I         | ✓      | —    | Immediate add: `input[0]` field is the literal addend. |
+| 24   | COPY_I        | ✓      | —    | Immediate copy.                                      |
+| 25   | POPCOUNT      | ✓      | ✓    | Per-lane popcount.                                   |
+| 26   | CMP_2INP      | ✓      | —    | Used by GBV; compare and produce mask.               |
+| 27   | **ADDS_EPU8** | —      | ✓    | Saturating unsigned 8-bit add, per lane (GSSW lowering). |
+| 28   | **SUBS_EPU8** | —      | ✓    | Saturating unsigned 8-bit sub, per lane.             |
+| 29   | **MAX_EPU8**  | —      | ✓    | Unsigned 8-bit max, per lane.                        |
+| 30   | **MAX_REDUCE**| —      | ✓    | Horizontal max of the 4 input bytes, returned in byte 0 of the destination (zero-extended). |
+| 31   | **COMP_GT**   | ✓      | ✓    | Scalar: `(a > b) ? 1 : 0`. SIMD: any-lane unsigned gt → 0/1 in byte 0. Typically writes to `gr` (destination-address >= 32); still uses the SIMD ALU even then. |
+
+**Python import**:
+```python
+from opcodes import (
+    ADD, SUBTRACTION, MULTIPLICATION, SLLI_64, BORROW, MAXIMUM, MINIMUM,
+    LEFT_SHIFT, RIGHT_SHIFT, COPY, MATCH_SCORE, LOG2_LUT, LOG_SUM_LUT,
+    COMP_LARGER, COMP_EQUAL, INVALID, HALT, BWISE_OR, BWISE_AND,
+    BWISE_NOT, BWISE_XOR, LSHIFT_1, RSHIFT_WORD, ADD_I, COPY_I,
+    POPCOUNT, CMP_2INP, ADDS_EPU8, SUBS_EPU8, MAX_EPU8, MAX_REDUCE,
+    COMP_GT)
+```
+
+### Immediate-Opcode Path
+
+A few opcodes reinterpret one of their input-address fields as a
+literal immediate:
+
+| Opcode   | Immediate field  | Effective ALU op    |
+|:---------|:-----------------|:--------------------|
+| `ADD_I`  | `input[0]`       | `ADDITION`          |
+| `COPY_I` | `input[0]`       | `COPY`              |
+| `SLLI_64`| `input[0]` (6-bit)| paired 64-bit shift|
+
+When the decoder sees one of these opcodes in `op[0]`/`op[1]`, the
+corresponding cu_input is replaced by the raw 7-bit address field
+before dispatch.
+
+---
+
+## VLIW Slot Restrictions
+
+Both control slots execute **concurrently** against pre-cycle register
+state (no data forwarding between slots). On top of data hazards, the
+slots have asymmetric structural constraints.
+
+### Control Trace
+
+- **Slot 1 (second-written)** cannot hold: `magic`, any branch, `jump`,
+  `halt`, `set_PC`, `barrier`, or `si`/`mv` to `in_buf`/`out_buf`/
+  `fifo` IO destinations.
+- **Slot 0 (first-written)** double-executes via `decode_output` unless
+  the opcode is `add`, `sub`, `addi`, `set_8`, non-IO `si`, non-IO
+  `mv`, or `none`.
+- **Paired-only opcodes**: `call`, `ret`, `retne` must be in **both**
+  slots with identical operands — the controller and PE decoders
+  reject mixed-slot pairings.
+- **Structural hazards (any pairing)**:
+  - `mvdq` + `mvdq`, or `mvdq` + `mv` in the same cycle: illegal.
+  - Two SPM accesses to the same bank in the same cycle: illegal.
+  - Two arithmetic ops writing the same gr entry (WAW): undefined
+    behavior.
+- **SIMD flag**: the SIMD bit travels with the slot; cross-slot SIMD
+  mismatches are legal but unusual.
+
+### Compute Trace
+
+- Both compute slots run every cycle; `INVALID` or `HALT` as op[0]
+  kills that slot for that cycle.
+- `SLLI_64` must be emitted on both slots simultaneously with matching
+  operands; missing one half leaves the shifted pair half-written.
+- Compute writes to `gr`/`gr_lo`/`gr_hi` are routed through the gr
+  write ports in `pe.cpp` after the regfile write; avoid pairing two
+  compute slots that write the same gr entry.
+
+---
+
 ## Scratchpad Memory (SPM)
 
 ### Overview
@@ -1188,33 +1560,42 @@ each split into 2 interleaved banks (8 banks total).
 ### Access Constraints
 
 **Critical Rules**:
-1. **No simultaneous read/write**: Each PE has one port; cannot load and store in same cycle
-2. **No pipelining**: Cannot issue new SPM request while one is in flight
-3. **Latency padding**: Must insert 2 no-ops (or other non-SPM work) between SPM accesses
-4. **SPM load destination constraint**: When loading from SPM, the destination must be `reg`, `gr`, or `out_port` only. Other destinations (e.g., `SPM`, `comp_ib`) are not supported because they have incompatible latency requirements
+1. **One access per port per cycle**: Each PE has one port; cannot load
+   AND store in the same cycle.
+2. **Bank-level pipelining**: Each bank pipeline holds
+   `SPM_ACCESS_LATENCY` (= 2) in-flight requests. The same bank may be
+   issued to on back-to-back cycles; a *third* overlapping request
+   stalls the issuer (`BankConflictStalls`). Individual request latency
+   is still preserved — the consumer must wait `SPM_ACCESS_LATENCY`
+   cycles from the cycle the load was issued before reading the result.
+3. **Same-cycle same-bank collision still illegal**: two accesses to
+   the same bank in the same cycle (PE+PE, PE+LSQ, etc.) stall, they
+   don't coalesce.
+4. **SPM load destination constraint**: When loading from SPM the
+   destination must be `reg`, `gr` (incl. `gr_lo`/`gr_hi`), or
+   `out_port`. Other destinations are not supported.
+5. **`mvd` alignment**: double-word SPM accesses require an
+   even-aligned address (`addr & 1 == 0`). Misaligned `mvd` asserts.
 
-**Illegal Access Patterns**:
+**Illegal patterns (same-cycle conflict)**:
 ```python
-# ILLEGAL: Load and store in same cycle
+# ILLEGAL: load and store in same cycle (both touch the PE's SPM port)
 f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))  # load
-f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 2, 0, 0, 5, 0, mv))  # store - CONFLICT!
-
-# ILLEGAL: Pipelined access (second request before first completes)
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))  # load 1
-f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))     # nop
-f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 0, 0, 2, mv))  # load 2 - TOO SOON!
-f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+f.write(data_movement_instruction(SPM, reg, 0, 0, 0, 2, 0, 0, 5, 0, mv))  # store
 ```
 
-**Legal Access Pattern**:
+**Legal pipelined pattern** (both requests from the same PE hit
+different issue cycles, neither consumer reads too early):
 ```python
-# LEGAL: Proper latency padding
-f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))  # load 1
-f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))     # nop (cycle 1)
-f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))     # nop (cycle 2)
-f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))     # nop (data ready)
-f.write(data_movement_instruction(reg, SPM, 0, 0, 4, 0, 0, 0, 0, 2, mv))  # load 2 - OK
+f.write(data_movement_instruction(reg, SPM, 0, 0, 0, 0, 0, 0, 0, 1, mv))  # load A, cycle 0
+f.write(data_movement_instruction(reg, SPM, 0, 0, 2, 0, 0, 0, 1, 2, mv))  # load B, cycle 1 (OK — pipelined)
+f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))    # A ready on cycle 2
+# use A here — reg[0] is valid
+f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))    # B ready on cycle 3
+# use B here — reg[2] is valid
 ```
+Using `B` one cycle early still breaks — the per-request latency must
+be respected even though the pipeline allows two in flight.
 
 ### Addressing Modes
 
@@ -1376,11 +1757,17 @@ addresses by decomposing transfers internally:
 
 ### Performance Counters
 
-| Counter | Description |
-|:--------|:------------|
-| TotalSpmRequests | Total PE SPM access requests |
-| BankConflictStalls | PE stalls from SPM bank conflicts |
-| LsqFullStalls | Controller stalls from full LSQ banks |
+Printed after each simulation case:
+
+| Counter                   | Description                                           |
+|:--------------------------|:------------------------------------------------------|
+| `TotalSpmRequests`        | Total PE SPM access requests                          |
+| `BankConflictStalls`      | PE stalls from same-cycle SPM bank conflicts          |
+| `ForwardableBankConflict` | Bank conflicts where data could have been forwarded (diagnostic) |
+| `LsqFullStalls`           | Controller stalls caused by a full LSQ bank queue     |
+| `PeHalted`                | Cycles spent in `halt` across all PEs                 |
+| `SyncSpinBNEs`            | Controller cycles spent spinning on `gr[13] != 1`     |
+| `Fin0DupDiags`            | GWFA-only: duplicate diagonals filtered by FIN0 dedup |
 
 ---
 
@@ -1580,13 +1967,18 @@ Each memory block in the WFA algorithm contains 7 core sections of `MEM_BLOCK_SI
 - PADDING (reserved space) - 30 words
 - 2-word gap - reserved space
 
-**Current Configuration (BANK_SIZE = 8192):**
+**Current Configuration (`SPM_BANK_GROUP_SIZE` = 8192):**
 - Block 0: 254 words (7×32 + 30 padding) + 2 words (gap) = 256 words total
 - Block 1: 254 words (7×32 + 30 padding) + 2 words (gap) = 256 words total
 - Total blocks: 512 words
-- Pattern region: 3840 words (addresses 512-4351)
-- Text region: 3840 words (addresses 4352-8191)
-- Total per bank group: 512 + 3840 + 3840 = 8192 words ✓
+- Pattern region: addresses 512–1159 (`PATTERN_START = 512`,
+  `TEXT_START = 1160`)
+- Text region: addresses 1160–8191
+- Total per bank group: 8192 words ✓
+
+The pattern/text split moved when sequences shrank to 2-bit packing
+(commit c7da728); `TEXT_START` was 4352 for the legacy 8-bit packing
+and is **1160** today (`sys_def.h:207`).
 
 ### Critical Constraints
 
@@ -1601,10 +1993,13 @@ When changing scratchpad size, ensure:
 To change PADDING_SIZE from 30 to 64 words (to add more reserved space):
 1. In pe_array.cpp: Change `constexpr int PADDING_SIZE = 64;`
 2. In wfa_instruction_generator.py: Change `PADDING_SIZE = 64`
-3. Recalculate BLOCK_1_START: `32*7 + 2 + 64 = 290`
-4. Recalculate PATTERN_START: `290 + 32*7 + 2 + 64 = 580`
-5. Update sys_def.h: PATTERN_START = 580
-6. Verify: With BANK_SIZE=8192, SEQ_LEN_ALLOC = (8192-580)//2 = 3806, which leaves room for pattern (3806 words) and text (3806 words) each
+3. Recalculate `BLOCK_1_START`: `32*7 + 2 + 64 = 290`
+4. Recalculate `PATTERN_START`: `290 + 32*7 + 2 + 64 = 580`
+5. Update `sys_def.h`: `PATTERN_START = 580` and re-derive
+   `TEXT_START = PATTERN_START + SEQ_LEN_ALLOC` (for 2-bit packing,
+   `SEQ_LEN_ALLOC = (BANK_SIZE - 2*PATTERN_START) / something` —
+   the exact formula lives in `wfa_instruction_generator.py`).
+6. Run `wfa_check_correctness.py` to verify pattern/text fit.
 
 **Note:** The formula-based approach (`MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE`) enables this single-point-of-change capability. Changing PADDING_SIZE only requires editing the constant in two files; dependent values recalculate automatically.
 
@@ -1612,43 +2007,67 @@ To change PADDING_SIZE from 30 to 64 words (to add more reserved space):
 
 ## Appendix: Quick Reference
 
-### Opcode Numbers
+### Control Opcode Numbers
 ```python
-add=0, sub=1, addi=2, si=4, mv=5, bne=8, beq=9, bge=10, blt=11,
+add=0, sub=1, addi=2, set_8=3, si=4, mv=5, bne=8, beq=9, bge=10, blt=11,
 jump=12, set_PC=13, none=14, halt=15, shifti_r=16, shifti_l=17,
 ANDI=18, mvd=19, subi=20, mvi=21, mvdq=22, mvdqi=23,
-barrier=24, mvi2=25, call=26, ret=27
+barrier=24, mvi2=25, call=26, ret=27, retne=28
+```
+
+### Compute Opcode Numbers
+```python
+# Base arithmetic / bitwise
+ADD=0, SUBTRACTION=1, MULTIPLICATION=2, SLLI_64=3, BORROW=4,
+MAXIMUM=5, MINIMUM=6, LEFT_SHIFT=7, RIGHT_SHIFT=8, COPY=9,
+MATCH_SCORE=10, LOG2_LUT=11, LOG_SUM_LUT=12, COMP_LARGER=13,
+COMP_EQUAL=14, INVALID=15, HALT=16, BWISE_OR=17, BWISE_AND=18,
+BWISE_NOT=19, BWISE_XOR=20, LSHIFT_1=21, RSHIFT_WORD=22,
+ADD_I=23, COPY_I=24, POPCOUNT=25, CMP_2INP=26,
+# GSSW lowering additions (SIMD unsigned + paired shift + reductions)
+ADDS_EPU8=27, SUBS_EPU8=28, MAX_EPU8=29, MAX_REDUCE=30, COMP_GT=31
 ```
 
 ### Source/Destination Numbers
 ```python
-reg=0, gr=1, SPM=2, comp_ib=3, ctrl_ib=4, in_buf=5, out_buf=6,
-in_port=7, in_instr=8, out_port=9, out_instr=10, fifo=[11,12,13,14], S2=15
+reg=0, gr=1, SPM=2, comp_ib=3,
+ctrl_ib=4,      # alias: s1c (controller scratchpad)
+in_buf=5, out_buf=6, in_port=7,
+in_instr=8,     # alias: gr_lo (low 16 bits of gr)
+out_port=9,
+out_instr=10,   # alias: gr_hi (high 16 bits of gr)
+fifo=[11,12,13,14], S2=15
+```
+
+### Compute Address Convention
+```
+ 0..31 = reg[]       48..63 = gr[].lo
+32..47 = gr[] (full) 64..79 = gr[].hi
 ```
 
 ### Key Constants (from sys_def.h)
 ```c
-SPM_BANK_GROUP_SIZE = 8192
-SPM_BANK_SIZE = 4096
+SPM_BANK_GROUP_SIZE = 8192   // per-PE bank-group (one of 4 PEs)
+SPM_BANK_SIZE = 4096         // per physical bank (two banks per PE)
+SPM_NUM_BANKS = 8            // 4 PE bank-groups × 2 banks each
 SPM_ADDR_NUM = 32768
 SPM_ACCESS_LATENCY = 2
 LINE_SIZE = 2
-SPM_NUM_BANKS = 8
+S2_BUFFER_INTS = 262144      // 1 MB / 4 bytes
 S2_NUM_BANKS = 4
 S2_READ_LATENCY = 6
 S2_WRITE_LATENCY = 3
 LSQ_MAX_ENTRIES_PER_BANK = 8
-ADDR_REGISTER_NUM = 16    // gr[0..15]
-REGFILE_ADDR_NUM = 32     // reg[0..31]
+ADDR_REGISTER_NUM = 16       // gr[0..15]
+REGFILE_ADDR_NUM = 32        // reg[0..31]
 PATTERN_START = 512
-TEXT_START = 4352
-ADDR_LEN = 15             // For address swizzling
+TEXT_START = 1160            // shrank from 4352 after 2-bit base packing
+ADDR_LEN = 15                // For address swizzling
 ```
 
 **Memory Block Constants (from wfa_instruction_generator.py):**
 ```python
-PADDING_SIZE = 30         // Adjustable padding per block (enables single-point-of-change)
+PADDING_SIZE = 30         // Adjustable padding per block
 BLOCK_1_START = 256       // = MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE
 PATTERN_START = 512       // = BLOCK_1_START + MEM_BLOCK_SIZE*7 + 2 + PADDING_SIZE
-SEQ_LEN_ALLOC = 3840      // = (BANK_SIZE - PATTERN_START) // 2
 ```

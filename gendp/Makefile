@@ -8,7 +8,7 @@ AR      = @echo generating static library $@ && ar rc
 
 #BASE CXXFLAGS
 #CXXFLAGS   = -g -Wall -Wno-format -Wno-unused-variable -Wno-unused-but-set-parameter -Wno-unused-result -fPIC -std=c++11 -O0 -g3 -fno-inline -fno-omit-frame-pointer -fno-lto -fvar-tracking -fvar-tracking-assignments -lpthread 
-CXXFLAGS   = -g -g3 -ggdb -O0 -std=c++11
+CXXFLAGS   = -g -g3 -ggdb -O0 -std=c++11 -msse4.1
 #CXXFLAGS   += -Wall -Wextra -Wpedantic
 HEADER  = 
 LIBS    = libsimulator.a 
@@ -21,8 +21,9 @@ ifeq ($(ADDRESS_SANITIZER),1)
     LINKFLAGS += -fsanitize=address
 endif
 
-# Core kernels (always built).
-OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o simulator.o
+# Core kernels (always built). gssw_sim.o is non-optional; the GSSW kernel
+# is in-tree, not a submodule.
+OBJECT 	:= 	main.o bsw.o poa.o chain.o phmm.o wfa.o bankThrasher.o gssw_sim.o simulator.o
 
 # GWFA kernel is optional: only included when kernel/Gwfa/gwfa.c is present
 # (submodule initialized). Users who have not fetched that submodule can
@@ -77,7 +78,7 @@ BIN_PATH = ./
 TARGET = sim
 
 # O3 optimized build
-CXXFLAGS_O3 = -O3 -std=c++11
+CXXFLAGS_O3 = -O3 -std=c++11 -msse4.1
 
 # Both the debug build (CXXFLAGS) and the release build (CXXFLAGS_O3)
 # need matching preprocessor feature flags so both TUs see the same
