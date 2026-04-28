@@ -6,6 +6,11 @@
 
 extern "C" {
 #include "kernel/Gwfa/gwfa.h"
+// Pre-existing build gap: parent commit 555eb14 added gwfa_reset_mm() but
+// the pinned submodule (kernel/Gwfa @ bc36fe0) does not declare or define
+// it. Provide a weak local no-op so the build succeeds; if a future
+// submodule update supplies a real definition, the strong symbol wins.
+__attribute__((weak)) void gwfa_reset_mm(void) {}
 }
 
 /* ---- Dump file helpers ---- */

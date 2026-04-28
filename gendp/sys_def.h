@@ -49,6 +49,10 @@
 #define S2_READ_LATENCY 6
 #define S2_WRITE_LATENCY 3
 #define LSQ_MAX_ENTRIES_PER_BANK 8
+// MM (4GB main memory) latency. Stores reset a single counter that ticks down
+// each cycle (waitLsq stalls until it goes negative). Loads sit in a queue of
+// up to MM_LATENCY entries, each carrying a numWords-payload and a destId.
+#define MM_LATENCY 100
 #define CTRL_PEID 656
 #define MAIN_ADDR_REGISTER_NUM 32
 #define CTRL_INSTR_BUFFER_NUM 8192
@@ -176,6 +180,10 @@ inline int get_base_opcode(int opcode) {
 #define CTRL_GR 1
 #define CTRL_SPM 2
 #define CTRL_COMP_IB 3
+// Controller-side reuse of ID 3 for MM (4GB main memory). PE-side ID 3 is
+// CTRL_COMP_IB (compute instr buffer); the two paths never overlap because
+// MM is only addressable from controller mv/mvd/mvdq dispatch.
+#define CTRL_MM 3
 #define CTRL_CTRL_IB 4
 #define CTRL_S1C 4         // Controller scratchpad (repurposed ctrl_ib)
 #define S1C_SIZE 8192

@@ -121,6 +121,14 @@ class addr_regfile {
             exit(-1);
         }
 
+        // Magic-body scope: while set, WAW tracking is suspended. Magic
+        // bodies model multi-ISA-cycle hardware behavior in a single C++
+        // pass; their internal writes do not represent real same-cycle
+        // VLIW writes and therefore should not trip the WAW detector.
+        // Toggled by pe::decode_ctrl and pe_array::decode at the magic
+        // dispatch boundary.
+        bool waw_suppressed = false;
+
         // Subregister write. pos: CTRL_GR=full,
         // CTRL_GR_LO=lo16, CTRL_GR_HI=hi16. Detects WAW: two writes to
         // overlapping bit-ranges of the same gr in one global simulation
@@ -132,7 +140,7 @@ class addr_regfile {
                 const char* owner_tag = "anon") {
             assert(idx >= 0 && idx < buffer_size);
             extern int cycle;
-            if (cycle > 0) {
+            if (cycle > 0 && !waw_suppressed) {
                 int mask = (pos == CTRL_GR_LO) ? 0x1
                          : (pos == CTRL_GR_HI) ? 0x2 : 0x3;
                 if (last_write_cycle[idx] != cycle)
@@ -278,6 +286,11 @@ class comp_instr_buffer {
 
 // --- Controller Load/Store Queue ---
 
+// SPM reads issued by the controller can target three different sinks once
+// their data lands. S2 is the legacy SPM<->S2 path; MM and S1C were added
+// for the GWFA feature set.
+enum class SpmReadDest { S2, MM, S1C };
+
 struct LsqEntry {
     int addr;              // addr in THIS memory
     int data[2];           // line data
@@ -285,7 +298,14 @@ struct LsqEntry {
     AccessT accessType; // READ or WRITE
     int srcDstAddr;        // addr in OTHER memory
     bool singleData;
+    // For SPM-side READ entries only: where does the data go after the SPM
+    // read completes? S2 (default) preserves the legacy SPM<->S2 path.
+    SpmReadDest dest = SpmReadDest::S2;
+    int destAddr = 0;      // MM/S1C addr when dest != S2
+    int destNumWords = 2;  // 1 or 2 (drives MM store width; only used for MM)
 };
+
+class MM;  // forward decl for hasPendingOps signature
 
 class CtrlLSQ {
 public:
@@ -307,17 +327,40 @@ public:
     void enqueueS2WriteOnly(int s2Addr,
         int spmSrcAddr, bool singleData);
 
+    // s1c <-> SPM mvd paths. s1c reads/writes are immediate; only the SPM
+    // side is queued. enqueueS1cToSpm reads s1c synchronously and stages a
+    // ready-data SPM write. enqueueSpmToS1c stages a tagged SPM read whose
+    // completion writes directly into s1c[].
+    void enqueueS1cToSpm(int spmPhysAddr,
+        const int* s1cData, bool singleData);
+    void enqueueSpmToS1c(int spmPhysAddr,
+        int s1cAddr, bool singleData);
+
+    // SPM <-> MM paths. MM stores are immediate (the buffer is updated and a
+    // counter is bumped); only the SPM side is queued. SPM->MM stages a
+    // tagged SPM read whose completion calls mm->issueStore(). MM->SPM is
+    // driven from MM::tick() (after MM_LATENCY) which calls
+    // enqueueSpmWriteWithData on the resulting line.
+    void enqueueSpmReadForMm(int spmPhysAddr,
+        int mmAddr, bool singleData);
+    void enqueueSpmWriteWithData(int spmPhysAddr,
+        const int* lineData, bool singleData);
+
     // Single tick drains both SPM and S2 queues
     void tick(SPM* spm, S2* s2,
               bool spmBankBusy[SPM_NUM_BANKS]);
 
-    // Callbacks when memory completes
+    // Callbacks when memory completes. dataReadyFromSpm dispatches by the
+    // recorded SpmReadDest tag: S2 (existing scan), MM (synchronous
+    // mm->issueStore), or S1C (synchronous write into the s1c[] array).
     void dataReadyFromS2(int s2Addr, int* lineData);
-    void dataReadyFromSpm(int bank, int* lineData);
+    void dataReadyFromSpm(int bank, int* lineData,
+        MM* mm, int* s1c);
 
     // Status
     bool empty() const;
-    bool hasPendingOps(SPM* spm, S2* s2) const;
+    bool hasPendingOps(SPM* spm, S2* s2,
+        const MM* mm) const;
     bool spmBankFull(int physAddr) const;
     bool s2BankFull(int addr) const;
     bool canEnqueue(int* spmAddrs, int nSpm,
@@ -336,12 +379,17 @@ public:
     std::deque<LsqEntry> s2Banks[S2_NUM_BANKS];
 
 private:
-    // Pending controller SPM reads awaiting completion
+    // Pending controller SPM reads awaiting completion. dest/destAddr
+    // mirror the originating LsqEntry so dataReadyFromSpm knows where to
+    // route the loaded line (S2 scan, MM store, or s1c write).
     struct PendingCtrlRead {
         bool valid = false;
         int spmPhysAddr;
-        int s2Addr;
+        int s2Addr;          // legacy: kept for S2-destined reads
         bool singleData;
+        SpmReadDest dest = SpmReadDest::S2;
+        int destAddr = 0;
+        int destNumWords = 2;
     };
     PendingCtrlRead
         pendingCtrlReads[SPM_NUM_BANKS];
@@ -352,6 +400,52 @@ private:
 
     int drainPrioritySpm = 0;
     int drainPriorityS2 = 0;
+};
+
+// --- MM (4GB main memory) ---
+//
+// MM is a large external buffer (allocated by the GWFA library and handed in
+// via setBuffer). The simulator wraps it for two reasons:
+//   * Stores: bump lastMMStore = MM_LATENCY; barrier blocks until counter
+//     ticks below 0. The store data hits the buffer immediately, so the
+//     counter is only there to model flush completion for waitLsq.
+//   * Loads: enqueue an MMLoadEntry with cyclesLeft = MM_LATENCY. When it
+//     expires, route the data: gr -> direct write; SPM -> stage SPM writes
+//     via the LSQ (one per line).
+struct MMLoadEntry {
+    int addr;
+    int destId;              // CTRL_GR or CTRL_SPM
+    int destAddr;            // gr index, or SPM phys addr
+    int data[8];             // up to 8 words (mvdq)
+    int numWords;            // 1, 2, or 8
+    int cyclesLeft;
+    bool singleData;         // for 1-word destined to gr/SPM
+};
+
+class MM {
+public:
+    MM();
+
+    void setBuffer(int* buf);
+    int* getBuffer() const { return buffer; }
+
+    void issueStore(int addr, const int* data,
+                    int numWords);
+    void issueLoad(int addr, int destId,
+                   int destAddr, int numWords,
+                   bool singleData);
+
+    // Advance one cycle. lsq routes SPM-bound completions; gr is the
+    // controller's main_addressing_register array for direct writes.
+    void tick(CtrlLSQ* lsq, int* gr);
+
+    bool hasPendingOps() const;
+    bool loadQueueFull() const;
+
+private:
+    int* buffer = nullptr;
+    int lastMMStore = -1;
+    std::deque<MMLoadEntry> loadQueue;
 };
 
 #endif // DATA_BUFFER_H

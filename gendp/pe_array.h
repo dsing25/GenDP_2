@@ -44,7 +44,11 @@ class pe_array {
         int input_buffer_size, output_buffer_size;
         uint64_t va_regfile[16];
         int s1c[S1C_SIZE];     // Controller scratchpad
-        int *mm;               // Main memory (4GB block)
+        int *mm;               // Main memory (4GB block) - raw pointer used
+                               // by direct C++ access in magic instructions
+        MM *mm_unit;           // Latency-modeled wrapper for ISA-level MM
+                               // dispatch; setBuffer'd to the same pointer
+                               // as `mm` once gwfa_get_mm() runs.
 
         void run(int cycle_limit, int simd, int setting, int main_instruction_setting);
         void fin0_load_batch(int fin0_base, int magic_mask);

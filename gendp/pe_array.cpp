@@ -118,6 +118,7 @@ pe_array::pe_array(int input_size, int output_size, int _pc_mode) {
     output_buffer = (int*)calloc(output_buffer_size, sizeof(int));
     s2 = new S2(S2_BUFFER_INTS);
     lsq = new CtrlLSQ();
+    mm_unit = new MM();
 
     main_addressing_register[0] = 0;
     main_PC = 0;
@@ -146,6 +147,7 @@ pe_array::~pe_array() {
     free(output_buffer);
     delete s2;
     delete lsq;
+    delete mm_unit;
     for (i = 0; i < PE_NUM; i++)
         delete pe_unit[i];
     delete SPM_unit;
@@ -1245,6 +1247,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
                 // Set MM pointer and base offsets
                 mm = gwfa_get_mm();
+                mm_unit->setBuffer(mm);
                 main_addressing_register[19] = gwfa_get_s_a_mm_off();
                 main_addressing_register[20] = 0; // set by magic 4
                 main_addressing_register[21] = gwfa_get_mm_A_off();
@@ -8348,6 +8351,63 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #ifdef PROFILE
         printf("Move ");
 #endif
+        // MM dispatch (controller-side reuse of ID 3). Intercept before the
+        // legacy load/store fallback. Address fields follow the same
+        // imm+reg convention as the SPM<->S2 paths above:
+        //   field 0 (reg_immBar_flag_0 / sext_imm_0 / reg_0) = dest addr
+        //   field 1 (reg_immBar_flag_1 / sext_imm_1 / reg_1) = src addr
+        if (dest == CTRL_MM || src == CTRL_MM) {
+            int destA = reg_immBar_flag_0
+                ? main_addressing_register[sext_imm_0]
+                  + main_addressing_register[reg_0]
+                : sext_imm_0
+                  + main_addressing_register[reg_0];
+            int srcA = reg_immBar_flag_1
+                ? main_addressing_register[sext_imm_1]
+                  + main_addressing_register[reg_1]
+                : sext_imm_1
+                  + main_addressing_register[reg_1];
+
+            if (src == CTRL_GR && dest == CTRL_MM) {
+                int val = main_addressing_register[reg_1];
+                mm_unit->issueStore(destA, &val, 1);
+            } else if (src == CTRL_MM && dest == CTRL_GR) {
+                if (mm_unit->loadQueueFull()) {
+                    lsqFullStalls++;
+                    return 0;
+                }
+                mm_unit->issueLoad(srcA, CTRL_GR,
+                    reg_0, 1, true);
+            } else if (src == CTRL_SPM
+                       && dest == CTRL_MM) {
+                if (lsq->spmBankFull(srcA)) {
+                    lsqFullStalls++;
+                    return 0;
+                }
+                lsq->enqueueSpmReadForMm(srcA, destA, true);
+            } else if (src == CTRL_MM
+                       && dest == CTRL_SPM) {
+                if (mm_unit->loadQueueFull()
+                    || lsq->spmBankFull(destA)) {
+                    lsqFullStalls++;
+                    return 0;
+                }
+                mm_unit->issueLoad(srcA, CTRL_SPM,
+                    destA, 1, true);
+            } else {
+                fprintf(stderr,
+                    "main mv MM: only gr<->MM and "
+                    "SPM<->MM supported. src=%d dest=%d "
+                    "PC=%d\n", src, dest, *PC);
+                exit(-1);
+            }
+            if (reg_auto_increasement_flag_0)
+                main_addressing_register[reg_0]++;
+            if (reg_auto_increasement_flag_1)
+                main_addressing_register[reg_1]++;
+            (*PC)++;
+            return 0;
+        }
         if (src == CTRL_S2 && dest == CTRL_SPM) {
             int s2Addr = reg_immBar_flag_1
                 ? main_addressing_register[sext_imm_1]
@@ -8435,11 +8495,66 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 
         bool src_is_spm = (src == CTRL_SPM);
         bool src_is_s2 = (src == CTRL_S2);
+        bool src_is_mm = (src == CTRL_MM);
         bool dest_is_spm = (dest == CTRL_SPM);
         bool dest_is_s2 = (dest == CTRL_S2);
+        bool dest_is_mm = (dest == CTRL_MM);
+
+        // SPM<->MM (8 words, even-aligned): split into 4 line transfers.
+        // SPM->MM: 4 tagged SPM reads -> mm->issueStore on completion.
+        // MM->SPM: one MM load entry; mm->tick stages 4 SPM writes.
+        if ((src_is_spm && dest_is_mm)
+            || (src_is_mm && dest_is_spm)) {
+            int spmA = src_is_spm ? src_addr : dest_addr;
+            int mmA  = src_is_mm  ? src_addr : dest_addr;
+            if (spmA < 0
+                || spmA + 8 > SPM_unit->buffer_size) {
+                fprintf(stderr,
+                    "main mvdq SPM addr %d out of "
+                    "bounds. PC=%d\n", spmA, *PC);
+                exit(-1);
+            }
+            if (spmA % 2 != 0) {
+                fprintf(stderr,
+                    "main mvdq SPM<->MM requires "
+                    "even-aligned SPM addr (got %d). "
+                    "PC=%d\n", spmA, *PC);
+                exit(-1);
+            }
+            // Capacity check: 4 SPM-bank entries (one per line).
+            int spmList[4];
+            for (i = 0; i < 4; i++)
+                spmList[i] = spmA + 2 * i;
+            if (!lsq->canEnqueue(spmList, 4, nullptr, 0)) {
+                lsqFullStalls++;
+                return 0;
+            }
+            if (src_is_mm
+                && mm_unit->loadQueueFull()) {
+                lsqFullStalls++;
+                return 0;
+            }
+            if (src_is_spm) {
+                // SPM -> MM: tag each line read with mmA + 2*i.
+                for (i = 0; i < 4; i++)
+                    lsq->enqueueSpmReadForMm(
+                        spmA + 2 * i,
+                        mmA + 2 * i, false);
+            } else {
+                // MM -> SPM: single MM load entry; tick stages writes.
+                mm_unit->issueLoad(mmA, CTRL_SPM,
+                    spmA, 8, false);
+            }
+            if (reg_auto_increasement_flag_0)
+                main_addressing_register[reg_0] += 8;
+            if (reg_auto_increasement_flag_1)
+                main_addressing_register[reg_1] += 8;
+            (*PC)++;
+            return 0;
+        }
 
         if (!((src_is_spm && dest_is_s2) || (src_is_s2 && dest_is_spm))) {
-            fprintf(stderr, "main mvdq only supports SPM <-> S2. src=%d dest=%d PC=%d\n", src, dest, *PC);
+            fprintf(stderr, "main mvdq only supports SPM <-> S2 or SPM <-> MM. src=%d dest=%d PC=%d\n", src, dest, *PC);
             exit(-1);
         }
 
@@ -8636,8 +8751,71 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 //         printf("addi_8 gr[%d] %d gr[%d] (%lx %d %lx)\n", rd, sext_imm_1, rs2, main_addressing_register[rd], sext_imm_1, main_addressing_register[rs2]);
 // #endif
 //         (*PC)++;
+    } else if (opcode == CTRL_MVD) {        // mvd dest src — 2-word transfer
+#ifdef PROFILE
+        printf("MoveDouble ");
+#endif
+        // Address fields follow the same imm+reg convention as mv/mvdq:
+        //   field 0 = dest addr, field 1 = src addr.
+        int destA = reg_immBar_flag_0
+            ? main_addressing_register[sext_imm_0]
+              + main_addressing_register[reg_0]
+            : sext_imm_0
+              + main_addressing_register[reg_0];
+        int srcA = reg_immBar_flag_1
+            ? main_addressing_register[sext_imm_1]
+              + main_addressing_register[reg_1]
+            : sext_imm_1
+              + main_addressing_register[reg_1];
+
+        // s1c <-> SPM (mvd, 2 words, queued via LSQ)
+        if (src == CTRL_S1C && dest == CTRL_SPM) {
+            if (lsq->spmBankFull(destA)) {
+                lsqFullStalls++;
+                return 0;
+            }
+            int s1cData[2] = {
+                s1c[srcA], s1c[srcA + 1]
+            };
+            lsq->enqueueS1cToSpm(destA, s1cData, false);
+        } else if (src == CTRL_SPM && dest == CTRL_S1C) {
+            if (lsq->spmBankFull(srcA)) {
+                lsqFullStalls++;
+                return 0;
+            }
+            lsq->enqueueSpmToS1c(srcA, destA, false);
+
+        // SPM <-> MM (mvd, 2 words)
+        } else if (src == CTRL_SPM && dest == CTRL_MM) {
+            if (lsq->spmBankFull(srcA)) {
+                lsqFullStalls++;
+                return 0;
+            }
+            lsq->enqueueSpmReadForMm(srcA, destA, false);
+        } else if (src == CTRL_MM && dest == CTRL_SPM) {
+            if (mm_unit->loadQueueFull()
+                || lsq->spmBankFull(destA)) {
+                lsqFullStalls++;
+                return 0;
+            }
+            mm_unit->issueLoad(srcA, CTRL_SPM,
+                destA, 2, false);
+
+        } else {
+            fprintf(stderr,
+                "main mvd: unsupported src=%d dest=%d. "
+                "Supported: s1c<->SPM, SPM<->MM. PC=%d\n",
+                src, dest, *PC);
+            exit(-1);
+        }
+
+        if (reg_auto_increasement_flag_0)
+            main_addressing_register[reg_0] += 2;
+        if (reg_auto_increasement_flag_1)
+            main_addressing_register[reg_1] += 2;
+        (*PC)++;
     } else if (opcode == CTRL_BARRIER) {
-        if (!lsq->hasPendingOps(SPM_unit, s2)) {
+        if (!lsq->hasPendingOps(SPM_unit, s2, mm_unit)) {
 #ifdef PROFILE
             printf("Barrier: LSQ empty, advance\n");
 #endif
@@ -9194,7 +9372,7 @@ void pe_array::handle_spm_data_ready(
     if (evData->requestorId == CTRL_PEID) {
         lsq->dataReadyFromSpm(
             CtrlLSQ::spmBank(evData->phys_addr),
-            evData->data);
+            evData->data, mm_unit, s1c);
     } else {
         pe_unit[evData->requestorId]
             ->recieve_spm_data(evData->data);
@@ -9368,6 +9546,11 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                 lsq->dataReadyFromS2(
                     c.s2Addr, c.data);
         }
+
+        // MM tick: decrement store-flush counter and drain expired loads.
+        // Expired loads either write directly to gr or stage SPM writes via
+        // the LSQ (handled below in the drain step).
+        mm_unit->tick(lsq, main_addressing_register);
 
         // Pre-check: if either slot would stall on LSQ,
         // skip both to prevent double-execution bugs.

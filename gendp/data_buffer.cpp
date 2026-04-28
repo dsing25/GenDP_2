@@ -463,6 +463,91 @@ void CtrlLSQ::enqueueSpmToS2(
                        singleData);
 }
 
+// s1c -> SPM (mvd): s1c reads have no latency, so the write entry's data is
+// already known at enqueue time. ready[] flags are set so drainSpm can issue
+// the SPM write as soon as the bank is free.
+void CtrlLSQ::enqueueS1cToSpm(
+    int spmPhysAddr, const int* s1cData,
+    bool singleData) {
+    LsqEntry spmE{};
+    spmE.addr = spmPhysAddr;
+    spmE.accessType = AccessT::WRITE;
+    spmE.srcDstAddr = 0;
+    spmE.singleData = singleData;
+    if (singleData) {
+        int slot = lineOffset(spmPhysAddr);
+        spmE.data[slot] = s1cData[0];
+        spmE.ready[slot] = true;
+        spmE.ready[1 - slot] = true;  // unused
+    } else {
+        spmE.data[0] = s1cData[0];
+        spmE.data[1] = s1cData[1];
+        spmE.ready[0] = true;
+        spmE.ready[1] = true;
+    }
+    spmBanks[spmBank(spmPhysAddr)].push_back(spmE);
+}
+
+// SPM -> s1c (mvd): tag a standalone SPM read so its completion lands in
+// s1c[] rather than scanning s2Banks for matches.
+void CtrlLSQ::enqueueSpmToS1c(
+    int spmPhysAddr, int s1cAddr, bool singleData) {
+    LsqEntry spmE{};
+    spmE.addr = spmPhysAddr;
+    spmE.accessType = AccessT::READ;
+    spmE.srcDstAddr = 0;
+    spmE.singleData = singleData;
+    spmE.ready[0] = false;
+    spmE.ready[1] = false;
+    spmE.dest = SpmReadDest::S1C;
+    spmE.destAddr = s1cAddr;
+    spmE.destNumWords = singleData ? 1 : 2;
+    spmBanks[spmBank(spmPhysAddr)].push_back(spmE);
+}
+
+// SPM -> MM: tag a standalone SPM read so its completion calls
+// mm->issueStore. MM itself handles the latency counter; the SPM read still
+// has SPM_ACCESS_LATENCY before its data arrives.
+void CtrlLSQ::enqueueSpmReadForMm(
+    int spmPhysAddr, int mmAddr, bool singleData) {
+    LsqEntry spmE{};
+    spmE.addr = spmPhysAddr;
+    spmE.accessType = AccessT::READ;
+    spmE.srcDstAddr = 0;
+    spmE.singleData = singleData;
+    spmE.ready[0] = false;
+    spmE.ready[1] = false;
+    spmE.dest = SpmReadDest::MM;
+    spmE.destAddr = mmAddr;
+    spmE.destNumWords = singleData ? 1 : 2;
+    spmBanks[spmBank(spmPhysAddr)].push_back(spmE);
+}
+
+// MM -> SPM: MM::tick has just finished a 100-cycle load and is staging the
+// resulting line as an SPM write. Mirrors enqueueS1cToSpm — data is fully
+// ready at enqueue time.
+void CtrlLSQ::enqueueSpmWriteWithData(
+    int spmPhysAddr, const int* lineData,
+    bool singleData) {
+    LsqEntry spmE{};
+    spmE.addr = spmPhysAddr;
+    spmE.accessType = AccessT::WRITE;
+    spmE.srcDstAddr = 0;
+    spmE.singleData = singleData;
+    if (singleData) {
+        int slot = lineOffset(spmPhysAddr);
+        spmE.data[slot] = lineData[0];
+        spmE.ready[slot] = true;
+        spmE.ready[1 - slot] = true;
+    } else {
+        spmE.data[0] = lineData[0];
+        spmE.data[1] = lineData[1];
+        spmE.ready[0] = true;
+        spmE.ready[1] = true;
+    }
+    spmBanks[spmBank(spmPhysAddr)].push_back(spmE);
+}
+
 // Standalone S2 read (no paired SPM write)
 void CtrlLSQ::enqueueS2ReadOnly(int s2Addr) {
     LsqEntry s2E{};
@@ -554,6 +639,11 @@ void CtrlLSQ::drainSpm(
                 entry.srcDstAddr;
             pendingCtrlReads[b].singleData =
                 entry.singleData;
+            pendingCtrlReads[b].dest = entry.dest;
+            pendingCtrlReads[b].destAddr =
+                entry.destAddr;
+            pendingCtrlReads[b].destNumWords =
+                entry.destNumWords;
             spmBankBusy[b] = true;
             spmBanks[b].pop_front();
         } else {  // WRITE
@@ -650,42 +740,64 @@ void CtrlLSQ::dataReadyFromS2(
     // No assert: duplicate S2 reads may not match
 }
 
-// Called when SPM read completes -> fill S2 write entries.
-// Scans ALL S2 banks for matching writes.
+// Called when SPM read completes. Dispatches by dest tag:
+//   S2  -> scan S2 write entries and fill matching slots (legacy path)
+//   MM  -> synchronously call mm->issueStore for the loaded line
+//   S1C -> synchronously write into s1c[] at destAddr
 void CtrlLSQ::dataReadyFromSpm(
-    int bank, int* lineData) {
+    int bank, int* lineData, MM* mm, int* s1c) {
     assert(pendingCtrlReads[bank].valid);
     auto& pr = pendingCtrlReads[bank];
-    int readLine = lineAddr(pr.spmPhysAddr);
 
-    for (int sb = 0; sb < S2_NUM_BANKS; sb++) {
-        for (auto& s2E : s2Banks[sb]) {
-            if (s2E.accessType != AccessT::WRITE)
-                continue;
-            int S = s2E.srcDstAddr;
+    if (pr.dest == SpmReadDest::S2) {
+        int readLine = lineAddr(pr.spmPhysAddr);
+        for (int sb = 0; sb < S2_NUM_BANKS; sb++) {
+            for (auto& s2E : s2Banks[sb]) {
+                if (s2E.accessType != AccessT::WRITE)
+                    continue;
+                int S = s2E.srcDstAddr;
 
-            if (s2E.singleData) {
-                int slot = lineOffset(s2E.addr);
-                if (!s2E.ready[slot]
-                    && lineAddr(S) == readLine) {
-                    s2E.data[slot] =
-                        lineData[lineOffset(S)];
-                    s2E.ready[slot] = true;
-                }
-            } else {
-                if (!s2E.ready[0]
-                    && lineAddr(S) == readLine) {
-                    s2E.data[0] =
-                        lineData[lineOffset(S)];
-                    s2E.ready[0] = true;
-                }
-                if (!s2E.ready[1]
-                    && lineAddr(S + 1) == readLine) {
-                    s2E.data[1] =
-                        lineData[lineOffset(S+1)];
-                    s2E.ready[1] = true;
+                if (s2E.singleData) {
+                    int slot = lineOffset(s2E.addr);
+                    if (!s2E.ready[slot]
+                        && lineAddr(S) == readLine) {
+                        s2E.data[slot] =
+                            lineData[lineOffset(S)];
+                        s2E.ready[slot] = true;
+                    }
+                } else {
+                    if (!s2E.ready[0]
+                        && lineAddr(S) == readLine) {
+                        s2E.data[0] =
+                            lineData[lineOffset(S)];
+                        s2E.ready[0] = true;
+                    }
+                    if (!s2E.ready[1]
+                        && lineAddr(S + 1) == readLine) {
+                        s2E.data[1] =
+                            lineData[lineOffset(S+1)];
+                        s2E.ready[1] = true;
+                    }
                 }
             }
+        }
+    } else if (pr.dest == SpmReadDest::MM) {
+        // MM store is immediate. For singleData we forward only the
+        // requested word; otherwise the full 2-word line.
+        if (pr.singleData) {
+            int slot = lineOffset(pr.spmPhysAddr);
+            mm->issueStore(pr.destAddr,
+                &lineData[slot], 1);
+        } else {
+            mm->issueStore(pr.destAddr, lineData, 2);
+        }
+    } else { // SpmReadDest::S1C
+        if (pr.singleData) {
+            int slot = lineOffset(pr.spmPhysAddr);
+            s1c[pr.destAddr] = lineData[slot];
+        } else {
+            s1c[pr.destAddr] = lineData[0];
+            s1c[pr.destAddr + 1] = lineData[1];
         }
     }
     pr.valid = false;
@@ -732,7 +844,7 @@ bool CtrlLSQ::empty() const {
 }
 
 bool CtrlLSQ::hasPendingOps(
-    SPM* spm, S2* s2) const {
+    SPM* spm, S2* s2, const MM* mm) const {
     if (!empty()) return true;
     for (int b = 0; b < SPM_NUM_BANKS; b++) {
         if (pendingCtrlReads[b].valid) return true;
@@ -743,5 +855,82 @@ bool CtrlLSQ::hasPendingOps(
                 return true;
         }
     }
+    if (mm && mm->hasPendingOps()) return true;
     return s2->hasPendingOps();
+}
+
+// --- MM ---
+
+MM::MM() {}
+
+void MM::setBuffer(int* buf) {
+    buffer = buf;
+}
+
+void MM::issueStore(int addr, const int* data,
+                    int numWords) {
+    assert(buffer != nullptr
+           && "MM::issueStore before setBuffer");
+    for (int i = 0; i < numWords; i++)
+        buffer[addr + i] = data[i];
+    lastMMStore = MM_LATENCY;
+}
+
+void MM::issueLoad(int addr, int destId,
+                   int destAddr, int numWords,
+                   bool singleData) {
+    assert(buffer != nullptr
+           && "MM::issueLoad before setBuffer");
+    assert(numWords == 1 || numWords == 2
+           || numWords == 8);
+    MMLoadEntry e{};
+    e.addr = addr;
+    e.destId = destId;
+    e.destAddr = destAddr;
+    e.numWords = numWords;
+    e.cyclesLeft = MM_LATENCY;
+    e.singleData = singleData;
+    for (int i = 0; i < numWords; i++)
+        e.data[i] = buffer[addr + i];
+    loadQueue.push_back(e);
+}
+
+void MM::tick(CtrlLSQ* lsq, int* gr) {
+    if (lastMMStore >= 0) lastMMStore--;
+    // Decrement every entry, then drain expired heads in FIFO order.
+    for (auto& e : loadQueue) e.cyclesLeft--;
+    while (!loadQueue.empty()
+           && loadQueue.front().cyclesLeft <= 0) {
+        MMLoadEntry e = loadQueue.front();
+        loadQueue.pop_front();
+        if (e.destId == CTRL_GR) {
+            // 1-word direct write into the controller gr file.
+            gr[e.destAddr] = e.data[0];
+        } else { // CTRL_SPM
+            // Stage SPM writes via LSQ. mvdq covers 8 words = 4 lines;
+            // mv/mvd cover 1 or 2 words = 1 line.
+            if (e.numWords == 8) {
+                for (int i = 0; i < 4; i++) {
+                    int spmA = e.destAddr + 2 * i;
+                    int line[2] = {
+                        e.data[2 * i],
+                        e.data[2 * i + 1]
+                    };
+                    lsq->enqueueSpmWriteWithData(
+                        spmA, line, false);
+                }
+            } else {
+                lsq->enqueueSpmWriteWithData(
+                    e.destAddr, e.data, e.singleData);
+            }
+        }
+    }
+}
+
+bool MM::hasPendingOps() const {
+    return lastMMStore >= 0 || !loadQueue.empty();
+}
+
+bool MM::loadQueueFull() const {
+    return (int)loadQueue.size() >= MM_LATENCY;
 }

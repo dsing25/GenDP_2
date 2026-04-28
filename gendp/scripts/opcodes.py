@@ -4,6 +4,7 @@ reg = 0
 gr = 1
 SPM = 2
 comp_ib = 3
+MM = 3             # Controller-side MM (aliases comp_ib; PE never sees MM)
 ctrl_ib = 4
 s1c = 4            # Controller scratchpad (repurposed ctrl_ib)
 in_buf = 5

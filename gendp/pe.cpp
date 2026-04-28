@@ -910,6 +910,10 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             magic_id = magic_payload >> MAGIC_MASK_BITS;
             magic_mask = magic_payload & ((1 << MAGIC_MASK_BITS) - 1);
         }
+        // Magic bodies model multi-ISA-cycle hardware behavior in one C++
+        // pass; their internal gr writes are not real same-cycle VLIW
+        // writes. Suspend WAW tracking for the duration of the dispatch.
+        addr_regfile_unit->waw_suppressed = true;
 
         // Shared PE register aliases and subroutines for GWFA magic
         constexpr int DIAG_BIAS = 16384; // 0x4000
@@ -2930,6 +2934,8 @@ m23_end:    ;
             printf("qqq %d qqq\n",
                    addr_regfile_unit->at(15));
         }
+        // End of magic dispatch — restore WAW tracking for real ISA writes.
+        addr_regfile_unit->waw_suppressed = false;
         (*PC)++;
     } else if (opcode == 0) {              // add rd rs1 rs2
         rd = reg_imm_0;
