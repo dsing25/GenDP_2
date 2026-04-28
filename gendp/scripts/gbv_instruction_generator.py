@@ -596,11 +596,13 @@ def gbv_main_instruction():
     # PC 30: magic(3) - push successor to queue
     f.write(write_magic(3))
 
+    f.write(write_magic(14))
+
     # ============================================================
     # Restart Main Loop
     # ============================================================
     # PC 31: OUT_NEIGHBOR_DONE - jump back to PC 0
-    RESTART_MAIN_LOOP_OFFSET = -31
+    RESTART_MAIN_LOOP_OFFSET = -32
     f.write(data_movement_instruction(gr, gr, 0, 0, RESTART_MAIN_LOOP_OFFSET, 0, 0, 0, 0, 0, beq))
 
     # PC 32-131: Padding NOPs
@@ -653,9 +655,12 @@ def pe_instruction(pe_id):
     # Step 1: PE/Controller Timing Alignment (PC 0-8)
     # ============================================================
     # PC 0-3: Wait NOPs
-    for i in range(4):
+    for i in range(3):
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
         f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
+
+    f.write(data_movement_instruction(gr, 0, 0, 0, 10, 0, 0, 0, 0, 0, si))  # gr[10] = 0 (sync signal)
+    f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     # PC 4: gr[1] = in (node_id)
     f.write(data_movement_instruction(gr, in_port, 0, 0, 1, 0, 0, 0, 0, 0, mv))
@@ -728,12 +733,12 @@ def pe_instruction(pe_id):
     f.write(data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, none))
 
     # PC 21: Set compute PC to GNS neighbor placeholder (compute PC 113)
-    GNS_NEIGHBOR_COMPUTE_PC = 113
+    GNS_NEIGHBOR_COMPUTE_PC = 115
     f.write(data_movement_instruction(0, 0, 0, 0, GNS_NEIGHBOR_COMPUTE_PC, 0, 0, 0, 0, 0, set_PC))
     f.write(data_movement_instruction(0, 0, 0, 0, GNS_NEIGHBOR_COMPUTE_PC, 0, 0, 0, 0, 0, set_PC))
 
     # PC 22: Branch to where we call getNextSlice (originally PC 187, now PC 189 after insertion)
-    BRANCH_TO_GETNEXTSLICE_CALL = 189 - 22  # = 167
+    BRANCH_TO_GETNEXTSLICE_CALL = 175
     f.write(data_movement_instruction(gr, gr, 0, 0, BRANCH_TO_GETNEXTSLICE_CALL, 0, 0, 0, 0, 0, beq))
     f.write(data_movement_instruction(gr, gr, 0, 0, BRANCH_TO_GETNEXTSLICE_CALL, 0, 0, 0, 0, 0, beq))
 

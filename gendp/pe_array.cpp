@@ -30,7 +30,13 @@ struct GraphNode {
     uint8_t num_out_neighbors;
     bool valid;                       // Is this node slot occupied?
 
-    GraphNode() : node_id(0), length(0), num_in_neighbors(0), num_out_neighbors(0), valid(false) {
+    // Extraslice fields for graph alignment
+    uint32_t extraslice_VP;           // VP bitvector
+    uint32_t extraslice_VN;           // VN bitvector
+    int32_t extraslice_scoreEnd;      // Score at end
+
+    GraphNode() : node_id(0), length(0), num_in_neighbors(0), num_out_neighbors(0), valid(false),
+                  extraslice_VP(0xFFFFFFFF), extraslice_VN(0), extraslice_scoreEnd(-1) {
         memset(sequence, 0, sizeof(sequence));
         memset(in_neighbors, 0, sizeof(in_neighbors));
         memset(out_neighbors, 0, sizeof(out_neighbors));
@@ -142,6 +148,9 @@ struct Graph {
         nodes[0].num_out_neighbors = 1;
         nodes[0].out_neighbors[0] = 69817;
         nodes[0].valid = true;
+        nodes[0].extraslice_VP = 0xFFFFFFFF;
+        nodes[0].extraslice_VN = 0;
+        nodes[0].extraslice_scoreEnd = -1;
 
         // Node 69819: Length=1, Seq=C
         nodes[1].node_id = 69819;
@@ -173,6 +182,9 @@ struct Graph {
         nodes[3].num_out_neighbors = 1;
         nodes[3].out_neighbors[0] = 69831;
         nodes[3].valid = true;
+        nodes[3].extraslice_VN = 1;
+        nodes[3].extraslice_VP = 1229530258;  // 0x49249252
+        nodes[3].extraslice_scoreEnd = 22;
 
         // Node 69831: Length=28
         // Sequence: CTTCATTCCATTTTAGTCAGAGAAGGTA
@@ -185,6 +197,9 @@ struct Graph {
         nodes[4].out_neighbors[0] = 69819;
         nodes[4].out_neighbors[1] = 69820;
         nodes[4].valid = true;
+        nodes[4].extraslice_VN = 1;
+        nodes[4].extraslice_VP = 1227137682;  // 0x49249292 (bottom 32 bits of 10540996613550711954)
+        nodes[4].extraslice_scoreEnd = 22;
 
         printf("Hardcoded verification graph initialized: 5 nodes (69816, 69819, 69820, 69830, 69831)\n");
         printf("  Sequences stored as ASCII characters (A, C, G, T)\n");
@@ -320,8 +335,17 @@ struct PriorityQueue {
     }
 
     // Insert with priority ordering (min-heap: lowest priority at index 0)
+    // If entry with same node ID and priority exists, skip (no duplicate)
     bool insert(const QueueEntry& entry) {
         if (full()) return false;
+
+        // Check for duplicate (same node ID and same priority)
+        for (int i = 0; i < size; i++) {
+            if (entries[i].target_node == entry.target_node &&
+                entries[i].priority == entry.priority) {
+                return true;  // Already exists, skip insertion
+            }
+        }
 
         // Find insertion position (sorted insert)
         int pos = size;
@@ -865,9 +889,9 @@ if (is_magic) {
 
         // Initialize extraSlice values at SPM[4-6] (32-bit values only)
         // From GbvTraces.log:
-        SPM_unit->access_magic(0, 15) = 1;            // VN (bottom 32 bits)
-        SPM_unit->access_magic(0, 16) = 1229530258;   // VP (bottom 32 bits) = 0x49249252
-        SPM_unit->access_magic(0, 17) = 22;            // scoreEnd (regfile[25] bottom 32 bits)
+        // SPM_unit->access_magic(0, 15) = 1;            // VN (bottom 32 bits)
+        // SPM_unit->access_magic(0, 16) = 1229530258;   // VP (bottom 32 bits) = 0x49249252
+        // SPM_unit->access_magic(0, 17) = 22;            // scoreEnd (regfile[25] bottom 32 bits)
 
         // Initialize HP/HN for first node (previousSlice.HP/HN)
         SPM_unit->access_magic(0, 18) = 0xFFFFFFFF;   // HP = AllOnes (first node)
@@ -1016,6 +1040,14 @@ if (is_magic) {
 
             // Pop the entry after reading it
             // graphAlignQueue.pop();
+
+            // Write extraslice from graph node to SPM[15], SPM[16], SPM[17]
+            GraphNode* pop_node = graphStructure.getNode(top.target_node);
+            if (pop_node) {
+                write_spm_magic(15, pop_node->extraslice_VN);
+                write_spm_magic(16, pop_node->extraslice_VP);
+                write_spm_magic(17, pop_node->extraslice_scoreEnd);
+            }
 
 #ifdef PROFILE
             GraphNode* node = graphStructure.getNode(top.target_node);
@@ -1234,6 +1266,20 @@ if (is_magic) {
 #ifdef PROFILE
         printf("Magic instruction (payload=%d): CAM status -> size=%d, capacity=%d, next_addr=%u\n",
                magic_payload, sliceNodeCAM.size, MAX_SLICE_NODES, sliceNodeCAM.next_spm_addr);
+#endif
+    }
+    else if (magic_payload == 14) {
+        // Magic payload 14: Halt if queue is empty
+        // If queue is empty, halt the controller; otherwise continue
+        if (graphAlignQueue.empty()) {
+#ifdef PROFILE
+            printf("Magic instruction (payload=%d): Queue empty - HALTING controller\n", magic_payload);
+#endif
+            return -1;  // Halt
+        }
+#ifdef PROFILE
+        printf("Magic instruction (payload=%d): Queue not empty (size=%d) - continuing\n",
+               magic_payload, graphAlignQueue.size);
 #endif
     }
 
