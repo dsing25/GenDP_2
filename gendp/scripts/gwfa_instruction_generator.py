@@ -145,15 +145,21 @@ def emit_tile_load_subroutine(f):
         gr[15] = n_a (total A-diag count)
         gr[19] = s_a_off (MM base for A diags)
     Live-out:
+        gr[0]                         = 0 (zero-base invariant restored)
         gr[14] += clamp(n_a - cursor, 0, 256)
         s1c[512..515]                 = per-PE tile_n
         SPM[pe_base + 1155]           = per-PE tile_n (always)
         SPM[pe_base + 1152..1153]     = 0 only on tile_n <= 0 path
         SPM[pe_base + A_TILE_OFF .. ] = new diag tile contents
+    Contract amendment vs the plan's AC-4 clobber list: gr[0] is
+        consumed by this subroutine. The plan's clobber list omitted
+        gr[0] because the plan implicitly assumed buf_base would survive
+        the call. It does not — gr[0] is zeroed at entry (after
+        stashing buf_base in gr[23] via addi) and restored to 0 before
+        return so the rest of the controller code can keep relying on
+        the gr[0]=0 zero-base addressing invariant. Caller must
+        `si gr[0] = GWFA_BUF*_BASE` before EACH paired call.
     Clobbers: gr[0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 16, 17, 23]
-        gr[0] is zeroed at entry (after stashing buf_base in gr[23])
-        and used as the s1c zero-base register; gr[0]=0 on exit. Caller
-        must `si gr[0] = GWFA_BUF*_BASE` before each call.
     Preserved: gr[12] (step counter), gr[2] (caller flag).
 
     Returns: subroutine entry PC (paired-call target).
@@ -220,10 +226,8 @@ def emit_tile_load_subroutine(f):
         write_solo(f, data_movement_instruction(gr, s1c, 0, 0, 13, 0, 0, 0, S1C_TILE_N + pe, 0, mv))           # gr[13] = s1c[512+pe]
         write_solo(f, data_movement_instruction(gr, gr, 0, 0, end_r, 0, 0, 0, 13, 13, add))                    # gr[end] = 2 * tile_n
         write_solo(f, data_movement_instruction(gr, gr, 0, 0, end_r, 0, 0, 0, src_r, end_r, add))              # gr[end] = gr[src] + gr[end]
-        if pe == 0:
-            write_solo(f, data_movement_instruction(gr, gr, 0, 0, dst_r, 0, 0, 0, 23, 0, mv))                  # gr[dst] = gr[23]
-        else:
-            write_solo(f, data_movement_instruction(gr, gr, 0, 0, dst_r, 0, 0, 0, pe_off, 23, addi))           # gr[dst] = gr[23] + pe*8192
+        # Use addi for all PE blocks: addi reads rs2=reg_1 directly (no source_addr/gr[0] dep).
+        write_solo(f, data_movement_instruction(gr, gr, 0, 0, dst_r, 0, 0, 0, pe_off, 23, addi))               # gr[dst] = gr[23] + pe*8192
 
     # === Peel A: per-PE handle (tile_n % 4) remainder via mvd MM->SPM (2 words) ===
     for pe in range(4):
@@ -238,6 +242,9 @@ def emit_tile_load_subroutine(f):
         write_solo(f, data_movement_instruction(SPM, MM, 0, 1, 0, dst_r, 0, 1, 0, src_r, mvd))                 # mvd SPM[gr[dst]++2] = MM[gr[src]++2]
         write_solo(f, data_movement_instruction(0, 0, 0, 0, loop_top - f.pc, 0, 0, 0, 0, 0, jump))             # jump loop_top
         f.patch_imm0(_slot1(br_done), f.pc - br_done)
+
+    # Defensive barrier: drain LSQ before Peel-B to avoid bank-overflow stalls.
+    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                            # barrier
 
     # === Peel-B prep: gr[23] = min(end[pe] - src[pe]) ; subtract from each end[pe] ===
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 23, 0, 0, 0, 4, 1, sub))                             # gr[23] = gr[4] - gr[1] (PE0 resid)
@@ -295,6 +302,9 @@ def emit_tile_load_subroutine(f):
     # if any fired, repeat outer
     write_solo(f, data_movement_instruction(0, 0, 0, 0, peelb_outer - f.pc, 0, 0, 0, 0, 13, bne))              # bne 0,gr[13] -> peelb_outer
 
+    # Defensive barrier: drain LSQ after Peel-B parallel mvdq batch.
+    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                            # barrier
+
     # === Convert PE1-3 cursors to deltas relative to PE0 ; n_iters = min_resid >> 3 ===
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 5, 1, sub))                              # gr[5]  = gr[5]  - gr[1]
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 6, 0, 0, 0, 6, 3, sub))                              # gr[6]  = gr[6]  - gr[3]
@@ -316,6 +326,9 @@ def emit_tile_load_subroutine(f):
     write_solo(f, data_movement_instruction(0, 0, 0, 0, main_top - f.pc, 0, 0, 0, 0, 0, jump))                 # jump main_top
     f.patch_imm0(_slot1(br_main_done), f.pc - br_main_done)
 
+    # Defensive barrier: drain LSQ after main loop's parallel mvdq stream.
+    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                            # barrier
+
     # === Cursor advance: gr[14] += clamp(n_a - cursor, 0, 256) ===
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 15, 14, sub))                            # gr[7] = gr[15] - gr[14]
     br_clamp_skip = f.pc
@@ -324,6 +337,11 @@ def emit_tile_load_subroutine(f):
     f.patch_imm0(_slot1(br_clamp_skip), f.pc - br_clamp_skip)
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 14, 0, 0, 0, 14, 7, add))                            # gr[14] = gr[14] + gr[7]
 
+    # Explicit gr[0]=0 restore before return, documenting the contract:
+    # gr[0] is consumed by the subroutine; caller's buf_base does NOT
+    # survive the call. The rest of the controller code relies on the
+    # gr[0]=0 invariant for s1c / SPM zero-base addressing.
+    write_solo(f, data_movement_instruction(gr, 0, 0, 0, 0, 0, 0, 0, 0, 0, si))                                # gr[0] = 0 (restore zero-base invariant)
     write_paired_ret(f)
     return entry_pc
 
@@ -431,7 +449,7 @@ def gwfa_main_instruction():
     # Prime buf0 serially (nothing to overlap on first iter), then
     # prime buf1 inside the compute-overlap window so the SS loop
     # can assume both buffers are always ready.
-    write_solo(f, write_magic(MAGIC_7_BUF0))                                                             # PC 4: tile_load buf0
+    write_solo(f, write_magic(MAGIC_7_BUF0))                                                             # PC 4: tile_load buf0 (CUTOVER REVERTED — see round 1 summary)
     write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                    # barrier: magic7 writes SPM via MM
     write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                    # barrier: magic8 reads those SPM values
     write_solo(f, write_magic(MAGIC_8_BUF0))                                                             # load_seq_info buf0

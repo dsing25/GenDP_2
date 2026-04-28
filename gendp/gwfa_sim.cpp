@@ -288,12 +288,31 @@ void gwfa_simulation(
             fprintf(stderr, "Cannot open %s\n", main_instr_file.c_str());
             exit(-1);
         }
+        const int kMaxLines =
+            CTRL_INSTR_BUFFER_NUM * CTRL_INSTR_BUFFER_GROUP_SIZE;
         while (getline(fp, line)) {
+            if (read_index >= kMaxLines) {
+                fprintf(stderr,
+                    "%s exceeds capacity (%d lines, max %d). "
+                    "Regenerate with the current generator.\n",
+                    main_instr_file.c_str(),
+                    read_index + 1, kMaxLines);
+                exit(-1);
+            }
             main_instruction[read_index / 2][read_index % 2] =
                 std::stoull(line, 0, 0);
             read_index++;
         }
         fp.close();
+        if (read_index % 2 != 0) {
+            fprintf(stderr,
+                "%s has odd line count (%d); paired-slot loader "
+                "expects two lines per controller PC. Likely a "
+                "stale single-line-per-PC file from before the "
+                "paired-slot migration.\n",
+                main_instr_file.c_str(), read_index);
+            exit(-1);
+        }
     }
 
     // Load PE instructions from files
