@@ -272,11 +272,13 @@ void gwfa_simulation(
 
     pe_array *pa = new pe_array(1024, 1024);
 
-    // Load main instructions from file
+    // Load main instructions from file (two lines per PC: slot 0, slot 1)
     std::string main_instr_file = "instructions/gwfa/main_instruction.txt";
-    unsigned long main_instruction[CTRL_INSTR_BUFFER_NUM];
-    for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++)
-        main_instruction[i] = 0x42;
+    static unsigned long main_instruction[CTRL_INSTR_BUFFER_NUM][CTRL_INSTR_BUFFER_GROUP_SIZE];
+    for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {
+        main_instruction[i][0] = CTRL_NOP_INSTRUCTION;
+        main_instruction[i][1] = CTRL_NOP_INSTRUCTION;
+    }
     {
         std::fstream fp;
         std::string line;
@@ -286,8 +288,11 @@ void gwfa_simulation(
             fprintf(stderr, "Cannot open %s\n", main_instr_file.c_str());
             exit(-1);
         }
-        while (getline(fp, line))
-            main_instruction[read_index++] = std::stoull(line, 0, 0);
+        while (getline(fp, line)) {
+            main_instruction[read_index / 2][read_index % 2] =
+                std::stoull(line, 0, 0);
+            read_index++;
+        }
         fp.close();
     }
 
@@ -315,10 +320,7 @@ void gwfa_simulation(
     }
 
     for (int i = 0; i < CTRL_INSTR_BUFFER_NUM; i++) {
-        unsigned long tmp[CTRL_INSTR_BUFFER_GROUP_SIZE];
-        tmp[0] = CTRL_NOP_INSTRUCTION;
-        tmp[1] = main_instruction[i];
-        pa->main_instruction_buffer_write_from_ddr(i, tmp);
+        pa->main_instruction_buffer_write_from_ddr(i, main_instruction[i]);
         for (int j = 0; j < pe_group_size; j++)
             pa->pe_instruction_buffer_write_from_ddr(i, pe_instr[j][i], j);
     }
