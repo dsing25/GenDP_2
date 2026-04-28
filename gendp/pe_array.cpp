@@ -1292,6 +1292,18 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         } else if (magic_id == 7) {
             // GWFA tile load diags: MM → SPM directly (no S1c staging)
             // ISA-like: all state in gr[]/s1c[]/mm[]/spm[]
+            //
+            // ISA LOWERING NOTES (whole magic):
+            //   * This body should lower to a CALL'd subroutine, not a magic dispatch.
+            //     The subroutine takes ONE register argument: buf_base (= GWFA_BUF0_BASE
+            //     or GWFA_BUF1_BASE), set by the caller before each invocation. Drop the
+            //     (magic_mask & 1) selection at lowering time.
+            //   * gr-register reuse is intentional but heavily overloaded: gr[10] is
+            //     scratch in Phase 1 AND PE2's `end` in Phase 2; gr[13] is scratch /
+            //     peel-B "any-fired" flag / main-loop counter at different points.
+            //     Track liveness during lowering or rename.
+            //   * s1c read latency = 1 cycle deterministic; one NOP between load and
+            //     first consumer suffices.
             constexpr int S1C_TILE_N = 512;
             constexpr int META_OFF = 1152;
             constexpr int DIAGS_PER_PE = 64;
@@ -1301,9 +1313,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             int buf_base = (magic_mask & 1)
                 ? GWFA_BUF1_BASE : GWFA_BUF0_BASE;
             // Phase 1: compute per-PE tile_n → s1c + SPM metadata
+            // ISA LOWERING: per-PE C++ for is unrolled — replace with a `for each pe`
+            // macro since all 4 iterations are structurally identical (only gr aliases differ).
             for (int pe = 0; pe < 4; pe++) {
                 int pe_spm = pe * SPM_BANK_GROUP_SIZE + buf_base;
                 gr[10] = gr[15] - gr[14];              // sub: n_a - cursor
+                //NOP                                   // RAW separation on gr[10]
                 gr[10] = gr[10] - pe * DIAGS_PER_PE;   // subi: remaining
                 //NOP
                 if (gr[10] > DIAGS_PER_PE)              // blt
@@ -1323,38 +1338,58 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             //           PE3=gr[11,16,17]  gr[13]=peel/flag
             {
                 // Setup per-PE src (MM), dst (SPM), end
+                // ISA LOWERING: per-PE C++ for is unrolled — replace with a `for each pe`
+                // macro. PE alloc: PE0=gr[1,3,4] PE1=gr[5,6,7] PE2=gr[8,9,10] PE3=gr[11,16,17]
                 for (int pe = 0; pe < 4; pe++) {
                     int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
                     int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
                     int &end = (pe==0)?gr[4]:(pe==1)?gr[7]:(pe==2)?gr[10]:gr[17];
                     // MM src = s_a_off + (cursor + pe*64)*2
                     gr[13] = gr[14] + pe * DIAGS_PER_PE;  // addi
+                    //NOP                                   // RAW separation on gr[13]
                     gr[13] = gr[13] + gr[13];             // add: *2
+                    //NOP                                   // RAW separation on gr[13]
                     src = gr[13] + gr[19];                // add: + s_a_off
                     // end = src + 2*tile_n
-                    gr[13] = s1c[S1C_TILE_N + pe];        // mv: tile_n
-                    //NOP
+                    gr[13] = s1c[S1C_TILE_N + pe];        // mv: tile_n (s1c read, 1-cyc lat)
+                    //NOP                                   // s1c 1-cyc latency
                     end = gr[13] + gr[13];                // add: 2*tile_n
-                    //NOP
+                    //NOP                                   // RAW separation on `end`
                     end = src + end;                       // add: end
                     // SPM dst = pe_base + A_TILE_OFF
+                    // ISA LOWERING: decompose into addi sequence. pe*BANK_GROUP_SIZE is
+                    // a per-pe constant that folds at lowering; A_TILE_OFF=0 folds away.
+                    // After unrolling this is effectively:  dst = buf_base + (pe<<13)
+                    // i.e. a single `add gr,gr,imm` (or `addi`) per unrolled iter.
                     dst = pe * SPM_BANK_GROUP_SIZE + buf_base + A_TILE_OFF;
                 }
                 // Peel (handle tile_n%4 remainder)
+                // ISA LOWERING: per-PE C++ for is unrolled — `for each pe` macro.
                 for (int pe = 0; pe < 4; pe++) {
                     int &src = (pe==0)?gr[1]:(pe==1)?gr[5]:(pe==2)?gr[8]:gr[11];
                     int &dst = (pe==0)?gr[3]:(pe==1)?gr[6]:(pe==2)?gr[9]:gr[16];
-                    gr[13] = s1c[S1C_TILE_N + pe] & 3;   // andi: n%4
-                    //NOP
+                    // ISA LOWERING: split into `mv s1c→gr` + `andi`; s1c is 1-cyc
+                    // deterministic latency, so insert ONE NOP between load and andi.
+                    gr[13] = s1c[S1C_TILE_N + pe];        // mv: load tile_n (1-cyc s1c)
+                    //NOP                                   // s1c 1-cyc latency
+                    gr[13] = gr[13] & 3;                  // andi: n%4
+                    //NOP                                   // RAW separation on gr[13]
                 m7_peel:
+                    // br + decrement paired in one VLIW (br slot 1, subi slot 0 — OK).
                     if (gr[13] <= 0) goto m7_peel_done; gr[13] -= 1;
-                    spm[dst] = mm[src]; spm[dst+1] = mm[src+1]; // mvd MM→SPM
+                    // ISA LOWERING: this is ONE `mvd` MM→SPM (autoincrement, 2 words).
+                    spm[dst] = mm[src]; spm[dst+1] = mm[src+1]; // mvd MM→SPM (2 words)
                     src += 2; dst += 2;
                     goto m7_peel;
                 m7_peel_done:
                     (void)0;
                 }
                 // Second peel: equalize PE counts; then main loop
+                // ISA LOWERING: this block has many back-to-back gr[13] WAW + RAW chains.
+                // Pad with NOPs as needed and group carefully by VLIW cycle. The
+                // `if (gr[13] < gr[23]) gr[23] = gr[13]` idiom lowers to a `bge`
+                // skipping a `mv gr[23] = gr[13]` (2 ops). Min idiom can pair the
+                // skip-`bge` (slot 1) with the next sub (slot 0) of the next pair.
                 gr[23] = gr[4] - gr[1];
                 gr[13] = gr[7] - gr[5];
                 if (gr[13] < gr[23]) gr[23] = gr[13];
@@ -1363,6 +1398,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[13] = gr[17] - gr[11];
                 if (gr[13] < gr[23]) gr[23] = gr[13];
                 gr[4] -= gr[23]; gr[7] -= gr[23]; gr[10] -= gr[23]; gr[17] -= gr[23];
+            // ISA LOWERING: Peel-B (equalize) is intrinsically PE-serialized — the four
+            // mvdq's cannot share a VLIW (mvdq+mvdq is a structural hazard, controller
+            // has 1 SPM port). Each per-PE block lowers to its own VLIW pairs; pair the
+            // post-mvdq `gr+=8` with the `goto`/branch where possible. LSQ pressure:
+            // up to 4 mvdqs of 8 words can share an outer iter — keep an eye on
+            // LSQ_MAX_ENTRIES_PER_BANK=8 across banks; insert `barrier` if ever wedged.
             m7_sp_outer:
                 gr[13] = 0;
                 if (gr[1] >= gr[4]) goto m7_sp_pe1;
@@ -1389,13 +1430,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 gr[9] = gr[9] - gr[3];
                 gr[11] = gr[11] - gr[1];
                 gr[16] = gr[16] - gr[3];
+                // ISA LOWERING: logical right shift → use `shifti_r` (NOT arithmetic).
+                // gr[13] is repurposed here from the peel-B "any-fired" flag into the
+                // main-loop counter; its prior use is dead by this point.
                 gr[13] = (unsigned)gr[23] >> 3;
             m7_main_outer:
+                // br + decrement paired in one VLIW (br slot 1, subi slot 0 — OK).
                 if (gr[13] <= 0) goto m7_all_done; gr[13] -= 1;
+                // ISA LOWERING: each `mvdq` MUST occupy its own VLIW cycle (mvdq+mvdq
+                // is a structural hazard). The four mvdqs below lower to 4 sequential
+                // VLIW pairs. `mvdq` supports reg+reg base addressing, so `gr[3]+gr[6]`
+                // and `gr[1]+gr[5]` are legal as the operand base — no extra `add`
+                // needed. Pair `gr[1]+=8 ; gr[3]+=8` with the `goto m7_main_outer`.
                 mvdq_copy(&spm[gr[3]], &mm[gr[1]], 8);                   // PE0
-                mvdq_copy(&spm[gr[3]+gr[6]], &mm[gr[1]+gr[5]], 8);      // PE1
-                mvdq_copy(&spm[gr[3]+gr[9]], &mm[gr[1]+gr[8]], 8);      // PE2
-                mvdq_copy(&spm[gr[3]+gr[16]], &mm[gr[1]+gr[11]], 8);    // PE3
+                mvdq_copy(&spm[gr[3]+gr[6]], &mm[gr[1]+gr[5]], 8);      // PE1 (reg+reg base)
+                mvdq_copy(&spm[gr[3]+gr[9]], &mm[gr[1]+gr[8]], 8);      // PE2 (reg+reg base)
+                mvdq_copy(&spm[gr[3]+gr[16]], &mm[gr[1]+gr[11]], 8);    // PE3 (reg+reg base)
                 gr[1] += 8; gr[3] += 8;
                 goto m7_main_outer;
             m7_all_done:
