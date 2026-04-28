@@ -22,8 +22,6 @@ PE_FIN0_B       = 29
 # Magic IDs with mask encoding: (magic_id << 8) | mask
 # mask bit 0 = buffer index (0=buf0, 1=buf1)
 # mask bit 1 = FIN0 buffer index (0=FIN0_A, 2=FIN0_B)
-MAGIC_7_BUF0  = 7
-MAGIC_7_BUF1  = (7 << 8) | 1
 MAGIC_8_BUF0  = 8
 MAGIC_8_BUF1  = (8 << 8) | 1
 MAGIC_9_BUF0  = 9
@@ -133,8 +131,8 @@ def _slot1(pc):
     return 2 * pc + 1
 
 def emit_tile_load_subroutine(f):
-    """Lowered ISA implementation of former MAGIC_7 / MAGIC_7_BUF0 /
-    MAGIC_7_BUF1 (GWFA controller `tile_load`). Copies a tile of A
+    """Lowered ISA implementation of former magic 7 (GWFA controller
+    `tile_load`, mask=0 for PING / mask=1 for PONG). Copies a tile of A
     diagonals from MM directly into the per-PE SPM A-tile region,
     no S1c staging. PING/PONG selection is now caller-controlled
     via gr[0] = buf_base (= GWFA_BUF0_BASE or GWFA_BUF1_BASE).
@@ -159,8 +157,21 @@ def emit_tile_load_subroutine(f):
         return so the rest of the controller code can keep relying on
         the gr[0]=0 zero-base addressing invariant. Caller must
         `si gr[0] = GWFA_BUF*_BASE` before EACH paired call.
-    Clobbers: gr[0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 16, 17, 23]
-    Preserved: gr[12] (step counter), gr[2] (caller flag).
+    Clobbers: gr[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 23]
+        Note vs the plan's AC-4 clobber list: gr[13] is REMOVED (it is
+        the simulator-managed PE-sync flag — auto-written each
+        controller cycle as the AND of all PE gr[10] values per
+        pe_array.cpp:9926-9928 — and therefore unusable as a multi-PC
+        scratch register inside the subroutine; the original C++
+        magic-7 only got away with using gr[13] as scratch because the
+        magic body executes atomically in one simulator cycle, BEFORE
+        the AND-loop runs). gr[2] takes gr[13]'s scratch role; this
+        is safe because magic 8 (the next magic on every cutover
+        path) writes gr[2]=0 before reading it (pe_array.cpp:1480),
+        and magic 8 always immediately follows the post-call
+        barriers.
+    Preserved: gr[12] (step counter); gr[2] is NO LONGER preserved
+        (see clobber note above).
 
     Returns: subroutine entry PC (paired-call target).
     """
@@ -172,6 +183,12 @@ def emit_tile_load_subroutine(f):
     SPM_BANK_GROUP_SIZE_LOCAL = 8192
     PE_SRC = [1, 5, 8, 11]
     PE_DST = [3, 6, 9, 16]
+    # CTR is the multi-PC scratch register used as the Phase-2 setup
+    # tmp, the Peel-A loop counter, the Peel-B "any-fired" flag, and
+    # the main-loop counter. Was originally gr[13] in the C++ magic
+    # body, but gr[13] is the simulator-managed PE-sync AND-flag
+    # (auto-written every controller cycle), so we use gr[2] instead.
+    CTR = 2
     PE_END = [4, 7, 10, 17]
 
     entry_pc = f.pc
@@ -184,7 +201,11 @@ def emit_tile_load_subroutine(f):
     # before zeroing gr[0]. After this, every literal gr[N] read uses
     # imm_1=N, reg_1=0.
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 23, 0, 0, 0, 0, 0, addi))                            # gr[23] = gr[0] + 0 (buf_base)
-    write_solo(f, data_movement_instruction(gr, 0, 0, 0, 0, 0, 0, 0, 0, 0, si))                                # gr[0] = 0 (zero-base)
+    # mul writes rd directly via set_output_dest (no source_addr arithmetic),
+    # so this works even when gr[0]=buf_base != 0 at entry. `si gr[0]=0`
+    # would compute dest_addr = 0 + gr[0] = buf_base and write gr[buf_base]
+    # instead of gr[0] — which crashes for BUF1 (buf_base=1280, out of range).
+    write_solo(f, data_movement_instruction(gr, gr, 0, 0, 0, 0, 0, 0, 0, 0, mul))                              # gr[0] = 0 * gr[0] = 0 (zero-base)
 
     # === Phase 1: per-PE tile_n -> s1c[512+pe] + SPM meta + zero-guard ===
     for pe in range(4):
@@ -218,13 +239,13 @@ def emit_tile_load_subroutine(f):
         end_r = PE_END[pe]
         pe_off = pe * SPM_BANK_GROUP_SIZE_LOCAL
         if pe == 0:
-            write_solo(f, data_movement_instruction(gr, gr, 0, 0, 13, 0, 0, 0, 14, 0, mv))                     # gr[13] = gr[14]
+            write_solo(f, data_movement_instruction(gr, gr, 0, 0, CTR, 0, 0, 0, 14, 0, mv))                    # gr[CTR] = gr[14]
         else:
-            write_solo(f, data_movement_instruction(gr, gr, 0, 0, 13, 0, 0, 0, pe * DIAGS_PER_PE, 14, addi))   # gr[13] = gr[14] + pe*64
-        write_solo(f, data_movement_instruction(gr, gr, 0, 0, 13, 0, 0, 0, 13, 13, add))                       # gr[13] *= 2
-        write_solo(f, data_movement_instruction(gr, gr, 0, 0, src_r, 0, 0, 0, 13, 19, add))                    # gr[src] = gr[13] + gr[19]
-        write_solo(f, data_movement_instruction(gr, s1c, 0, 0, 13, 0, 0, 0, S1C_TILE_N + pe, 0, mv))           # gr[13] = s1c[512+pe]
-        write_solo(f, data_movement_instruction(gr, gr, 0, 0, end_r, 0, 0, 0, 13, 13, add))                    # gr[end] = 2 * tile_n
+            write_solo(f, data_movement_instruction(gr, gr, 0, 0, CTR, 0, 0, 0, pe * DIAGS_PER_PE, 14, addi))  # gr[CTR] = gr[14] + pe*64
+        write_solo(f, data_movement_instruction(gr, gr, 0, 0, CTR, 0, 0, 0, CTR, CTR, add))                    # gr[CTR] *= 2
+        write_solo(f, data_movement_instruction(gr, gr, 0, 0, src_r, 0, 0, 0, CTR, 19, add))                   # gr[src] = gr[CTR] + gr[19]
+        write_solo(f, data_movement_instruction(gr, s1c, 0, 0, CTR, 0, 0, 0, S1C_TILE_N + pe, 0, mv))          # gr[CTR] = s1c[512+pe]
+        write_solo(f, data_movement_instruction(gr, gr, 0, 0, end_r, 0, 0, 0, CTR, CTR, add))                  # gr[end] = 2 * tile_n
         write_solo(f, data_movement_instruction(gr, gr, 0, 0, end_r, 0, 0, 0, src_r, end_r, add))              # gr[end] = gr[src] + gr[end]
         # Use addi for all PE blocks: addi reads rs2=reg_1 directly (no source_addr/gr[0] dep).
         write_solo(f, data_movement_instruction(gr, gr, 0, 0, dst_r, 0, 0, 0, pe_off, 23, addi))               # gr[dst] = gr[23] + pe*8192
@@ -233,38 +254,35 @@ def emit_tile_load_subroutine(f):
     for pe in range(4):
         src_r = PE_SRC[pe]
         dst_r = PE_DST[pe]
-        write_solo(f, data_movement_instruction(gr, s1c, 0, 0, 13, 0, 0, 0, S1C_TILE_N + pe, 0, mv))           # gr[13] = s1c[512+pe]
-        write_solo(f, data_movement_instruction(gr, 0, 0, 0, 13, 0, 0, 0, 3, 13, ANDI))                        # gr[13] = gr[13] & 3
+        write_solo(f, data_movement_instruction(gr, s1c, 0, 0, CTR, 0, 0, 0, S1C_TILE_N + pe, 0, mv))          # gr[CTR] = s1c[512+pe]
+        write_solo(f, data_movement_instruction(gr, 0, 0, 0, CTR, 0, 0, 0, 3, CTR, ANDI))                      # gr[CTR] = gr[CTR] & 3
         loop_top = f.pc
         br_done = f.pc
-        write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 13, bge))                           # bge 0,gr[13] -> done (patched)
-        write_solo(f, data_movement_instruction(gr, gr, 0, 0, 13, 0, 0, 0, 1, 13, subi))                       # gr[13] -= 1
+        write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, CTR, bge))                          # bge 0,gr[CTR] -> done (patched)
+        write_solo(f, data_movement_instruction(gr, gr, 0, 0, CTR, 0, 0, 0, 1, CTR, subi))                     # gr[CTR] -= 1
         write_solo(f, data_movement_instruction(SPM, MM, 0, 1, 0, dst_r, 0, 1, 0, src_r, mvd))                 # mvd SPM[gr[dst]++2] = MM[gr[src]++2]
         write_solo(f, data_movement_instruction(0, 0, 0, 0, loop_top - f.pc, 0, 0, 0, 0, 0, jump))             # jump loop_top
         f.patch_imm0(_slot1(br_done), f.pc - br_done)
 
-    # Defensive barrier: drain LSQ before Peel-B to avoid bank-overflow stalls.
-    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                            # barrier
-
     # === Peel-B prep: gr[23] = min(end[pe] - src[pe]) ; subtract from each end[pe] ===
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 23, 0, 0, 0, 4, 1, sub))                             # gr[23] = gr[4] - gr[1] (PE0 resid)
     # PE1
-    write_solo(f, data_movement_instruction(gr, gr, 0, 0, 13, 0, 0, 0, 7, 5, sub))                             # gr[13] = gr[7] - gr[5]
+    write_solo(f, data_movement_instruction(gr, gr, 0, 0, CTR, 0, 0, 0, 7, 5, sub))                            # gr[CTR] = gr[7] - gr[5]
     br_pe1_skip = f.pc
-    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 13, 23, bge))                              # bge gr[13],gr[23] -> +2 (patched)
-    write_solo(f, data_movement_instruction(gr, gr, 0, 0, 23, 0, 0, 0, 13, 0, mv))                             # gr[23] = gr[13]
+    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, CTR, 23, bge))                             # bge gr[CTR],gr[23] -> +2 (patched)
+    write_solo(f, data_movement_instruction(gr, gr, 0, 0, 23, 0, 0, 0, CTR, 0, mv))                            # gr[23] = gr[CTR]
     f.patch_imm0(_slot1(br_pe1_skip), f.pc - br_pe1_skip)
     # PE2
-    write_solo(f, data_movement_instruction(gr, gr, 0, 0, 13, 0, 0, 0, 10, 8, sub))                            # gr[13] = gr[10] - gr[8]
+    write_solo(f, data_movement_instruction(gr, gr, 0, 0, CTR, 0, 0, 0, 10, 8, sub))                           # gr[CTR] = gr[10] - gr[8]
     br_pe2_skip = f.pc
-    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 13, 23, bge))                              # bge gr[13],gr[23] -> +2 (patched)
-    write_solo(f, data_movement_instruction(gr, gr, 0, 0, 23, 0, 0, 0, 13, 0, mv))                             # gr[23] = gr[13]
+    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, CTR, 23, bge))                             # bge gr[CTR],gr[23] -> +2 (patched)
+    write_solo(f, data_movement_instruction(gr, gr, 0, 0, 23, 0, 0, 0, CTR, 0, mv))                            # gr[23] = gr[CTR]
     f.patch_imm0(_slot1(br_pe2_skip), f.pc - br_pe2_skip)
     # PE3
-    write_solo(f, data_movement_instruction(gr, gr, 0, 0, 13, 0, 0, 0, 17, 11, sub))                           # gr[13] = gr[17] - gr[11]
+    write_solo(f, data_movement_instruction(gr, gr, 0, 0, CTR, 0, 0, 0, 17, 11, sub))                          # gr[CTR] = gr[17] - gr[11]
     br_pe3_skip = f.pc
-    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 13, 23, bge))                              # bge gr[13],gr[23] -> +2 (patched)
-    write_solo(f, data_movement_instruction(gr, gr, 0, 0, 23, 0, 0, 0, 13, 0, mv))                             # gr[23] = gr[13]
+    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, CTR, 23, bge))                             # bge gr[CTR],gr[23] -> +2 (patched)
+    write_solo(f, data_movement_instruction(gr, gr, 0, 0, 23, 0, 0, 0, CTR, 0, mv))                            # gr[23] = gr[CTR]
     f.patch_imm0(_slot1(br_pe3_skip), f.pc - br_pe3_skip)
     # end[pe] -= min_resid
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 4, 0, 0, 0, 4, 23, sub))                             # gr[4]  -= gr[23]
@@ -272,38 +290,35 @@ def emit_tile_load_subroutine(f):
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 10, 0, 0, 0, 10, 23, sub))                           # gr[10] -= gr[23]
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 17, 0, 0, 0, 17, 23, sub))                           # gr[17] -= gr[23]
 
-    # === Peel-B loop: serial 1-mvdq-per-PE-per-iter; gr[13] = "any-fired" flag ===
+    # === Peel-B loop: serial 1-mvdq-per-PE-per-iter; gr[CTR] = "any-fired" flag ===
     peelb_outer = f.pc
-    write_solo(f, data_movement_instruction(gr, 0, 0, 0, 13, 0, 0, 0, 0, 0, si))                               # gr[13] = 0
+    write_solo(f, data_movement_instruction(gr, 0, 0, 0, CTR, 0, 0, 0, 0, 0, si))                              # gr[CTR] = 0
     # PE0
     br_skip_pe0 = f.pc
     write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 1, 4, bge))                                # bge gr[1],gr[4] -> skip (patched)
     write_solo(f, data_movement_instruction(SPM, MM, 0, 1, 0, 3, 0, 1, 0, 1, mvdq))                            # mvdq SPM[gr[3]++8] = MM[gr[1]++8]
-    write_solo(f, data_movement_instruction(gr, 0, 0, 0, 13, 0, 0, 0, 1, 0, si))                               # gr[13] = 1
+    write_solo(f, data_movement_instruction(gr, 0, 0, 0, CTR, 0, 0, 0, 1, 0, si))                              # gr[CTR] = 1
     f.patch_imm0(_slot1(br_skip_pe0), f.pc - br_skip_pe0)
     # PE1
     br_skip_pe1 = f.pc
     write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 5, 7, bge))                                # bge gr[5],gr[7] -> skip (patched)
     write_solo(f, data_movement_instruction(SPM, MM, 0, 1, 0, 6, 0, 1, 0, 5, mvdq))                            # mvdq SPM[gr[6]++8] = MM[gr[5]++8]
-    write_solo(f, data_movement_instruction(gr, 0, 0, 0, 13, 0, 0, 0, 1, 0, si))                               # gr[13] = 1
+    write_solo(f, data_movement_instruction(gr, 0, 0, 0, CTR, 0, 0, 0, 1, 0, si))                              # gr[CTR] = 1
     f.patch_imm0(_slot1(br_skip_pe1), f.pc - br_skip_pe1)
     # PE2
     br_skip_pe2 = f.pc
     write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 8, 10, bge))                               # bge gr[8],gr[10] -> skip (patched)
     write_solo(f, data_movement_instruction(SPM, MM, 0, 1, 0, 9, 0, 1, 0, 8, mvdq))                            # mvdq SPM[gr[9]++8] = MM[gr[8]++8]
-    write_solo(f, data_movement_instruction(gr, 0, 0, 0, 13, 0, 0, 0, 1, 0, si))                               # gr[13] = 1
+    write_solo(f, data_movement_instruction(gr, 0, 0, 0, CTR, 0, 0, 0, 1, 0, si))                              # gr[CTR] = 1
     f.patch_imm0(_slot1(br_skip_pe2), f.pc - br_skip_pe2)
     # PE3
     br_skip_pe3 = f.pc
     write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 1, 0, 11, 17, bge))                              # bge gr[11],gr[17] -> skip (patched)
     write_solo(f, data_movement_instruction(SPM, MM, 0, 1, 0, 16, 0, 1, 0, 11, mvdq))                          # mvdq SPM[gr[16]++8] = MM[gr[11]++8]
-    write_solo(f, data_movement_instruction(gr, 0, 0, 0, 13, 0, 0, 0, 1, 0, si))                               # gr[13] = 1
+    write_solo(f, data_movement_instruction(gr, 0, 0, 0, CTR, 0, 0, 0, 1, 0, si))                              # gr[CTR] = 1
     f.patch_imm0(_slot1(br_skip_pe3), f.pc - br_skip_pe3)
     # if any fired, repeat outer
-    write_solo(f, data_movement_instruction(0, 0, 0, 0, peelb_outer - f.pc, 0, 0, 0, 0, 13, bne))              # bne 0,gr[13] -> peelb_outer
-
-    # Defensive barrier: drain LSQ after Peel-B parallel mvdq batch.
-    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                            # barrier
+    write_solo(f, data_movement_instruction(0, 0, 0, 0, peelb_outer - f.pc, 0, 0, 0, 0, CTR, bne))             # bne 0,gr[CTR] -> peelb_outer
 
     # === Convert PE1-3 cursors to deltas relative to PE0 ; n_iters = min_resid >> 3 ===
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 5, 0, 0, 0, 5, 1, sub))                              # gr[5]  = gr[5]  - gr[1]
@@ -312,22 +327,19 @@ def emit_tile_load_subroutine(f):
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 9, 0, 0, 0, 9, 3, sub))                              # gr[9]  = gr[9]  - gr[3]
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 11, 0, 0, 0, 11, 1, sub))                            # gr[11] = gr[11] - gr[1]
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 16, 0, 0, 0, 16, 3, sub))                            # gr[16] = gr[16] - gr[3]
-    write_solo(f, data_movement_instruction(gr, gr, 0, 0, 13, 0, 0, 0, 3, 23, shifti_r))                       # gr[13] = gr[23] >> 3
+    write_solo(f, data_movement_instruction(gr, gr, 0, 0, CTR, 0, 0, 0, 3, 23, shifti_r))                      # gr[CTR] = gr[23] >> 3
 
     # === Main loop: 4 concurrent PE mvdq's per iter; PE3 carries auto-inc on gr[3]/gr[1] ===
     main_top = f.pc
     br_main_done = f.pc
-    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 13, bge))                               # bge 0,gr[13] -> done (patched)
-    write_solo(f, data_movement_instruction(gr, gr, 0, 0, 13, 0, 0, 0, 1, 13, subi))                           # gr[13] -= 1
+    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, CTR, bge))                              # bge 0,gr[CTR] -> done (patched)
+    write_solo(f, data_movement_instruction(gr, gr, 0, 0, CTR, 0, 0, 0, 1, CTR, subi))                         # gr[CTR] -= 1
     write_solo(f, data_movement_instruction(SPM, MM, 0, 0, 0, 3, 0, 0, 0, 1, mvdq))                            # PE0: SPM[gr[3]] = MM[gr[1]]
     write_solo(f, data_movement_instruction(SPM, MM, 1, 0, 6, 3, 1, 0, 5, 1, mvdq))                            # PE1: SPM[gr[3]+gr[6]] = MM[gr[1]+gr[5]]
     write_solo(f, data_movement_instruction(SPM, MM, 1, 0, 9, 3, 1, 0, 8, 1, mvdq))                            # PE2: SPM[gr[3]+gr[9]] = MM[gr[1]+gr[8]]
     write_solo(f, data_movement_instruction(SPM, MM, 1, 1, 16, 3, 1, 1, 11, 1, mvdq))                          # PE3: SPM[gr[3]+gr[16]] = MM[gr[1]+gr[11]]; gr[3]+=8; gr[1]+=8
     write_solo(f, data_movement_instruction(0, 0, 0, 0, main_top - f.pc, 0, 0, 0, 0, 0, jump))                 # jump main_top
     f.patch_imm0(_slot1(br_main_done), f.pc - br_main_done)
-
-    # Defensive barrier: drain LSQ after main loop's parallel mvdq stream.
-    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                            # barrier
 
     # === Cursor advance: gr[14] += clamp(n_a - cursor, 0, 256) ===
     write_solo(f, data_movement_instruction(gr, gr, 0, 0, 7, 0, 0, 0, 15, 14, sub))                            # gr[7] = gr[15] - gr[14]
@@ -449,13 +461,17 @@ def gwfa_main_instruction():
     # Prime buf0 serially (nothing to overlap on first iter), then
     # prime buf1 inside the compute-overlap window so the SS loop
     # can assume both buffers are always ready.
-    write_solo(f, write_magic(MAGIC_7_BUF0))                                                             # PC 4: tile_load buf0 (CUTOVER REVERTED — see round 1 summary)
-    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                    # barrier: magic7 writes SPM via MM
+    # tile_load buf0 (former magic 7 mask=0): caller sets gr[0]=buf_base then paired call
+    write_solo(f, data_movement_instruction(gr, 0, 0, 0, 0, 0, 0, 0, GWFA_BUF0_BASE, 0, si))           # gr[0] = GWFA_BUF0_BASE
+    tile_load_call_patches.append(write_paired_call(f, 0))                                              # paired call → tile_load (patched at end)
+    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                    # barrier: tile_load writes SPM via MM
     write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                    # barrier: magic8 reads those SPM values
     write_solo(f, write_magic(MAGIC_8_BUF0))                                                             # load_seq_info buf0
     write_solo(f, data_movement_instruction(0, 0, 0, 0, PE_BUF0_COMPUTE, 0, 0, 0, 0, 0, set_PC))       # PC 6: set_PC buf0 compute
-    write_solo(f, write_magic(MAGIC_7_BUF1))                                                             # tile_load buf1 ← overlaps compute
-    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                    # barrier: magic7→8 dependency
+    # tile_load buf1 (former magic 7 mask=1): caller sets gr[0]=buf_base then paired call
+    write_solo(f, data_movement_instruction(gr, 0, 0, 0, 0, 0, 0, 0, GWFA_BUF1_BASE, 0, si))           # gr[0] = GWFA_BUF1_BASE
+    tile_load_call_patches.append(write_paired_call(f, 0))                                              # paired call → tile_load (patched at end)
+    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                    # barrier: tile_load→magic8 dependency
     write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))
     write_solo(f, write_magic(MAGIC_8_BUF1))                                                             # load_seq_info buf1 ← overlaps compute
     write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 9: spin gr[13]
@@ -469,8 +485,10 @@ def gwfa_main_instruction():
     ss_buf1 = f.pc
     write_solo(f, data_movement_instruction(0, 0, 0, 0, PE_BUF1_COMPUTE, 0, 0, 0, 0, 0, set_PC))       # PC 13: set_PC buf1 compute
     write_solo(f, write_magic(MAGIC_9_BUF0))                                                             # PC 14: writeback buf0 ← overlap
-    write_solo(f, write_magic(MAGIC_7_BUF0))                                                             # load NEXT buf0 ← overlap
-    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                    # barrier: magic7→8 dependency
+    # tile_load NEXT buf0 (former magic 7 mask=0, SS): caller sets gr[0]=buf_base then paired call
+    write_solo(f, data_movement_instruction(gr, 0, 0, 0, 0, 0, 0, 0, GWFA_BUF0_BASE, 0, si))           # gr[0] = GWFA_BUF0_BASE
+    tile_load_call_patches.append(write_paired_call(f, 0))                                              # paired call → tile_load (patched at end)
+    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                    # barrier: tile_load→magic8 dependency
     write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))
     write_solo(f, write_magic(MAGIC_8_BUF0))                                                             # load_seq_info NEXT buf0 ← overlap
     write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 17: spin gr[13]
@@ -483,8 +501,10 @@ def gwfa_main_instruction():
     # compute, overlap: writeback prev buf1 output, then load NEXT buf1.
     write_solo(f, data_movement_instruction(0, 0, 0, 0, PE_BUF0_COMPUTE, 0, 0, 0, 0, 0, set_PC))       # PC 21: set_PC buf0 compute
     write_solo(f, write_magic(MAGIC_9_BUF1))                                                             # PC 22: writeback buf1 ← overlap
-    write_solo(f, write_magic(MAGIC_7_BUF1))                                                             # load NEXT buf1 ← overlap
-    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                    # barrier: magic7→8 dependency
+    # tile_load NEXT buf1 (former magic 7 mask=1, SS): caller sets gr[0]=buf_base then paired call
+    write_solo(f, data_movement_instruction(gr, 0, 0, 0, 0, 0, 0, 0, GWFA_BUF1_BASE, 0, si))           # gr[0] = GWFA_BUF1_BASE
+    tile_load_call_patches.append(write_paired_call(f, 0))                                              # paired call → tile_load (patched at end)
+    write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))                    # barrier: tile_load→magic8 dependency
     write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, barrier))
     write_solo(f, write_magic(MAGIC_8_BUF1))                                                             # load_seq_info NEXT buf1 ← overlap
     write_solo(f, data_movement_instruction(0, 0, 0, 0, 0, 0, 0, 0, 1, 13, bne))                       # PC 25: spin gr[13]
