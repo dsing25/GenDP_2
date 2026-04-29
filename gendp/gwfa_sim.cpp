@@ -313,6 +313,33 @@ void gwfa_simulation(
                 main_instr_file.c_str(), read_index);
             exit(-1);
         }
+        // Round 10 P3 fix per Codex review. Even-line-count files
+        // also need a content check: a stale single-slot file
+        // with even N lines passes the line-count guard but gets
+        // mis-paired into N/2 PCs. Branch / jump / set_PC opcodes
+        // are slot-1-only in the paired ISA — write_solo always
+        // emits a NOP at slot 0 — so any of those at an even
+        // line index (== slot 0 of some PC) signals a stale
+        // single-slot file whose original odd-PC instructions
+        // landed in slot 0 positions after mis-pairing.
+        for (int pc = 0; pc < read_index / 2; pc++) {
+            int op = main_instruction[pc][0]
+                & ((1 << CTRL_OPCODE_WIDTH) - 1);
+            if (op == CTRL_BNE || op == CTRL_BEQ
+                || op == CTRL_BGE || op == CTRL_BLT
+                || op == CTRL_JUMP
+                || op == CTRL_SET_PC) {
+                fprintf(stderr,
+                    "%s: slot-0 of PC %d holds opcode %d "
+                    "(branch/jump/set_PC), which is "
+                    "slot-1-only in the paired ISA. Likely "
+                    "a stale single-slot file misread as "
+                    "paired. Regenerate with the current "
+                    "paired-slot generator.\n",
+                    main_instr_file.c_str(), pc, op);
+                exit(-1);
+            }
+        }
     }
 
     // Load PE instructions from files

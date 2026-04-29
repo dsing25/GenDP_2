@@ -8684,14 +8684,33 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             }
             lsq->enqueueSpmToS1c(srcA, destA, false);
 
-        // SPM <-> MM (mvd, 2 words)
+        // SPM <-> MM (mvd, 2 words). The 2-word SPM access aligns
+        // to the line pair via lineAddr(addr), so an odd SPM addr
+        // would silently read/write the [addr-1, addr] pair instead
+        // of [addr, addr+1]. Reject misalignment up front, matching
+        // the existing mvdq SPM<->MM guard. Round 10 P2 fix per
+        // Codex review.
         } else if (src == CTRL_SPM && dest == CTRL_MM) {
+            if (srcA % 2 != 0) {
+                fprintf(stderr,
+                    "main mvd SPM->MM requires even-aligned "
+                    "SPM addr (got %d). PC=%d\n",
+                    srcA, *PC);
+                exit(-1);
+            }
             if (lsq->spmBankFull(srcA)) {
                 lsqFullStalls++;
                 return 0;
             }
             lsq->enqueueSpmReadForMm(srcA, destA, false);
         } else if (src == CTRL_MM && dest == CTRL_SPM) {
+            if (destA % 2 != 0) {
+                fprintf(stderr,
+                    "main mvd MM->SPM requires even-aligned "
+                    "SPM addr (got %d). PC=%d\n",
+                    destA, *PC);
+                exit(-1);
+            }
             if (mm_unit->loadQueueFull()
                 || lsq->spmBankFull(destA)) {
                 lsqFullStalls++;
