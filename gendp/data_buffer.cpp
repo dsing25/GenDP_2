@@ -894,6 +894,14 @@ void MM::commitPendingStores() {
     pendingStores.clear();
 }
 
+void MM::reset() {
+    // Drop in-flight latency state. buffer[] is owned externally
+    // (kernel scratch buffer) and is NOT cleared here.
+    loadQueue.clear();
+    pendingStores.clear();
+    lastMMStore = -1;
+}
+
 void MM::issueLoad(int addr, int destId,
                    int destAddr, int numWords,
                    bool singleData) {

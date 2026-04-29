@@ -455,6 +455,13 @@ public:
     // slot 0 both see the pre-cycle buffer contents.
     void commitPendingStores();
 
+    // Clear all in-flight latency state: loadQueue, pendingStores,
+    // and the lastMMStore countdown. The backing buffer[] pointer is
+    // owned externally (kernel scratch) and is NOT cleared. Called
+    // from pe_array::reset_controller_state between reused cases so
+    // a cycle_limit-truncated run cannot leak MM state into the next.
+    void reset();
+
     bool hasPendingOps() const;
     bool loadQueueFull() const;
     // Returns true if the load queue can accept `n` more loads

@@ -164,6 +164,7 @@ void pe_array::reset_shared_spm() { SPM_unit->reset(); }
 void pe_array::reset_controller_state() {
     s2->reset();
     lsq->reset();
+    if (mm_unit) mm_unit->reset();
     active_event_producers.clear();
     ras = 0;
     load_data = 0;
@@ -8238,7 +8239,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         // imm+reg convention as the SPM<->S2 paths above:
         //   field 0 (reg_immBar_flag_0 / sext_imm_0 / reg_0) = dest addr
         //   field 1 (reg_immBar_flag_1 / sext_imm_1 / reg_1) = src addr
-        if (dest == CTRL_MM || src == CTRL_MM) {
+        // CTRL_MM aliases CTRL_COMP_IB (both = 3). Disambiguate by also
+        // requiring the OTHER side to be gr or SPM — the only pairings
+        // the MM dispatch supports. Existing controller traces using
+        // `mv comp_ib, in_port` / `mv out_port, comp_ib` (e.g. gbv,
+        // dvs_bsw) still flow through the legacy load/store fallback.
+        bool isMmGr  = (src == CTRL_MM && dest == CTRL_GR)
+                    || (src == CTRL_GR && dest == CTRL_MM);
+        bool isMmSpm = (src == CTRL_MM && dest == CTRL_SPM)
+                    || (src == CTRL_SPM && dest == CTRL_MM);
+        if (isMmGr || isMmSpm) {
             int destA = reg_immBar_flag_0
                 ? main_addressing_register[sext_imm_0]
                   + main_addressing_register[reg_0]
