@@ -30,13 +30,18 @@ extern "C" {
 #define NUM_INTEGER_BITS 5
 
 // SPM port restriction (controller side): an SPM access on the array
-// controller may transfer to/from gr (incl gr_lo/gr_hi), reg, s1c, or s2.
-// S2 uses a dedicated LSQ path that callers special-case before reaching
-// here; this helper is for the simple-port path.
+// controller may transfer to/from gr (incl gr_lo/gr_hi) or reg via the
+// synchronous load/store helpers. S1C and S2 are routed through the LSQ
+// (latency-modeled) by dedicated dispatch branches that special-case
+// them BEFORE reaching this helper, so they must NOT appear here.
+// Round 16 P2 fix per Codex review: removing CTRL_S1C closes the
+// synchronous-fallback hazard where scalar `mv SPM, s1c` /
+// `mv s1c, SPM` would zero-cycle SPM access. Use mvd (queued) instead.
+// CTRL_S2 was always handled by the SPM↔S2 LSQ branch; it stays out
+// here for the same reason.
 static bool ctrl_spm_target_ok(int pos) {
     return pos == CTRL_REG || pos == CTRL_GR
-        || pos == CTRL_GR_LO || pos == CTRL_GR_HI
-        || pos == CTRL_S1C   || pos == CTRL_S2;
+        || pos == CTRL_GR_LO || pos == CTRL_GR_HI;
 }
 
 #ifndef GWFA_DBG_DEFAULT
@@ -8404,19 +8409,26 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             lsq->enqueueSpmToS2(
                 spmAddr, s2Addr, true);
         } else {
-            // SPM port restriction: if either side is SPM, the other side
-            // must be a permitted target (gr/reg/s1c/s2). The S2<->SPM
-            // path is already handled above via LSQ.
+            // SPM port restriction: if either side is SPM, the other
+            // side must be a permitted target (gr/reg). S2 and S1C
+            // moves are routed through the LSQ by dedicated branches
+            // BEFORE reaching here. Scalar `mv SPM, s1c` /
+            // `mv s1c, SPM` are intentionally rejected — use mvd
+            // (queued) instead. Round 16 P2 fix per Codex review.
             if (src == CTRL_SPM && !ctrl_spm_target_ok(dest)) {
                 fprintf(stderr,
                     "main PC=%d mv: illegal SPM load dest %d"
-                    " (allowed: gr/reg/s1c/s2)\n", *PC, dest);
+                    " (allowed scalar: gr/reg; for s1c/s2 use the"
+                    " queued mvd / mv-with-LSQ paths)\n",
+                    *PC, dest);
                 exit(-1);
             }
             if (dest == CTRL_SPM && !ctrl_spm_target_ok(src)) {
                 fprintf(stderr,
                     "main PC=%d mv: illegal SPM store src %d"
-                    " (allowed: gr/reg/s1c/s2)\n", *PC, src);
+                    " (allowed scalar: gr/reg; for s1c/s2 use the"
+                    " queued mvd / mv-with-LSQ paths)\n",
+                    *PC, src);
                 exit(-1);
             }
             data = load(src, reg_immBar_flag_1,

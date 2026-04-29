@@ -8,9 +8,23 @@ extern "C" {
 #include "kernel/Gwfa/gwfa.h"
 // Pre-existing build gap: parent commit 555eb14 added gwfa_reset_mm() but
 // the pinned submodule (kernel/Gwfa @ bc36fe0) does not declare or define
-// it. Provide a weak local no-op so the build succeeds; if a future
-// submodule update supplies a real definition, the strong symbol wins.
-__attribute__((weak)) void gwfa_reset_mm(void) {}
+// it. Round 4 added a real implementation in the submodule (commit 7f88d08).
+// This weak fallback only fires if a developer is on a stale submodule
+// checkout (e.g. forgot `git submodule update --init kernel/Gwfa`). In that
+// case the per-case reset would silently no-op and `./sim -k 7 -n >1`
+// would produce stale-state corruption (case K+1 inheriting K's s_mm /
+// counters). Round 16 P2 fix per Codex review: fail fast with a clear
+// instruction to update the submodule, instead of silently degrading
+// batch-mode correctness.
+__attribute__((weak)) void gwfa_reset_mm(void) {
+    fprintf(stderr,
+        "gwfa_reset_mm: weak no-op fallback called. The kernel/Gwfa "
+        "submodule is checked out at a stale revision that does not "
+        "define gwfa_reset_mm. Run `git submodule update --init "
+        "kernel/Gwfa` to fetch the up-to-date submodule, then "
+        "rebuild with `make`.\n");
+    exit(-1);
+}
 }
 
 /* ---- Dump file helpers ---- */
