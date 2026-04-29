@@ -441,6 +441,10 @@ public:
 
     bool hasPendingOps() const;
     bool loadQueueFull() const;
+    // Returns true if the load queue can accept `n` more loads
+    // (used by willStallPair to prevent partial-pair commits when
+    // the second-decoded slot would overflow MM_LATENCY).
+    bool loadQueueCanFit(int n) const;
 
 private:
     int* buffer = nullptr;

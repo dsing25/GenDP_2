@@ -9296,9 +9296,10 @@ void pe_array::process_events() {
 bool pe_array::willStallPair(
     unsigned long slot0, unsigned long slot1)
 {
-    // Combined address lists for canEnqueue
+    // Combined resource counts for canEnqueue + MM queue check.
     int spmAddrs[10], s2Addrs[10];
     int nSpm = 0, nS2 = 0;
+    int nMmLoads = 0;
 
     unsigned long instrs[2] = {slot0, slot1};
     for (int s = 0; s < 2; s++) {
@@ -9320,36 +9321,40 @@ bool pe_array::willStallPair(
 
         bool srcSpm  = (src  == CTRL_SPM);
         bool srcS2   = (src  == CTRL_S2);
+        bool srcMm   = (src  == CTRL_MM);
+        bool srcS1c  = (src  == CTRL_S1C);
         bool destSpm = (dest == CTRL_SPM);
         bool destS2  = (dest == CTRL_S2);
+        bool destMm  = (dest == CTRL_MM);
+        bool destS1c = (dest == CTRL_S1C);
+        bool destGr  = (dest == CTRL_GR);
         bool spmS2   = (srcSpm && destS2)
                      || (srcS2 && destSpm);
+        bool spmMm   = (srcSpm && destMm)
+                     || (srcMm && destSpm);
+        bool spmS1c  = (srcSpm && destS1c)
+                     || (srcS1c && destSpm);
+
+        // dest uses field 0 (riB0/imm0/r0); src uses field 1
+        // (riB1/imm1/r1). For pairs with one side SPM the SPM-bank
+        // address comes from the SPM-side field.
+        int addr0 = (riB0
+            ? main_addressing_register[imm0 & 0x1F]
+            : imm0)
+            + main_addressing_register[r0];
+        int addr1 = (riB1
+            ? main_addressing_register[imm1 & 0x1F]
+            : imm1)
+            + main_addressing_register[r1];
 
         if (opcode == 5 && spmS2) {
             // mv SPM<->S2: one spm addr, one s2 addr
-            int addr0 = (riB0
-                ? main_addressing_register[imm0 & 0x1F]
-                : imm0)
-                + main_addressing_register[r0];
-            int addr1 = (riB1
-                ? main_addressing_register[imm1 & 0x1F]
-                : imm1)
-                + main_addressing_register[r1];
-            // dest uses addr0 (field 0), src uses addr1
             int spmA = destSpm ? addr0 : addr1;
             int s2A  = destS2  ? addr0 : addr1;
             spmAddrs[nSpm++] = spmA;
             s2Addrs[nS2++]   = s2A;
         } else if (opcode == CTRL_MVDQ && spmS2) {
             // mvdq SPM<->S2: 4-5 entries each side
-            int addr0 = (riB0
-                ? main_addressing_register[imm0 & 0x1F]
-                : imm0)
-                + main_addressing_register[r0];
-            int addr1 = (riB1
-                ? main_addressing_register[imm1 & 0x1F]
-                : imm1)
-                + main_addressing_register[r1];
             int spmA = destSpm ? addr0 : addr1;
             int s2A  = destS2  ? addr0 : addr1;
             // Even/odd bank patterns (mirrors decode)
@@ -9373,10 +9378,45 @@ bool pe_array::willStallPair(
                 s2Addrs[nS2++] = s2A + 5;
                 s2Addrs[nS2++] = s2A + 7;
             }
+        } else if (opcode == 5 && srcMm && destGr) {
+            // mv MM->gr: 1 MM load. (mv gr->MM uses issueStore which
+            // does not block on the load queue and has no SPM side.)
+            nMmLoads++;
+        } else if (opcode == 5 && spmMm) {
+            // mv SPM<->MM: 1 SPM bank entry; MM->SPM also needs 1 MM load.
+            int spmA = destSpm ? addr0 : addr1;
+            spmAddrs[nSpm++] = spmA;
+            if (srcMm) nMmLoads++;
+        } else if (opcode == 5 && spmS1c) {
+            // mv s1c<->SPM: 1 SPM bank entry.
+            int spmA = destSpm ? addr0 : addr1;
+            spmAddrs[nSpm++] = spmA;
+        } else if (opcode == CTRL_MVD && spmS1c) {
+            // mvd s1c<->SPM: 1 SPM bank entry (per current decode).
+            int spmA = destSpm ? addr0 : addr1;
+            spmAddrs[nSpm++] = spmA;
+        } else if (opcode == CTRL_MVD && spmMm) {
+            // mvd SPM<->MM: 1 SPM bank entry; MM->SPM also needs 1 MM load.
+            int spmA = destSpm ? addr0 : addr1;
+            spmAddrs[nSpm++] = spmA;
+            if (srcMm) nMmLoads++;
+        } else if (opcode == CTRL_MVDQ && spmMm) {
+            // mvdq SPM<->MM: 4 SPM bank entries; MM->SPM also needs 1 MM load.
+            int spmA = destSpm ? addr0 : addr1;
+            for (int i = 0; i < 4; i++)
+                spmAddrs[nSpm++] = spmA + 2*i;
+            if (srcMm) nMmLoads++;
         }
         // All other opcodes (including barrier): no stall
     }
 
+    if (nMmLoads > 0 && mm_unit) {
+        // The pair must stall TOGETHER if all of its MM loads would
+        // not fit. The naive per-instruction `loadQueueFull()` check
+        // can let slot 1 enqueue while slot 0 then sees the queue
+        // already at capacity, causing a partial-pair commit.
+        if (!mm_unit->loadQueueCanFit(nMmLoads)) return true;
+    }
     if (nSpm == 0 && nS2 == 0) return false;
     return !lsq->canEnqueue(
         spmAddrs, nSpm, s2Addrs, nS2);

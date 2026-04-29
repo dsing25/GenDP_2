@@ -934,3 +934,7 @@ bool MM::hasPendingOps() const {
 bool MM::loadQueueFull() const {
     return (int)loadQueue.size() >= MM_LATENCY;
 }
+
+bool MM::loadQueueCanFit(int n) const {
+    return (int)loadQueue.size() + n <= MM_LATENCY;
+}
