@@ -406,12 +406,19 @@ private:
 //
 // MM is a large external buffer (allocated by the GWFA library and handed in
 // via setBuffer). The simulator wraps it for two reasons:
-//   * Stores: bump lastMMStore = MM_LATENCY; barrier blocks until counter
-//     ticks below 0. The store data hits the buffer immediately, so the
-//     counter is only there to model flush completion for waitLsq.
+//   * Stores: enqueue an MMStoreEntry with cyclesLeft = MM_LATENCY. On each
+//     tick the entry's counter decrements; when it expires the store data
+//     is committed to buffer[]. Until then the store is INVISIBLE — a load
+//     issued before the store retires will snapshot the pre-store buffer[]
+//     contents. This models the documented 100-cycle MM store latency that
+//     `barrier` / `waitLsq` paths must respect.
 //   * Loads: enqueue an MMLoadEntry with cyclesLeft = MM_LATENCY. When it
 //     expires, route the data: gr -> direct write; SPM -> stage SPM writes
 //     via the LSQ (one per line).
+// Same-cycle paired-slot semantics fall out for free: a slot-1 store and
+// slot-0 load in the same cycle both touch buffer[] before any tick has
+// advanced the just-pushed store's cyclesLeft, so the load reads the
+// pre-store value.
 struct MMLoadEntry {
     int addr;
     int destId;              // CTRL_GR or CTRL_SPM
@@ -422,14 +429,17 @@ struct MMLoadEntry {
     bool singleData;         // for 1-word destined to gr/SPM
 };
 
-// Deferred MM store entry. Controller-side `mv gr -> MM` (and the LSQ
-// completion path for `mvd SPM -> MM`) call `issueStore` during slot
-// decode; the actual buffer write is deferred to end-of-cycle so paired
-// VLIW slots both observe pre-cycle MM contents.
+// Pending MM store entry. Controller-side `mv gr -> MM` (and the LSQ
+// completion path for `mvd SPM -> MM` / `mvdq SPM -> MM`) call
+// `issueStore`, which queues an entry with cyclesLeft = MM_LATENCY. The
+// store does NOT touch buffer[] at issue time. MM::tick decrements the
+// counter every cycle and drains entries whose cyclesLeft has reached 0,
+// committing their data into buffer[] in FIFO order.
 struct MMStoreEntry {
     int addr;
     int data[8];   // up to 8 words (matches mvdq line size)
     int numWords;
+    int cyclesLeft;
 };
 
 class MM {
@@ -449,17 +459,11 @@ public:
     // controller's main_addressing_register array for direct writes.
     void tick(CtrlLSQ* lsq, int* gr);
 
-    // Apply queued MM stores to buffer[]. Called at end-of-cycle from
-    // pe_array::run after both slot decodes and LSQ tick complete, so
-    // a paired-slot pair that issues a store in slot 1 and a load in
-    // slot 0 both see the pre-cycle buffer contents.
-    void commitPendingStores();
-
-    // Clear all in-flight latency state: loadQueue, pendingStores,
-    // and the lastMMStore countdown. The backing buffer[] pointer is
-    // owned externally (kernel scratch) and is NOT cleared. Called
-    // from pe_array::reset_controller_state between reused cases so
-    // a cycle_limit-truncated run cannot leak MM state into the next.
+    // Clear all in-flight latency state: loadQueue and pendingStores.
+    // The backing buffer[] pointer is owned externally (kernel scratch)
+    // and is NOT cleared. Called from pe_array::reset_controller_state
+    // between reused cases so a cycle_limit-truncated run cannot leak
+    // MM state into the next.
     void reset();
 
     bool hasPendingOps() const;
@@ -471,9 +475,8 @@ public:
 
 private:
     int* buffer = nullptr;
-    int lastMMStore = -1;
     std::deque<MMLoadEntry> loadQueue;
-    std::vector<MMStoreEntry> pendingStores;
+    std::deque<MMStoreEntry> pendingStores;
 };
 
 #endif // DATA_BUFFER_H

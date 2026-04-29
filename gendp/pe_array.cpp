@@ -9756,12 +9756,11 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         main_addressing_register[13] = pe_unit[0]->get_gr_10() && pe_unit[1]->get_gr_10();
         for (i = 2; i < setting; i++)
             main_addressing_register[13] = main_addressing_register[13] && pe_unit[i]->get_gr_10();
-        // End-of-cycle: drain any deferred MM stores. Stores from
-        // either slot's `mv gr->MM` and from LSQ-tick SPM->MM
-        // completions are queued by MM::issueStore and applied here so
-        // the next cycle's MM::tick (and any same-cycle slot 0 load)
-        // observed the pre-cycle MM contents.
-        mm_unit->commitPendingStores();
+        // Round 8 P1 fix per Codex review: deleted the end-of-cycle
+        // commitPendingStores() call. Stores now retire via MM::tick
+        // after MM_LATENCY cycles, which preserves both the documented
+        // store latency and the same-cycle paired-slot pre-cycle-read
+        // semantics for free.
         if (flag == -1 || cycle == cycle_limit) {
             printf("cycle %d\n", cycle);
             break;

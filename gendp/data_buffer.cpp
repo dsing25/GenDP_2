@@ -782,8 +782,10 @@ void CtrlLSQ::dataReadyFromSpm(
             }
         }
     } else if (pr.dest == SpmReadDest::MM) {
-        // MM store is immediate. For singleData we forward only the
-        // requested word; otherwise the full 2-word line.
+        // MM store gets queued in MM with cyclesLeft = MM_LATENCY;
+        // the buffer write is deferred until the entry retires via
+        // MM::tick (Round 8 P1 fix). For singleData we forward only
+        // the requested word; otherwise the full 2-word line.
         if (pr.singleData) {
             int slot = lineOffset(pr.spmPhysAddr);
             mm->issueStore(pr.destAddr,
@@ -872,26 +874,17 @@ void MM::issueStore(int addr, const int* data,
     assert(buffer != nullptr
            && "MM::issueStore before setBuffer");
     assert(numWords >= 1 && numWords <= 8);
-    // Defer the buffer write so paired-slot semantics hold: in
-    // pe_array::run() slot 1 decodes before slot 0, but both must
-    // observe pre-cycle MM state. commitPendingStores() drains this
-    // queue at end-of-cycle, after both slot decodes and LSQ tick.
+    // Defer the buffer write by MM_LATENCY cycles. Loads issued
+    // before the entry retires snapshot the pre-store buffer[]
+    // contents — exactly the documented MM store-latency behavior
+    // that GWFA's `barrier` / `waitLsq` paths must respect.
     MMStoreEntry e;
     e.addr = addr;
     e.numWords = numWords;
+    e.cyclesLeft = MM_LATENCY;
     for (int i = 0; i < numWords; i++)
         e.data[i] = data[i];
     pendingStores.push_back(e);
-    lastMMStore = MM_LATENCY;
-}
-
-void MM::commitPendingStores() {
-    if (buffer == nullptr) return;
-    for (const auto& e : pendingStores) {
-        for (int i = 0; i < e.numWords; i++)
-            buffer[e.addr + i] = e.data[i];
-    }
-    pendingStores.clear();
 }
 
 void MM::reset() {
@@ -899,7 +892,6 @@ void MM::reset() {
     // (kernel scratch buffer) and is NOT cleared here.
     loadQueue.clear();
     pendingStores.clear();
-    lastMMStore = -1;
 }
 
 void MM::issueLoad(int addr, int destId,
@@ -922,11 +914,46 @@ void MM::issueLoad(int addr, int destId,
 }
 
 void MM::tick(CtrlLSQ* lsq, int* gr) {
-    if (lastMMStore >= 0) lastMMStore--;
-    // Decrement every entry, then drain expired heads in FIFO order.
+    // Decrement every store entry, then drain expired heads in FIFO
+    // order, committing them to buffer[]. Round 8 P1 fix per Codex
+    // review: stores were previously committed at end-of-cycle, which
+    // bypassed the documented MM store latency for the issuing path.
+    for (auto& e : pendingStores) e.cyclesLeft--;
+    while (!pendingStores.empty()
+           && pendingStores.front().cyclesLeft <= 0) {
+        const MMStoreEntry& e = pendingStores.front();
+        for (int i = 0; i < e.numWords; i++)
+            buffer[e.addr + i] = e.data[i];
+        pendingStores.pop_front();
+    }
+
+    // Decrement every load entry, then drain expired heads in FIFO order.
     for (auto& e : loadQueue) e.cyclesLeft--;
     while (!loadQueue.empty()
            && loadQueue.front().cyclesLeft <= 0) {
+        const MMLoadEntry& front = loadQueue.front();
+        if (front.destId == CTRL_SPM) {
+            // Round 8 P2 fix per Codex review: the issue-time
+            // spmBankFull check ran 100 cycles ago. By now,
+            // unrelated controller traffic may have filled the
+            // target SPM bank(s). Without a capacity check here,
+            // the LSQ would silently grow past
+            // LSQ_MAX_ENTRIES_PER_BANK. If any required bank is
+            // full, leave the entry at the queue front and retry
+            // on the next tick (back-pressure stalls subsequent
+            // MM completions in FIFO order, which is correct).
+            int spmAddrs[4];
+            int nSpm = (front.numWords == 8) ? 4 : 1;
+            if (front.numWords == 8) {
+                for (int i = 0; i < 4; i++)
+                    spmAddrs[i] = front.destAddr + 2 * i;
+            } else {
+                spmAddrs[0] = front.destAddr;
+            }
+            if (!lsq->canEnqueue(spmAddrs, nSpm,
+                                 nullptr, 0))
+                break; // stall: try again next tick
+        }
         MMLoadEntry e = loadQueue.front();
         loadQueue.pop_front();
         if (e.destId == CTRL_GR) {
@@ -954,7 +981,8 @@ void MM::tick(CtrlLSQ* lsq, int* gr) {
 }
 
 bool MM::hasPendingOps() const {
-    return lastMMStore >= 0 || !loadQueue.empty();
+    return !pendingStores.empty()
+        || !loadQueue.empty();
 }
 
 bool MM::loadQueueFull() const {
