@@ -901,6 +901,22 @@ void MM::issueLoad(int addr, int destId,
            && "MM::issueLoad before setBuffer");
     assert(numWords == 1 || numWords == 2
            || numWords == 8);
+    // Round 13 P3 fix per Codex review: bounds-check the
+    // destination at issue time. Without this, an out-of-range
+    // gr index would silently sit in the load queue for
+    // MM_LATENCY cycles and then OOB-write `gr[e.destAddr]` in
+    // tick(). The synchronous controller paths reject malformed
+    // addresses immediately; the deferred MM path must too.
+    if (destId == CTRL_GR) {
+        if (destAddr < 0
+            || destAddr >= MAIN_ADDR_REGISTER_NUM) {
+            fprintf(stderr,
+                "MM::issueLoad gr destAddr %d out of "
+                "bounds [0, %d).\n",
+                destAddr, MAIN_ADDR_REGISTER_NUM);
+            exit(-1);
+        }
+    }
     MMLoadEntry e{};
     e.addr = addr;
     e.destId = destId;

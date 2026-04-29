@@ -8307,6 +8307,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     destA, 1, true);
             } else if (src == CTRL_SPM
                        && dest == CTRL_MM) {
+                // Round 13 P2 fix per Codex review: validate the
+                // SPM address before spmBankFull, which would
+                // otherwise compute a bank index past spmBanks[].
+                if (srcA < 0 || srcA >= SPM_ADDR_NUM) {
+                    fprintf(stderr,
+                        "main mv SPM->MM SPM addr %d out of "
+                        "bounds [0, %d). PC=%d\n",
+                        srcA, SPM_ADDR_NUM, *PC);
+                    exit(-1);
+                }
                 if (lsq->spmBankFull(srcA)) {
                     lsqFullStalls++;
                     return 0;
@@ -8314,6 +8324,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 lsq->enqueueSpmReadForMm(srcA, destA, true);
             } else if (src == CTRL_MM
                        && dest == CTRL_SPM) {
+                if (destA < 0 || destA >= SPM_ADDR_NUM) {
+                    fprintf(stderr,
+                        "main mv MM->SPM SPM addr %d out of "
+                        "bounds [0, %d). PC=%d\n",
+                        destA, SPM_ADDR_NUM, *PC);
+                    exit(-1);
+                }
                 if (mm_unit->loadQueueFull()
                     || lsq->spmBankFull(destA)) {
                     lsqFullStalls++;
@@ -8717,6 +8734,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     srcA, S1C_SIZE - 1, *PC);
                 exit(-1);
             }
+            if (destA < 0 || destA + 1 >= SPM_ADDR_NUM) {
+                fprintf(stderr,
+                    "main mvd S1C->SPM SPM addr %d out of "
+                    "bounds [0, %d). PC=%d\n",
+                    destA, SPM_ADDR_NUM, *PC);
+                exit(-1);
+            }
             if (lsq->spmBankFull(destA)) {
                 lsqFullStalls++;
                 return 0;
@@ -8740,6 +8764,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     destA, S1C_SIZE - 1, *PC);
                 exit(-1);
             }
+            if (srcA < 0 || srcA + 1 >= SPM_ADDR_NUM) {
+                fprintf(stderr,
+                    "main mvd SPM->S1C SPM addr %d out of "
+                    "bounds [0, %d). PC=%d\n",
+                    srcA, SPM_ADDR_NUM, *PC);
+                exit(-1);
+            }
             if (lsq->spmBankFull(srcA)) {
                 lsqFullStalls++;
                 return 0;
@@ -8760,6 +8791,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     srcA, *PC);
                 exit(-1);
             }
+            if (srcA < 0 || srcA + 1 >= SPM_ADDR_NUM) {
+                fprintf(stderr,
+                    "main mvd SPM->MM SPM addr %d out of "
+                    "bounds [0, %d). PC=%d\n",
+                    srcA, SPM_ADDR_NUM, *PC);
+                exit(-1);
+            }
             if (lsq->spmBankFull(srcA)) {
                 lsqFullStalls++;
                 return 0;
@@ -8771,6 +8809,13 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     "main mvd MM->SPM requires even-aligned "
                     "SPM addr (got %d). PC=%d\n",
                     destA, *PC);
+                exit(-1);
+            }
+            if (destA < 0 || destA + 1 >= SPM_ADDR_NUM) {
+                fprintf(stderr,
+                    "main mvd MM->SPM SPM addr %d out of "
+                    "bounds [0, %d). PC=%d\n",
+                    destA, SPM_ADDR_NUM, *PC);
                 exit(-1);
             }
             if (mm_unit->loadQueueFull()
