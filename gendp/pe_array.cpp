@@ -8667,8 +8667,28 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             : sext_imm_1
               + main_addressing_register[reg_1];
 
-        // s1c <-> SPM (mvd, 2 words, queued via LSQ)
+        // s1c <-> SPM (mvd, 2 words, queued via LSQ). Both sides
+        // need address validation up front: the SPM access aligns
+        // to lineAddr(addr) so an odd SPM addr would silently read
+        // /write [addr-1, addr]; the S1C side reads / writes
+        // [srcA / destA, +1], so a value of S1C_SIZE-1 runs past
+        // the scratchpad. Round 11 P2 fix per Codex review;
+        // mirrors the mvdq / mvd MM<->SPM alignment guards below.
         if (src == CTRL_S1C && dest == CTRL_SPM) {
+            if (destA % 2 != 0) {
+                fprintf(stderr,
+                    "main mvd S1C->SPM requires even-aligned "
+                    "SPM addr (got %d). PC=%d\n",
+                    destA, *PC);
+                exit(-1);
+            }
+            if (srcA < 0 || srcA + 1 >= S1C_SIZE) {
+                fprintf(stderr,
+                    "main mvd S1C->SPM S1C addr %d out of "
+                    "bounds [0, %d). PC=%d\n",
+                    srcA, S1C_SIZE - 1, *PC);
+                exit(-1);
+            }
             if (lsq->spmBankFull(destA)) {
                 lsqFullStalls++;
                 return 0;
@@ -8678,6 +8698,20 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             };
             lsq->enqueueS1cToSpm(destA, s1cData, false);
         } else if (src == CTRL_SPM && dest == CTRL_S1C) {
+            if (srcA % 2 != 0) {
+                fprintf(stderr,
+                    "main mvd SPM->S1C requires even-aligned "
+                    "SPM addr (got %d). PC=%d\n",
+                    srcA, *PC);
+                exit(-1);
+            }
+            if (destA < 0 || destA + 1 >= S1C_SIZE) {
+                fprintf(stderr,
+                    "main mvd SPM->S1C S1C addr %d out of "
+                    "bounds [0, %d). PC=%d\n",
+                    destA, S1C_SIZE - 1, *PC);
+                exit(-1);
+            }
             if (lsq->spmBankFull(srcA)) {
                 lsqFullStalls++;
                 return 0;
