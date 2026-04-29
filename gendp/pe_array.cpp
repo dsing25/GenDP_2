@@ -9476,6 +9476,21 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     while (1) {
         cycle++;
         old_PC = main_PC;
+
+        // MM tick FIRST. Round 9 P2 fix per Codex review: SPM->MM
+        // completions fire from process_events() (via
+        // CtrlLSQ::dataReadyFromSpm calling mm->issueStore), and
+        // mv gr->MM stores fire later from slot decode. Both paths
+        // push pendingStores with cyclesLeft = MM_LATENCY. If
+        // mm_unit->tick() ran AFTER process_events(), the
+        // just-pushed SPM->MM entries would be decremented this
+        // cycle while gr->MM entries (issued post-tick) would not
+        // — making SPM-sourced stores retire one cycle early. By
+        // ticking BEFORE both push sites, all pendingStores see
+        // their first decrement on the NEXT cycle, regardless of
+        // source path.
+        mm_unit->tick(lsq, main_addressing_register);
+
         process_events();
 
         // S2 tick: advance pipelines, route completions
@@ -9485,11 +9500,6 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
                 lsq->dataReadyFromS2(
                     c.s2Addr, c.data);
         }
-
-        // MM tick: decrement store-flush counter and drain expired loads.
-        // Expired loads either write directly to gr or stage SPM writes via
-        // the LSQ (handled below in the drain step).
-        mm_unit->tick(lsq, main_addressing_register);
 
         // Pre-check: if either slot would stall on LSQ,
         // skip both to prevent double-execution bugs.
