@@ -1,4 +1,5 @@
 #include "data_buffer.h"
+#include "pe_array.h"
 #include <iomanip>
 #include <cassert>
 
@@ -929,7 +930,7 @@ void MM::issueLoad(int addr, int destId,
     loadQueue.push_back(e);
 }
 
-void MM::tick(CtrlLSQ* lsq, int* gr) {
+void MM::tick(CtrlLSQ* lsq, pe_array* parr) {
     // Decrement every store entry, then drain expired heads in FIFO
     // order, committing them to buffer[]. Round 8 P1 fix per Codex
     // review: stores were previously committed at end-of-cycle, which
@@ -973,8 +974,15 @@ void MM::tick(CtrlLSQ* lsq, int* gr) {
         MMLoadEntry e = loadQueue.front();
         loadQueue.pop_front();
         if (e.destId == CTRL_GR) {
-            // 1-word direct write into the controller gr file.
-            gr[e.destAddr] = e.data[0];
+            // Round 14 P2 fix per Codex review: route through
+            // pe_array::set_main_gr so a same-cycle slot 0/1
+            // write to the same gr trips the WAW tracker
+            // instead of silently clobbering. MM_LATENCY is
+            // fixed, so a program that reuses the destination
+            // gr exactly MM_LATENCY cycles after issue would
+            // otherwise hit a deterministic silent clobber.
+            parr->set_main_gr(e.destAddr, e.data[0],
+                CTRL_GR, "MM->gr");
         } else { // CTRL_SPM
             // Stage SPM writes via LSQ. mvdq covers 8 words = 4 lines;
             // mv/mvd cover 1 or 2 words = 1 line.

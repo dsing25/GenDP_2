@@ -442,6 +442,13 @@ struct MMStoreEntry {
     int cyclesLeft;
 };
 
+// Forward declaration so MM::tick can route gr completions through
+// pe_array::set_main_gr (which enforces same-cycle WAW tracking).
+// pe_array.h includes pe.h which includes data_buffer.h, so we can
+// only depend on pe_array via forward decl here; data_buffer.cpp
+// includes pe_array.h to actually call set_main_gr.
+class pe_array;
+
 class MM {
 public:
     MM();
@@ -455,9 +462,11 @@ public:
                    int destAddr, int numWords,
                    bool singleData);
 
-    // Advance one cycle. lsq routes SPM-bound completions; gr is the
-    // controller's main_addressing_register array for direct writes.
-    void tick(CtrlLSQ* lsq, int* gr);
+    // Advance one cycle. lsq routes SPM-bound completions; parr's
+    // set_main_gr() handles gr completions so same-cycle slot
+    // writes vs. MM completions trip the controller WAW tracker
+    // instead of silently clobbering. Round 14 P2 fix.
+    void tick(CtrlLSQ* lsq, pe_array* parr);
 
     // Clear all in-flight latency state: loadQueue and pendingStores.
     // The backing buffer[] pointer is owned externally (kernel scratch)

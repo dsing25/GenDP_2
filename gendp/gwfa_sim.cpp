@@ -322,9 +322,21 @@ void gwfa_simulation(
         // line index (== slot 0 of some PC) signals a stale
         // single-slot file whose original odd-PC instructions
         // landed in slot 0 positions after mis-pairing.
+        //
+        // Round 14 P2 fix per Codex review. Magic instructions set
+        // bit 63 and pack a 32-bit magic-id into the low bits, so
+        // their low 5 bits can collide with any opcode value
+        // (e.g. magic-id 8 has low-5-bits == CTRL_BNE). pe_array
+        // dispatches magics before opcode-decoding, so a slot-0
+        // magic with id ∈ {8,9,10,11,12,13} is legal even though
+        // its low 5 bits look like a branch / jump / set_PC. Skip
+        // the opcode check for any word whose top bit is set.
         for (int pc = 0; pc < read_index / 2; pc++) {
-            int op = main_instruction[pc][0]
-                & ((1 << CTRL_OPCODE_WIDTH) - 1);
+            unsigned long instr = main_instruction[pc][0];
+            // Magic-instruction marker: bit 63 set.
+            if (instr & (1UL << 63)) continue;
+            int op = (int)(instr
+                & ((1 << CTRL_OPCODE_WIDTH) - 1));
             if (op == CTRL_BNE || op == CTRL_BEQ
                 || op == CTRL_BGE || op == CTRL_BLT
                 || op == CTRL_JUMP

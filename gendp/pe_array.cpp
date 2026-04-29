@@ -9615,7 +9615,7 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         // ticking BEFORE both push sites, all pendingStores see
         // their first decrement on the NEXT cycle, regardless of
         // source path.
-        mm_unit->tick(lsq, main_addressing_register);
+        mm_unit->tick(lsq, this);
 
         process_events();
 
