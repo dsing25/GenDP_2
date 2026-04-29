@@ -8251,15 +8251,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                   + main_addressing_register[reg_1];
 
             if (src == CTRL_GR && dest == CTRL_MM) {
-                int val = main_addressing_register[reg_1];
+                // GR source: srcA is the gr index per the standard
+                // imm + gr[reg] convention (matches load()/store()).
+                // Bare reg_1 was wrong for the common imm=N, reg=0
+                // encoding — that wrote gr[0] instead of gr[N].
+                int val = main_addressing_register[srcA];
                 mm_unit->issueStore(destA, &val, 1);
             } else if (src == CTRL_MM && dest == CTRL_GR) {
                 if (mm_unit->loadQueueFull()) {
                     lsqFullStalls++;
                     return 0;
                 }
+                // GR dest: destA is the gr index per the standard
+                // imm + gr[reg] convention. Bare reg_0 was wrong for
+                // the common imm=N, reg=0 encoding.
                 mm_unit->issueLoad(srcA, CTRL_GR,
-                    reg_0, 1, true);
+                    destA, 1, true);
             } else if (src == CTRL_SPM
                        && dest == CTRL_MM) {
                 if (lsq->spmBankFull(srcA)) {
@@ -9739,6 +9746,12 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         main_addressing_register[13] = pe_unit[0]->get_gr_10() && pe_unit[1]->get_gr_10();
         for (i = 2; i < setting; i++)
             main_addressing_register[13] = main_addressing_register[13] && pe_unit[i]->get_gr_10();
+        // End-of-cycle: drain any deferred MM stores. Stores from
+        // either slot's `mv gr->MM` and from LSQ-tick SPM->MM
+        // completions are queued by MM::issueStore and applied here so
+        // the next cycle's MM::tick (and any same-cycle slot 0 load)
+        // observed the pre-cycle MM contents.
+        mm_unit->commitPendingStores();
         if (flag == -1 || cycle == cycle_limit) {
             printf("cycle %d\n", cycle);
             break;

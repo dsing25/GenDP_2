@@ -422,6 +422,16 @@ struct MMLoadEntry {
     bool singleData;         // for 1-word destined to gr/SPM
 };
 
+// Deferred MM store entry. Controller-side `mv gr -> MM` (and the LSQ
+// completion path for `mvd SPM -> MM`) call `issueStore` during slot
+// decode; the actual buffer write is deferred to end-of-cycle so paired
+// VLIW slots both observe pre-cycle MM contents.
+struct MMStoreEntry {
+    int addr;
+    int data[8];   // up to 8 words (matches mvdq line size)
+    int numWords;
+};
+
 class MM {
 public:
     MM();
@@ -439,6 +449,12 @@ public:
     // controller's main_addressing_register array for direct writes.
     void tick(CtrlLSQ* lsq, int* gr);
 
+    // Apply queued MM stores to buffer[]. Called at end-of-cycle from
+    // pe_array::run after both slot decodes and LSQ tick complete, so
+    // a paired-slot pair that issues a store in slot 1 and a load in
+    // slot 0 both see the pre-cycle buffer contents.
+    void commitPendingStores();
+
     bool hasPendingOps() const;
     bool loadQueueFull() const;
     // Returns true if the load queue can accept `n` more loads
@@ -450,6 +466,7 @@ private:
     int* buffer = nullptr;
     int lastMMStore = -1;
     std::deque<MMLoadEntry> loadQueue;
+    std::vector<MMStoreEntry> pendingStores;
 };
 
 #endif // DATA_BUFFER_H

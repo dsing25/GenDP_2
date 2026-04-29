@@ -871,9 +871,27 @@ void MM::issueStore(int addr, const int* data,
                     int numWords) {
     assert(buffer != nullptr
            && "MM::issueStore before setBuffer");
+    assert(numWords >= 1 && numWords <= 8);
+    // Defer the buffer write so paired-slot semantics hold: in
+    // pe_array::run() slot 1 decodes before slot 0, but both must
+    // observe pre-cycle MM state. commitPendingStores() drains this
+    // queue at end-of-cycle, after both slot decodes and LSQ tick.
+    MMStoreEntry e;
+    e.addr = addr;
+    e.numWords = numWords;
     for (int i = 0; i < numWords; i++)
-        buffer[addr + i] = data[i];
+        e.data[i] = data[i];
+    pendingStores.push_back(e);
     lastMMStore = MM_LATENCY;
+}
+
+void MM::commitPendingStores() {
+    if (buffer == nullptr) return;
+    for (const auto& e : pendingStores) {
+        for (int i = 0; i < e.numWords; i++)
+            buffer[e.addr + i] = e.data[i];
+    }
+    pendingStores.clear();
 }
 
 void MM::issueLoad(int addr, int destId,
