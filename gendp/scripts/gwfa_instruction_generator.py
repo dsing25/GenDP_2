@@ -160,8 +160,10 @@ def emit_tile_load_subroutine(f):
     Clobbers: gr[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 23]
         Note vs the plan's AC-4 clobber list: gr[13] is REMOVED (it is
         the simulator-managed PE-sync flag — auto-written each
-        controller cycle as the AND of all PE gr[10] values per
-        pe_array.cpp:9926-9928 — and therefore unusable as a multi-PC
+        controller cycle as the AND of all PE gr[10] values
+        (`main_addressing_register[13] = AND(pe_unit[i]->get_gr_10())`
+        in `pe_array::run`, currently at `pe_array.cpp:9699-9701`) —
+        and therefore unusable as a multi-PC
         scratch register inside the subroutine; the original C++
         magic-7 only got away with using gr[13] as scratch because the
         magic body executes atomically in one simulator cycle, BEFORE

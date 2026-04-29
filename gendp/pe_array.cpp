@@ -418,7 +418,6 @@ void pe_array::store(int dest_pos, int reg_immBar_flag, int rs1, int rs2, LoadRe
 
     if (dest_pos == 1) {
         set_main_gr(dest_addr, data.data[0], CTRL_GR, "main_store");
-        if (dest_addr == 0) printf("%d\n", data.data[0]);
     } else if (dest_pos == CTRL_GR_LO) {
         set_main_gr(dest_addr, data.data[0], CTRL_GR_LO, "main_store");
 #ifdef PROFILE
