@@ -36,6 +36,15 @@ class pe_array {
         // gr in one simulation cycle. Disjoint half writes (lo + hi) are
         // permitted. Setup writes (cycle == 0) are exempt.
         void set_main_gr(int idx, int val, int pos, const char* origin);
+        // Auto-increment helper for slot decode. Routes the
+        // main_addressing_register[idx] += delta direct write through
+        // set_main_gr so the WAW tracker sees auto-inc writes alongside
+        // slot stores and MM tick completions. Round 15 P2 fix per
+        // Codex review: prior auto-inc sites bypassed the tracker, so a
+        // same-cycle MM->gr completion + slot auto-inc on the same gr
+        // would silently clobber the MM value.
+        void auto_inc_main_gr(int idx, int delta,
+                              const char* origin);
         unsigned long main_instruction_buffer[CTRL_INSTR_BUFFER_NUM][CTRL_INSTR_BUFFER_GROUP_SIZE];
         unsigned long compute_instruction_buffer[COMP_INSTR_BUFFER_GROUP_NUM][COMP_INSTR_BUFFER_GROUP_SIZE];
         

@@ -220,6 +220,13 @@ void pe_array::set_main_gr(int idx, int val, int pos,
     }
 }
 
+void pe_array::auto_inc_main_gr(int idx, int delta,
+                                const char* origin) {
+    set_main_gr(idx,
+                main_addressing_register[idx] + delta,
+                CTRL_GR, origin);
+}
+
 void pe_array::write_spm_magic(int addr, int value) {
     if (addr < 0 || addr >= SPM_ADDR_NUM) {
         fprintf(stderr, "write_spm_magic addr %d out of range.\n", addr);
@@ -8256,7 +8263,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         immediate_data.data[0] = sext_imm_1;
         store(dest, reg_immBar_flag_0, sext_imm_0, reg_0, immediate_data, simd);
         if (reg_auto_increasement_flag_0)
-            main_addressing_register[reg_0]++;
+            auto_inc_main_gr(reg_0, 1, "auto-inc");
         (*PC)++;
     } else if (opcode == 5) {       // mv dest src imm/reg(reg(++)) imm/reg(reg(++))
 #ifdef PROFILE
@@ -8346,9 +8353,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 exit(-1);
             }
             if (reg_auto_increasement_flag_0)
-                main_addressing_register[reg_0]++;
+                auto_inc_main_gr(reg_0, 1, "auto-inc");
             if (reg_auto_increasement_flag_1)
-                main_addressing_register[reg_1]++;
+                auto_inc_main_gr(reg_1, 1, "auto-inc");
             (*PC)++;
             return 0;
         }
@@ -8418,9 +8425,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                   sext_imm_0, reg_0, data, simd);
         }
         if (reg_auto_increasement_flag_0)
-            main_addressing_register[reg_0]++;
+            auto_inc_main_gr(reg_0, 1, "auto-inc");
         if (reg_auto_increasement_flag_1)
-            main_addressing_register[reg_1]++;
+            auto_inc_main_gr(reg_1, 1, "auto-inc");
         (*PC)++;
     } else if (opcode == CTRL_MVDQ) {      // mvdq dest src imm/reg(reg(++)) imm/reg(reg(++))
 #ifdef PROFILE
@@ -8490,9 +8497,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     spmA, 8, false);
             }
             if (reg_auto_increasement_flag_0)
-                main_addressing_register[reg_0] += 8;
+                auto_inc_main_gr(reg_0, 8, "auto-inc");
             if (reg_auto_increasement_flag_1)
-                main_addressing_register[reg_1] += 8;
+                auto_inc_main_gr(reg_1, 8, "auto-inc");
             (*PC)++;
             return 0;
         }
@@ -8634,9 +8641,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         }
 
         if (reg_auto_increasement_flag_0)
-            main_addressing_register[reg_0] += 8;
+            auto_inc_main_gr(reg_0, 8, "auto-inc");
         if (reg_auto_increasement_flag_1)
-            main_addressing_register[reg_1] += 8;
+            auto_inc_main_gr(reg_1, 8, "auto-inc");
         (*PC)++;
     } else if (opcode == CTRL_MVDQI) {      // mvdqi dest imm/reg(reg(++)) imm
 #ifdef PROFILE
@@ -8671,7 +8678,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         }
 
         if (reg_auto_increasement_flag_0)
-            main_addressing_register[reg_0] += 8;
+            auto_inc_main_gr(reg_0, 8, "auto-inc");
         (*PC)++;
 //     } else if (opcode == 6) {       // add_8 rd rs1 rs2
 //         rd = reg_imm_0;
@@ -8835,9 +8842,9 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         }
 
         if (reg_auto_increasement_flag_0)
-            main_addressing_register[reg_0] += 2;
+            auto_inc_main_gr(reg_0, 2, "auto-inc");
         if (reg_auto_increasement_flag_1)
-            main_addressing_register[reg_1] += 2;
+            auto_inc_main_gr(reg_1, 2, "auto-inc");
         (*PC)++;
     } else if (opcode == CTRL_BARRIER) {
         if (!lsq->hasPendingOps(SPM_unit, s2, mm_unit)) {
@@ -9255,7 +9262,7 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
         immediate_data.data[0] = sext_imm_1;
         store(dest, reg_immBar_flag_0, sext_imm_0, reg_0, immediate_data, simd);
         if (reg_auto_increasement_flag_0)
-            main_addressing_register[reg_0]++;
+            auto_inc_main_gr(reg_0, 1, "auto-inc");
     } else if (opcode == 5) {
 #ifdef PROFILE
         printf("Move ");
@@ -9294,9 +9301,9 @@ int pe_array::decode_output(unsigned long instruction, int* PC, int simd, int se
                   sext_imm_0, reg_0, data, simd);
         }
         if (reg_auto_increasement_flag_0)
-            main_addressing_register[reg_0]++;
+            auto_inc_main_gr(reg_0, 1, "auto-inc");
         if (reg_auto_increasement_flag_1)
-            main_addressing_register[reg_1]++;
+            auto_inc_main_gr(reg_1, 1, "auto-inc");
     }
     return 0;
 }
