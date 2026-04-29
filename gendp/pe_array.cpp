@@ -1198,38 +1198,66 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 //                   gr[18]=lo:n_arc, hi:arc_off_s2
                 //                   gr[16]=lo:ql, hi:n_vtx
                 //                   gr[12]=lo:s, hi:s_term
-                // Each packed lane is consumed via CTRL_GR_LO / CTRL_GR_HI
-                // which sign-extends a 16-bit subregister. The current
-                // GWFA295 corpus includes case 128 with
-                // arc_off_s2 = 35250 (> 0x7FFF) which sign-extends to
-                // -30286 on read. Despite the sign flip, case 128 scores
-                // correctly on this sim because the downstream consumer
-                // of that lane tolerates the negative value. Emitting a
-                // hard `exit(-1)` on overflow therefore regresses mode-2
-                // from 295/295 to 294/295 (Codex R11 P2 attempted this,
-                // R12 reverted).
+                // Each packed lane holds 16 bits of bit-pattern data;
+                // CTRL_GR_LO / CTRL_GR_HI sign-extend the subreg on read.
                 //
-                // Instead: emit a one-shot stderr warning so oversize
-                // inputs are observable without aborting. A future
-                // re-architecture to use full 32-bit gr slots for each
-                // metadata value remains the structural fix.
+                // Two distinct overflow regimes:
+                //   (a) value > 0xFFFF: bits beyond bit 15 are LOST when
+                //       stored into the 16-bit lane and cannot be
+                //       recovered by any downstream consumer. This is
+                //       Codex R12 P2's silent-mis-score hazard for
+                //       larger graphs that legitimately place sequence /
+                //       arc regions above 64K. Hard-fail.
+                //   (b) value in 0x8000..0xFFFF: bits are PRESERVED in
+                //       the 16-bit lane but CTRL_GR_LO/HI sign-extend
+                //       to a negative int on read. Whether the consumer
+                //       tolerates this is consumer-specific. The
+                //       GWFA295 corpus includes case 128 with
+                //       arc_off_s2 = 35250 (= 0x89B2, in this range)
+                //       which scores correctly because that lane's
+                //       downstream consumer tolerates the negative
+                //       value. Codex R11 P2 attempted hard-fail here
+                //       and regressed mode-2 from 295/295 to 294/295
+                //       (R12 reverted). Soft-warn instead. A future
+                //       re-architecture to use full 32-bit gr slots
+                //       remains the structural fix for both regimes.
+                if ((unsigned)sub.n_vtx > 0xFFFF
+                    || (unsigned)sub.n_arc > 0xFFFF
+                    || (unsigned)seq_off_s2 > 0xFFFF
+                    || (unsigned)seq_len_s2 > 0xFFFF
+                    || (unsigned)arc_off_s2 > 0xFFFF
+                    || (unsigned)ql > 0xFFFF) {
+                    fprintf(stderr,
+                        "[gwfa-pack-error] packed-lane overflow > 16 "
+                        "bits (n_vtx=%u n_arc=%u seq_off=%d seq_len=%d "
+                        "arc_off=%d ql=%d). Bits above 0xFFFF are LOST "
+                        "in the 16-bit lane storage and cannot be "
+                        "recovered downstream. Per Codex R12 P2, this "
+                        "would silently mis-score; aborting instead. "
+                        "Larger graphs require switching to full-width "
+                        "gr storage for these metadata values.\n",
+                        (unsigned)sub.n_vtx, (unsigned)sub.n_arc,
+                        seq_off_s2, seq_len_s2, arc_off_s2, ql);
+                    exit(-1);
+                }
                 {
                     static bool warned = false;
                     if (!warned && (
                         (int)sub.n_vtx > 0x7FFF ||
-                        (int)sub.n_arc > 0xFFFF ||
-                        seq_off_s2 > 0xFFFF ||
+                        (int)sub.n_arc > 0x7FFF ||
+                        seq_off_s2 > 0x7FFF ||
                         seq_len_s2 > 0x7FFF ||
                         arc_off_s2 > 0x7FFF ||
-                        ql > 0xFFFF)) {
+                        ql > 0x7FFF)) {
                         fprintf(stderr,
-                            "[gwfa-pack-warn] packed-lane overflow "
-                            "(n_vtx=%u n_arc=%u seq_off=%d seq_len=%d "
-                            "arc_off=%d ql=%d). Further gwfa operations "
-                            "may silently mis-execute for values where "
-                            "the downstream consumer is not tolerant of "
-                            "16-bit truncation/sign-extension. See "
-                            "Codex R9 P2 + R11 P2 + R12 revert.\n",
+                            "[gwfa-pack-warn] packed-lane in sign-flip "
+                            "range 0x8000..0xFFFF (n_vtx=%u n_arc=%u "
+                            "seq_off=%d seq_len=%d arc_off=%d ql=%d). "
+                            "Bits preserved but CTRL_GR_LO/HI "
+                            "sign-extend on read; consumer tolerance "
+                            "varies. Case 128's arc_off_s2 lives here "
+                            "and scores correctly. See R9 P2 + R11 P2 "
+                            "+ R12 revert + R12 P2 hard-fail above.\n",
                             (unsigned)sub.n_vtx, (unsigned)sub.n_arc,
                             seq_off_s2, seq_len_s2, arc_off_s2, ql);
                         warned = true;
