@@ -88,6 +88,14 @@ CXXFLAGS    += -DGWFA_BUILD
 CXXFLAGS_O3 += -DGWFA_BUILD
 endif
 
+# Pin the default goal to `all` BEFORE introducing the .gwfa_state
+# prereq rule below. The line `main.o pe.o ...: .gwfa_state` would
+# otherwise make `main.o` the first non-dot target encountered, and
+# GNU make would treat that as the default goal — so a bare `make`
+# (and `run-backtest.sh`'s `make -j ADDRESS_SANITIZER=0`) would only
+# build main.o instead of sim/sim_o3.
+.DEFAULT_GOAL := all
+
 # Stamp file that tracks the current WITH_GWFA + snapshot/trace flag
 # state. `make` cannot see CXXFLAGS changes, so a previously-built
 # tree (with one set of preprocessor defines) would silently reuse
