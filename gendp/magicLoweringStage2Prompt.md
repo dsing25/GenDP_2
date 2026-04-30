@@ -13,6 +13,8 @@ You should create a very detailed plan for this prompt.
 Break it into pieces where possible. For example, do the prologue, then do a loop, then the epilouge,
 keeping the original magic instruciton to do the parts you have not finished yet. Doing it in small
 chunks like this will make it easier to verify.
+
+# Hard Rules
 Changes to the simulator are not allowed. Only changes to magic, and the instruction generator.
 
 # Verification
