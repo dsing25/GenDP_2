@@ -1,15 +1,10 @@
-We just lowered magic instruction X. I now want you to try to optimize performance. These are the
-optimizations you are allowed to use. Don't use any others for this pass
+We just lowered magic instruction X. I now want you to try to optimize performance. 
 
-# Available Optimizations:
-1. You may remove Noops (this is the most important one. Whever possible in the code you've lowered
-   remove noops)
-2. You may reorder instructions (fine grained reordering when there are no dependencies between them
-   (note that two instructions operating in the same VLIW slot cannot have RAW)
-3. You may combine instructions sometimes (e.g. mv reg[4] = spm[reg2]; reg2++; can be one mv
-   instruction with an autoincrement. Alternatively, you may be able to switch an mv for an mvd or
-   mvdq.
-4. You may change the register mapping to avoid moves.
+The previous pass on magic X likely padded with excessive nops. You should avoid this because its
+too slow. Use nops only when necessary. You should be able to get huge savings in cycle count just
+by this one optimization. You will invoke the isa-optimizer agent and will not make other
+optimizations. Only the optimizations that the Isa-optimizer agent can make are you allowed to do.
+Especially, do not modify the simulator. The only file you may change is the instruction_generator
 
 # Verification
 At intermediate steps, you can verify yourself with gwfa_check_correctness -t 56 1. Do that
