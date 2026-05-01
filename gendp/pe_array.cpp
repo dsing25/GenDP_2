@@ -8463,9 +8463,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         bool dest_is_s2 = (dest == CTRL_S2);
         bool dest_is_mm = (dest == CTRL_MM);
 
-        // SPM<->MM (8 words, even-aligned): split into 4 line transfers.
-        // SPM->MM: 4 tagged SPM reads -> mm->issueStore on completion.
-        // MM->SPM: one MM load entry; mm->tick stages 4 SPM writes.
+        // SPM<->MM (8 words). Even spmA: 4 line transfers.
+        // Odd spmA: sgl + 3*dbl + sgl (5 entries), like SPM<->S2.
+        // SPM->MM: 4 or 5 tagged SPM reads -> mm->issueStore on completion.
+        // MM->SPM: one MM load entry; mm->tick stages 4 or 5 SPM writes.
         if ((src_is_spm && dest_is_mm)
             || (src_is_mm && dest_is_spm)) {
             int spmA = src_is_spm ? src_addr : dest_addr;
@@ -8477,18 +8478,21 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     "bounds. PC=%d\n", spmA, *PC);
                 exit(-1);
             }
-            if (spmA % 2 != 0) {
-                fprintf(stderr,
-                    "main mvdq SPM<->MM requires "
-                    "even-aligned SPM addr (got %d). "
-                    "PC=%d\n", spmA, *PC);
-                exit(-1);
+            // Capacity check: 4 (even) or 5 (odd) SPM-bank entries.
+            bool spmOdd = (spmA & 1) != 0;
+            int spmList[5];
+            int nSpm = 0;
+            if (!spmOdd) {
+                for (i = 0; i < 4; i++)
+                    spmList[nSpm++] = spmA + 2 * i;
+            } else {
+                spmList[nSpm++] = spmA;       // sgl
+                spmList[nSpm++] = spmA + 1;   // dbl
+                spmList[nSpm++] = spmA + 3;   // dbl
+                spmList[nSpm++] = spmA + 5;   // dbl
+                spmList[nSpm++] = spmA + 7;   // sgl
             }
-            // Capacity check: 4 SPM-bank entries (one per line).
-            int spmList[4];
-            for (i = 0; i < 4; i++)
-                spmList[i] = spmA + 2 * i;
-            if (!lsq->canEnqueue(spmList, 4, nullptr, 0)) {
+            if (!lsq->canEnqueue(spmList, nSpm, nullptr, 0)) {
                 lsqFullStalls++;
                 return 0;
             }
@@ -8498,13 +8502,22 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 return 0;
             }
             if (src_is_spm) {
-                // SPM -> MM: tag each line read with mmA + 2*i.
-                for (i = 0; i < 4; i++)
-                    lsq->enqueueSpmReadForMm(
-                        spmA + 2 * i,
-                        mmA + 2 * i, false);
+                // SPM -> MM: tag each read with its MM offset.
+                if (!spmOdd) {
+                    for (i = 0; i < 4; i++)
+                        lsq->enqueueSpmReadForMm(
+                            spmA + 2 * i,
+                            mmA + 2 * i, false);
+                } else {
+                    lsq->enqueueSpmReadForMm(spmA,     mmA,     true);
+                    lsq->enqueueSpmReadForMm(spmA + 1, mmA + 1, false);
+                    lsq->enqueueSpmReadForMm(spmA + 3, mmA + 3, false);
+                    lsq->enqueueSpmReadForMm(spmA + 5, mmA + 5, false);
+                    lsq->enqueueSpmReadForMm(spmA + 7, mmA + 7, true);
+                }
             } else {
                 // MM -> SPM: single MM load entry; tick stages writes.
+                // MM::tick decomposes 4-vs-5 from destAddr & 1.
                 mm_unit->issueLoad(mmA, CTRL_SPM,
                     spmA, 8, false);
             }

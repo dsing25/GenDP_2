@@ -1755,6 +1755,17 @@ addresses by decomposing transfers internally:
   (4 vs 5). One read completion can fill multiple write
   entries via line-based matching in the data-ready callbacks.
 
+`mvdq` between SPM and main memory (MM) accepts misaligned `spmA`
+the same way. The MM-side address has no parity constraint. The
+SPM side splits 4 (even) or 5 (sgl+3·dbl+sgl, odd) entries:
+- **SPM → MM**: the issuer queues 4 or 5 tagged SPM reads up-front
+  (each completion stores the requested 1 or 2 words to MM).
+- **MM → SPM**: a single 8-word MM load is queued; on completion
+  (`MM::tick`), the 8 returned words are sliced into 4 or 5
+  `enqueueSpmWriteWithData` entries based on `destAddr & 1`. The
+  capacity recheck at completion time accounts for the larger
+  5-entry case.
+
 ### Performance Counters
 
 Printed after each simulation case:

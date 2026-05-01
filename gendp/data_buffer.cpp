@@ -959,12 +959,24 @@ void MM::tick(CtrlLSQ* lsq, pe_array* parr) {
             // full, leave the entry at the queue front and retry
             // on the next tick (back-pressure stalls subsequent
             // MM completions in FIFO order, which is correct).
-            int spmAddrs[4];
-            int nSpm = (front.numWords == 8) ? 4 : 1;
+            int spmAddrs[5];
+            int nSpm;
             if (front.numWords == 8) {
-                for (int i = 0; i < 4; i++)
-                    spmAddrs[i] = front.destAddr + 2 * i;
+                bool odd = (front.destAddr & 1) != 0;
+                if (!odd) {
+                    nSpm = 4;
+                    for (int i = 0; i < 4; i++)
+                        spmAddrs[i] = front.destAddr + 2 * i;
+                } else {
+                    nSpm = 5;
+                    spmAddrs[0] = front.destAddr;
+                    spmAddrs[1] = front.destAddr + 1;
+                    spmAddrs[2] = front.destAddr + 3;
+                    spmAddrs[3] = front.destAddr + 5;
+                    spmAddrs[4] = front.destAddr + 7;
+                }
             } else {
+                nSpm = 1;
                 spmAddrs[0] = front.destAddr;
             }
             if (!lsq->canEnqueue(spmAddrs, nSpm,
@@ -984,17 +996,37 @@ void MM::tick(CtrlLSQ* lsq, pe_array* parr) {
             parr->set_main_gr(e.destAddr, e.data[0],
                 CTRL_GR, "MM->gr");
         } else { // CTRL_SPM
-            // Stage SPM writes via LSQ. mvdq covers 8 words = 4 lines;
+            // Stage SPM writes via LSQ. mvdq covers 8 words: 4 lines
+            // when destAddr is even, sgl+3dbl+sgl when odd.
             // mv/mvd cover 1 or 2 words = 1 line.
             if (e.numWords == 8) {
-                for (int i = 0; i < 4; i++) {
-                    int spmA = e.destAddr + 2 * i;
-                    int line[2] = {
-                        e.data[2 * i],
-                        e.data[2 * i + 1]
-                    };
+                bool odd = (e.destAddr & 1) != 0;
+                if (!odd) {
+                    for (int i = 0; i < 4; i++) {
+                        int spmA = e.destAddr + 2 * i;
+                        int line[2] = {
+                            e.data[2 * i],
+                            e.data[2 * i + 1]
+                        };
+                        lsq->enqueueSpmWriteWithData(
+                            spmA, line, false);
+                    }
+                } else {
+                    int s0[1] = { e.data[0] };
                     lsq->enqueueSpmWriteWithData(
-                        spmA, line, false);
+                        e.destAddr, s0, true);
+                    int d1[2] = { e.data[1], e.data[2] };
+                    lsq->enqueueSpmWriteWithData(
+                        e.destAddr + 1, d1, false);
+                    int d2[2] = { e.data[3], e.data[4] };
+                    lsq->enqueueSpmWriteWithData(
+                        e.destAddr + 3, d2, false);
+                    int d3[2] = { e.data[5], e.data[6] };
+                    lsq->enqueueSpmWriteWithData(
+                        e.destAddr + 5, d3, false);
+                    int s4[1] = { e.data[7] };
+                    lsq->enqueueSpmWriteWithData(
+                        e.destAddr + 7, s4, true);
                 }
             } else {
                 lsq->enqueueSpmWriteWithData(
