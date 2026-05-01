@@ -8288,7 +8288,10 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     || (src == CTRL_GR && dest == CTRL_MM);
         bool isMmSpm = (src == CTRL_MM && dest == CTRL_SPM)
                     || (src == CTRL_SPM && dest == CTRL_MM);
-        if (isMmGr || isMmSpm) {
+        // MM->S1C only (no S1C->MM today). s1c writes are synchronous
+        // inside MM::tick after MM_LATENCY cycles.
+        bool isMmS1c = (src == CTRL_MM && dest == CTRL_S1C);
+        if (isMmGr || isMmSpm || isMmS1c) {
             int destA = reg_immBar_flag_0
                 ? main_addressing_register[sext_imm_0]
                   + main_addressing_register[reg_0]
@@ -8350,10 +8353,25 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 }
                 mm_unit->issueLoad(srcA, CTRL_SPM,
                     destA, 1, true);
+            } else if (src == CTRL_MM
+                       && dest == CTRL_S1C) {
+                if (destA < 0 || destA >= S1C_SIZE) {
+                    fprintf(stderr,
+                        "main mv MM->S1C S1C addr %d out of "
+                        "bounds [0, %d). PC=%d\n",
+                        destA, S1C_SIZE, *PC);
+                    exit(-1);
+                }
+                if (mm_unit->loadQueueFull()) {
+                    lsqFullStalls++;
+                    return 0;
+                }
+                mm_unit->issueLoad(srcA, CTRL_S1C,
+                    destA, 1, true);
             } else {
                 fprintf(stderr,
-                    "main mv MM: only gr<->MM and "
-                    "SPM<->MM supported. src=%d dest=%d "
+                    "main mv MM: only gr<->MM, SPM<->MM, "
+                    "and MM->S1C supported. src=%d dest=%d "
                     "PC=%d\n", src, dest, *PC);
                 exit(-1);
             }
@@ -8462,6 +8480,31 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         bool dest_is_spm = (dest == CTRL_SPM);
         bool dest_is_s2 = (dest == CTRL_S2);
         bool dest_is_mm = (dest == CTRL_MM);
+        bool dest_is_s1c = (dest == CTRL_S1C);
+
+        // MM -> S1C (8 words). Single MM load entry; on completion
+        // MM::tick writes 8 contiguous words directly into s1c[].
+        if (src_is_mm && dest_is_s1c) {
+            if (dest_addr < 0
+                || dest_addr + 8 > S1C_SIZE) {
+                fprintf(stderr,
+                    "main mvdq MM->S1C S1C addr %d out of "
+                    "bounds. PC=%d\n", dest_addr, *PC);
+                exit(-1);
+            }
+            if (mm_unit->loadQueueFull()) {
+                lsqFullStalls++;
+                return 0;
+            }
+            mm_unit->issueLoad(src_addr, CTRL_S1C,
+                dest_addr, 8, false);
+            if (reg_auto_increasement_flag_0)
+                auto_inc_main_gr(reg_0, 8, "auto-inc");
+            if (reg_auto_increasement_flag_1)
+                auto_inc_main_gr(reg_1, 8, "auto-inc");
+            (*PC)++;
+            return 0;
+        }
 
         // SPM<->MM (8 words). Even spmA: 4 line transfers.
         // Odd spmA: sgl + 3*dbl + sgl (5 entries), like SPM<->S2.
@@ -8530,7 +8573,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         }
 
         if (!((src_is_spm && dest_is_s2) || (src_is_s2 && dest_is_spm))) {
-            fprintf(stderr, "main mvdq only supports SPM <-> S2 or SPM <-> MM. src=%d dest=%d PC=%d\n", src, dest, *PC);
+            fprintf(stderr, "main mvdq only supports SPM <-> S2, SPM <-> MM, or MM -> S1C. src=%d dest=%d PC=%d\n", src, dest, *PC);
             exit(-1);
         }
 
@@ -8858,10 +8901,28 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             mm_unit->issueLoad(srcA, CTRL_SPM,
                 destA, 2, false);
 
+        // MM -> S1C (mvd, 2 words). Deferred completion in MM::tick
+        // writes 2 contiguous words directly into s1c[].
+        } else if (src == CTRL_MM && dest == CTRL_S1C) {
+            if (destA < 0 || destA + 1 >= S1C_SIZE) {
+                fprintf(stderr,
+                    "main mvd MM->S1C S1C addr %d out of "
+                    "bounds [0, %d). PC=%d\n",
+                    destA, S1C_SIZE - 1, *PC);
+                exit(-1);
+            }
+            if (mm_unit->loadQueueFull()) {
+                lsqFullStalls++;
+                return 0;
+            }
+            mm_unit->issueLoad(srcA, CTRL_S1C,
+                destA, 2, false);
+
         } else {
             fprintf(stderr,
                 "main mvd: unsupported src=%d dest=%d. "
-                "Supported: s1c<->SPM, SPM<->MM. PC=%d\n",
+                "Supported: s1c<->SPM, SPM<->MM, MM->S1C. "
+                "PC=%d\n",
                 src, dest, *PC);
             exit(-1);
         }

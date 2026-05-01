@@ -421,12 +421,12 @@ private:
 // pre-store value.
 struct MMLoadEntry {
     int addr;
-    int destId;              // CTRL_GR or CTRL_SPM
-    int destAddr;            // gr index, or SPM phys addr
+    int destId;              // CTRL_GR, CTRL_S1C, or CTRL_SPM
+    int destAddr;            // gr index, s1c index, or SPM phys addr
     int data[8];             // up to 8 words (mvdq)
     int numWords;            // 1, 2, or 8
     int cyclesLeft;
-    bool singleData;         // for 1-word destined to gr/SPM
+    bool singleData;         // for 1-word destined to gr/s1c/SPM
 };
 
 // Pending MM store entry. Controller-side `mv gr -> MM` (and the LSQ

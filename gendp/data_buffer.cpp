@@ -917,6 +917,15 @@ void MM::issueLoad(int addr, int destId,
                 destAddr, MAIN_ADDR_REGISTER_NUM);
             exit(-1);
         }
+    } else if (destId == CTRL_S1C) {
+        if (destAddr < 0
+            || destAddr + numWords > S1C_SIZE) {
+            fprintf(stderr,
+                "MM::issueLoad s1c destAddr %d "
+                "numWords %d out of bounds [0, %d).\n",
+                destAddr, numWords, S1C_SIZE);
+            exit(-1);
+        }
     }
     MMLoadEntry e{};
     e.addr = addr;
@@ -995,6 +1004,13 @@ void MM::tick(CtrlLSQ* lsq, pe_array* parr) {
             // otherwise hit a deterministic silent clobber.
             parr->set_main_gr(e.destAddr, e.data[0],
                 CTRL_GR, "MM->gr");
+        } else if (e.destId == CTRL_S1C) {
+            // s1c writes are synchronous (no LSQ / bank
+            // arbitration), mirroring dataReadyFromSpm's
+            // direct s1c[] writes. mv/mvd/mvdq cover 1, 2, or
+            // 8 contiguous words.
+            for (int i = 0; i < e.numWords; i++)
+                parr->s1c[e.destAddr + i] = e.data[i];
         } else { // CTRL_SPM
             // Stage SPM writes via LSQ. mvdq covers 8 words: 4 lines
             // when destAddr is even, sgl+3dbl+sgl when odd.
