@@ -9666,6 +9666,15 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
     // previous/undefined value for the end-of-cycle `flag == -1` check.
     int flag = 0;
     cycle = 0;
+    // Optional periodic progress emission so killers (e.g. throughput
+    // script) can recover cycles + edit-distance reached when they
+    // SIGTERM a long-running query. Gated by env GWFA_PROGRESS (cached
+    // once per run; getenv every cycle is too costly).
+    static int progress_period = -1;
+    if (progress_period < 0) {
+        const char *pe = getenv("GWFA_PROGRESS");
+        progress_period = (pe && atoi(pe) > 0) ? atoi(pe) : 0;
+    }
 
     // Reset per-case perf counters so each pa->run() reports its own case
     totalSpmRequests = 0;
@@ -9993,6 +10002,13 @@ void pe_array::run(int cycle_limit, int simd, int setting, int main_instruction_
         if (flag == -1 || cycle == cycle_limit) {
             printf("cycle %d\n", cycle);
             break;
+        }
+        if (progress_period && (cycle % progress_period) == 0) {
+            // gr[12] holds packed state; lower 16 bits = current edit
+            // distance (mirrors magic 5's mask in pe_array.cpp:1327).
+            printf("progress cycle=%d dist=%d\n",
+                cycle, main_addressing_register[12] & 0xFFFF);
+            fflush(stdout);
         }
     }
 
