@@ -1,5 +1,4 @@
-I will instruct you in the prompt which magic instruction we are considering. In this file I will
-refer to it as magic X, or just X.
+
 # High Level
 Currently GWFA is made up of a bunch of c++ high level magic instructions which are "isaLike". They
 use gotos, register mapping, and each line is generally one instruction so theoretically they should
@@ -16,6 +15,8 @@ chunks like this will make it easier to verify.
 
 # Hard Rules
 Changes to the simulator are not allowed. Only changes to magic, and the instruction generator.
+If you codex and claude agree that a change to the simulator would be advisable, you should exit the
+rlcr loop early and wait for user feedback.
 
 # Verification
 At intermediate steps, you can verify yourself with gwfa_check_correctness -t 56 1.

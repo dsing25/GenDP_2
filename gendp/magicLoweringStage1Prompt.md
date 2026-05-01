@@ -1,5 +1,3 @@
-I will instruct you in the prompt which magic instruction we are considering. In this file I will
-refer to it as magic X, or just X.
 
 # High Level
 Currently GWFA is made up of a bunch of c++ high level magic instructions which are "isaLike". They
