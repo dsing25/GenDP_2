@@ -1116,7 +1116,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #ifdef PROFILE
     printf("PC = %d @%d:%016lx\t", *PC, cycle, instruction);
 #endif
-    if (main_instruction_setting == MAIN_INSTRUCTION_2) {
+    // Magic instructions (bit 63) reuse the low opcode bits for their ID,
+    // so the opcode-based filters below would mis-classify e.g. magic 14
+    // as a NOP. Skip the filter for magic; the dispatch at line 1142
+    // handles them.
+    if (main_instruction_setting == MAIN_INSTRUCTION_2 && !is_magic) {
         if (((opcode == 4 || opcode == 5) && (dest == 5 || dest == 6 || dest == 11 || dest == 12 || dest == 13 || dest == 14)) || opcode == 14) {
             if (opcode == 14) controllerNops++;
             (*PC)++;
@@ -1125,7 +1129,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
 #endif
             return 0;
         }
-    } else if (main_instruction_setting == MAIN_INSTRUCTION_1) {
+    } else if (main_instruction_setting == MAIN_INSTRUCTION_1 && !is_magic) {
         if (dest == 5 || dest == 6 || dest == 11 || dest == 12 || dest == 13 || dest == 14) {
             (*PC)++;
 #ifdef PROFILE

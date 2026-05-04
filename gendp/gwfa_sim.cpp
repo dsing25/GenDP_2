@@ -488,7 +488,7 @@ void gwfa_simulation(
             inp.s_term * 500000 + 500000;
         if (max_cycles < 2000000) max_cycles = 2000000;
         pa->run(max_cycles, 0, PE_4_SETTING,
-            MAIN_INSTRUCTION_1);
+            MAIN_INSTRUCTION_2);
 
         // Free memory (gwfa_sim owns it)
         free(inp.q_enc);
