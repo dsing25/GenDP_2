@@ -2645,6 +2645,19 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                     mm[gr[9]+2] = spm[gr[8]+2];
                     mm[gr[9]+3] = spm[gr[8]+3];
                     if (gr[4] == 0) goto m18_ha_skip;      // beq: skip dirty
+                    // Bound check on the FIN0 HA dirty list — mirror
+                    // kernel/Gwfa/gwfa.c's ha_put guard at line 203.
+                    // The sim previously walked past the MM dirty
+                    // region under heavy hash collision; treat any
+                    // overflow as a hard failure rather than allowing
+                    // silent MM corruption that masks downstream bugs.
+                    if ((uint32_t)gr[31] >= (uint32_t)(HA_CAP_18 / 4)) {
+                        fprintf(stderr,
+                            "FATAL: m18 ha_dirty overflow "
+                            "(n=%d cap=%d)\n",
+                            gr[31], HA_CAP_18 / 4);
+                        exit(1);
+                    }
                     mm[ha_dirty_off + gr[31]] = gr[3];    // mv: record bucket
                     gr[31] = gr[31] + 1;                  // addi: dirty_n++
                 m18_ha_skip:
