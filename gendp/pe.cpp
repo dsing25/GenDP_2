@@ -964,6 +964,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 reg[7] = mvi2_ld(11, 7); gr.st(7, gr.at(7) + 1); //load q char and cursor++
                 gr.st(9, gr.at(9) + 1);              // k++
 
+
                 if (gr.at(9) >= reg[8]) break;
 
                 if (reg[6] != reg[7]) break;
@@ -1177,7 +1178,65 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             spm[TILE_A_OFF + gr.at(15) + 1] = gr.at(9);
             gr.st(5, gr.at(9) + 1);                     // emit_k
 
-            // emit_b(vd-1, k+1)
+            // emit_b(vd-1, k+1) — delete edit of the OUTER diag.
+            //
+            // Cross-PE seq-run leading-edge fix: when this OUTER
+            // iteration is the FIRST iter of a trailing PE's tile
+            // (id > 0, i == 0) AND pe-1's tile last diag is the
+            // immediate predecessor (vd-1) of this OUTER's diag,
+            // the global seq run is continuing into this PE. In the
+            // kernel/Gwfa untiled `gwf_ed_extend`, this position
+            // would be reached via INTERIOR loop with the formula
+            // max(pk, ppk+1, k+1) — pk = post-extend k of the
+            // diag two before, ppk = post-extend k of the diag one
+            // before, k = current diag's post-extend. This trailing
+            // PE doesn't have those two predecessors in its own
+            // TILE_A, but pe-1's TILE_A has them at positions
+            // tile_n-2 (= pk equivalent) and tile_n-1 (= ppk
+            // equivalent), with their post-extend k's already stored
+            // back by pe-1's m8 OUTER/SEQ_FIRST iterations.
+            //
+            // Override emit_k with reference's interior formula so
+            // that downstream emit_b's `d+k<ql` filter sees the
+            // correct (typically larger) k. This collapses
+            // automatically to the original `k+1` when there is no
+            // pre-predecessor (pe-1's tile has only 1 diag).
+            //
+            // Symptom (q128 dist=10 d=1338): pre-fix sim emitted
+            // (d=1338, k_local+1=58), passing emit_b's filter
+            // (1338+58=1396 < 1425). Reference's interior at the
+            // equivalent i=4 emitted (d=1338, max(K2=87, K3+1, ..)=87)
+            // which fails the filter (1338+87=1425). The override
+            // makes sim emit the larger value, matching the
+            // reference's filter behavior.
+            if (id > 0 && gr.at(1, CTRL_GR_LO) == 0) {
+                int *prev_spm = &SPM_unit->buffer[
+                    (id - 1) * SPM_BANK_GROUP_SIZE + buf_base];
+                int prev_tile_n = prev_spm[META_TILE_N];
+                int cur_vd = gr.at(8);
+                // Confirm pe-1's last diag is exactly vd-1 (the
+                // immediate predecessor) AND, if applicable, that
+                // pe-1's last-1 diag is exactly vd-2 (so the K2 we
+                // peek really is the global pk for reference's
+                // interior i=current iteration).
+                if (prev_tile_n > 0
+                    && prev_spm[TILE_A_OFF + (prev_tile_n - 1) * 2]
+                        == cur_vd - 1) {
+                    int K3 = prev_spm[
+                        TILE_A_OFF + (prev_tile_n - 1) * 2 + 1];
+                    int K_local_plus_1 = gr.at(9) + 1;
+                    int ref_k = K_local_plus_1;
+                    if (K3 + 1 > ref_k) ref_k = K3 + 1;
+                    if (prev_tile_n >= 2
+                        && prev_spm[TILE_A_OFF
+                            + (prev_tile_n - 2) * 2] == cur_vd - 2) {
+                        int K2 = prev_spm[
+                            TILE_A_OFF + (prev_tile_n - 2) * 2 + 1];
+                        if (K2 > ref_k) ref_k = K2;
+                    }
+                    gr.st(5, ref_k);
+                }
+            }
             emit_b(); //call
             
             check_aout(); //call
