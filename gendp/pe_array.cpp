@@ -8287,6 +8287,20 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         // MM->S1C only (no S1C->MM today). s1c writes are synchronous
         // inside MM::tick after MM_LATENCY cycles.
         bool isMmS1c = (src == CTRL_MM && dest == CTRL_S1C);
+        // Reject MM <-> gr_lo / gr_hi. The MM dispatch only handles
+        // full-width CTRL_GR; without this guard, half-register encodings
+        // would silently fall through to the legacy load()/store() path
+        // where component id 3 aliases CTRL_COMP_IB (compute IB), not MM.
+        if ((src == CTRL_MM
+             && (dest == CTRL_GR_LO || dest == CTRL_GR_HI))
+            || ((src == CTRL_GR_LO || src == CTRL_GR_HI)
+                && dest == CTRL_MM)) {
+            fprintf(stderr,
+                "main mv MM <-> gr_lo/gr_hi unsupported "
+                "(src=%d dest=%d). PC=%d\n",
+                src, dest, *PC);
+            exit(-1);
+        }
         if (isMmGr || isMmSpm || isMmS1c) {
             int destA = reg_immBar_flag_0
                 ? main_addressing_register[sext_imm_0]
@@ -9566,6 +9580,8 @@ bool pe_array::willStallPair(
                      || (srcMm && destSpm);
         bool spmS1c  = (srcSpm && destS1c)
                      || (srcS1c && destSpm);
+        // MM->S1C only (no S1C->MM in decode for mv/mvd/mvdq).
+        bool mmS1c   = (srcMm && destS1c);
 
         // dest uses field 0 (riB0/imm0/r0); src uses field 1
         // (riB1/imm1/r1). For pairs with one side SPM the SPM-bank
@@ -9623,6 +9639,9 @@ bool pe_array::willStallPair(
             // mv s1c<->SPM: 1 SPM bank entry.
             int spmA = destSpm ? addr0 : addr1;
             spmAddrs[nSpm++] = spmA;
+        } else if (opcode == 5 && mmS1c) {
+            // mv MM->S1C: 1 MM load (s1c writeback is internal to MM::tick).
+            nMmLoads++;
         } else if (opcode == CTRL_MVD && spmS1c) {
             // mvd s1c<->SPM: 1 SPM bank entry (per current decode).
             int spmA = destSpm ? addr0 : addr1;
@@ -9632,12 +9651,30 @@ bool pe_array::willStallPair(
             int spmA = destSpm ? addr0 : addr1;
             spmAddrs[nSpm++] = spmA;
             if (srcMm) nMmLoads++;
+        } else if (opcode == CTRL_MVD && mmS1c) {
+            // mvd MM->S1C: 1 MM load.
+            nMmLoads++;
         } else if (opcode == CTRL_MVDQ && spmMm) {
-            // mvdq SPM<->MM: 4 SPM bank entries; MM->SPM also needs 1 MM load.
+            // mvdq SPM<->MM: 4 SPM bank entries (even-aligned) or 5
+            // entries (odd-aligned: sgl + 3*dbl + sgl, mirrors the
+            // SPM<->S2 odd handling and the decode at lines 8520-8533).
+            // MM->SPM also needs 1 MM load.
             int spmA = destSpm ? addr0 : addr1;
-            for (int i = 0; i < 4; i++)
-                spmAddrs[nSpm++] = spmA + 2*i;
+            if ((spmA & 1) == 0) {
+                for (int i = 0; i < 4; i++)
+                    spmAddrs[nSpm++] = spmA + 2*i;
+            } else {
+                spmAddrs[nSpm++] = spmA;
+                spmAddrs[nSpm++] = spmA + 1;
+                spmAddrs[nSpm++] = spmA + 3;
+                spmAddrs[nSpm++] = spmA + 5;
+                spmAddrs[nSpm++] = spmA + 7;
+            }
             if (srcMm) nMmLoads++;
+        } else if (opcode == CTRL_MVDQ && mmS1c) {
+            // mvdq MM->S1C: 1 MM load (8 contiguous s1c words written
+            // synchronously inside MM::tick).
+            nMmLoads++;
         }
         // All other opcodes (including barrier): no stall
     }
