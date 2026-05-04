@@ -1184,6 +1184,61 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
             // emit_b(vd-1, k+1) — delete edit of the OUTER diag.
             //
+            // ============================================================
+            // OPTIMIZATION NOTE — cross-PE seq-run leading-edge override
+            // ------------------------------------------------------------
+            // The block below (and its sister block in m8_trail_emit /
+            // m8_last_emits, which suppresses the leading PE's right-
+            // boundary INSERT) can be REMOVED as an optimization. The
+            // override costs cross-PE SPM accesses (peeking pe-1's
+            // TILE_A on every trailing-PE first-iter OUTER) that are
+            // not needed for the FINAL ALIGNMENT SCORE to be correct.
+            //
+            // What the override actually buys: byte-for-byte equality
+            // with kernel/Gwfa/gwfa.c's wavefront trace (wfDebug.txt).
+            // Without it, the simulator's per-PE tile boundary emits
+            // a smaller k (local-only, no neighbor diagonals' post-
+            // extend k's) that slips past emit_b's `d+k<ql` filter
+            // where the reference's properly-maxed k would have
+            // been dropped. The spurious low-k entry then beats
+            // legitimate same-vd entries (e.g. m19's k=0) at m23's
+            // max-k merge — producing a different wavefront SHAPE
+            // than the reference at the same edit distance.
+            //
+            // Why the score still tends to converge: the alignment
+            // score is determined by when the wavefront first reaches
+            // (target_v, ql-1), not by the exact set of (vd, k) at
+            // each intermediate dist. The under-maxed seam emits
+            // either get superseded by other paths' emits in later
+            // iterations, or take a slightly different route to the
+            // same target. Empirically across the 295-query Gwfa295
+            // dataset all final scores match either way; only the
+            // per-step traces differ.
+            //
+            // Trade-off if removed:
+            //   + saves ~2-3 cross-PE SPM accesses per trailing PE
+            //     first-iter OUTER (and similarly for the trail seam
+            //     fix in m8_trail_emit / m8_last_emits).
+            //   + simpler control flow.
+            //   - wfDebug.txt comparison against the reference's
+            //     wavefront trace becomes infeasible: every dist
+            //     beyond the first PE-spanning seq run will have
+            //     extra / shifted entries. Mode-4's smart-fallback
+            //     trace check (gwfa_check_correctness.py s_term=10
+            //     byte-equality against per-query goldens) breaks
+            //     for any query with a trans-PE seq run.
+            //   - any future debugging that needs to localize a
+            //     wavefront divergence by binary-searching the
+            //     trace also breaks — the seam noise dominates.
+            //
+            // Keep ON when: actively debugging GWFA correctness,
+            // bringing up new seam / boundary code, or running mode-4
+            // -t 8 with strict trace-fallback.
+            // Turn OFF when: cycle count is the primary metric and
+            // the dataset's final-score correctness is established;
+            // skip the override and live with non-comparable traces.
+            // ============================================================
+            //
             // Cross-PE seq-run leading-edge fix: when this OUTER
             // iteration is the FIRST iter of a trailing PE's tile
             // (id > 0, i == 0) AND pe-1's tile last diag is the
