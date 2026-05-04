@@ -2783,110 +2783,27 @@ m23_end:    ;
                     //NOP                                          // SPM 2-cycle settle (Round 4 reviewer P0)
                     // w derived inline at use sites: w = (uint32_t)packed_vw >> 16  // half-reg hi
 
-                    // Hash check: scan bucket for key.
+                    // Hash check: defer to kernel/Gwfa::gwfa_ha_put for
+                    // the global-hash-table dedup that the simulator's
+                    // per-arc SPM bucketing was unable to provide. The
+                    // reference's hash uses 4M slots with linear
+                    // probing across buckets; sim's prior per-arc /
+                    // 4-slot bucket overflowed on q128-class workloads
+                    // and missed cross-arc same-(w, i+1) duplicates,
+                    // which surfaced as a residual q128 dist=10 line
+                    // mismatch even after the bucket-full → absent=1
+                    // fix. Calling gwfa_ha_put directly preserves the
+                    // single global bucket identity per hkey end-to-
+                    // end (codex Round 3 P1 / Round 4 required plan).
                     // i_val = ((int)(vd & 0xFFFF) - GWF_DIAG_SHIFT) + k
                     hkey = (((uint32_t)packed_vw >> 16) << 16)    // half-reg hi (w)
                         | ((((int)(vd & 0xFFFF) - GWF_DIAG_SHIFT) + k + 1) & 0xFFFF);
-                    int *bkt = &fspm[FIN0_HA + 4*arc_idx];
-                    absent = -1;
-                    // Bucket 4-slot probe: macro-unrolled (AC-4).
-                    // probe value time-multiplexed on scratch_a (reg[28]);
-                    // h2 / b time-multiplexed on scratch_b (reg[29]).
-                    // i = 0
-                    scratch_a = bkt[0];                              // probe0
-                    //NOP                                          // SPM settle
-                    //NOP                                          // SPM settle
-                    if ((uint32_t)scratch_a == (uint32_t)hkey) {
-                        absent = 0; goto m19_bkt_done;
+                    {
+                        int absent_i;
+                        gwfa_ha_put((uint32_t)hkey, &absent_i);
+                        absent = absent_i;
                     }
-                    if (scratch_a != (int)0xFFFFFFFF) goto m19_bkt_1;
-                    bkt[0] = hkey;
-                    //NOP                                          // SPM port gap
-                    absent = 1;
-                    fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
-                    //NOP                                          // SPM port gap
-                    scratch_b = (int)((uint32_t)hkey * 2654435769U >> (32 - 22));     // h2
-                    scratch_b = (int)(((uint32_t)scratch_b >> 2) & 0xFFFFF);          // b
-                    scratch_b |= (1u << 20);                       // bucket-0 = new-bucket flag
-                    fspm[FIN0_OUT_HA + 2*n_HA + 1] = scratch_b;
-                    n_HA++;
-                    goto m19_bkt_done;
-                m19_bkt_1:
-                    scratch_a = bkt[1];                              // probe1
-                    //NOP                                          // SPM settle
-                    //NOP                                          // SPM settle
-                    if ((uint32_t)scratch_a == (uint32_t)hkey) {
-                        absent = 0; goto m19_bkt_done;
-                    }
-                    if (scratch_a != (int)0xFFFFFFFF) goto m19_bkt_2;
-                    bkt[1] = hkey;
-                    //NOP                                          // SPM port gap
-                    absent = 1;
-                    fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
-                    //NOP                                          // SPM port gap
-                    scratch_b = (int)((uint32_t)hkey * 2654435769U >> (32 - 22));
-                    scratch_b = (int)(((uint32_t)scratch_b >> 2) & 0xFFFFF);
-                    // i != 0: no new-bucket flag
-                    fspm[FIN0_OUT_HA + 2*n_HA + 1] = scratch_b;
-                    n_HA++;
-                    goto m19_bkt_done;
-                m19_bkt_2:
-                    scratch_a = bkt[2];                              // probe2
-                    //NOP                                          // SPM settle
-                    //NOP                                          // SPM settle
-                    if ((uint32_t)scratch_a == (uint32_t)hkey) {
-                        absent = 0; goto m19_bkt_done;
-                    }
-                    if (scratch_a != (int)0xFFFFFFFF) goto m19_bkt_3;
-                    bkt[2] = hkey;
-                    //NOP                                          // SPM port gap
-                    absent = 1;
-                    fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
-                    //NOP                                          // SPM port gap
-                    scratch_b = (int)((uint32_t)hkey * 2654435769U >> (32 - 22));
-                    scratch_b = (int)(((uint32_t)scratch_b >> 2) & 0xFFFFF);
-                    fspm[FIN0_OUT_HA + 2*n_HA + 1] = scratch_b;
-                    n_HA++;
-                    goto m19_bkt_done;
-                m19_bkt_3:
-                    scratch_a = bkt[3];                              // probe3
-                    //NOP                                          // SPM settle
-                    //NOP                                          // SPM settle
-                    if ((uint32_t)scratch_a == (uint32_t)hkey) {
-                        absent = 0; goto m19_bkt_done;
-                    }
-                    if (scratch_a != (int)0xFFFFFFFF) goto m19_bkt_done;
-                    bkt[3] = hkey;
-                    //NOP                                          // SPM port gap
-                    absent = 1;
-                    fspm[FIN0_OUT_HA + 2*n_HA] = arc_idx;
-                    //NOP                                          // SPM port gap
-                    scratch_b = (int)((uint32_t)hkey * 2654435769U >> (32 - 22));
-                    scratch_b = (int)(((uint32_t)scratch_b >> 2) & 0xFFFFF);
-                    // i != 0: no new-bucket flag
-                    fspm[FIN0_OUT_HA + 2*n_HA + 1] = scratch_b;
-                    n_HA++;
                 m19_bkt_done: ;
-                    if (absent == -1) {
-                        // Bucket full (all 4 slots hold non-sentinel
-                        // keys, none equal to hkey). The kernel/Gwfa
-                        // reference uses a 4M-slot linearly-probed
-                        // global hash; sim's per-arc 4-slot bucket is
-                        // 6 orders of magnitude smaller and overflows
-                        // on high-vertex / high-arc-degree queries
-                        // (q128: n_vtx=17624, ql=1425). Falling back
-                        // to "treat as not-absent" silently dropped
-                        // the diag — m23's downstream same-vd merge
-                        // could not recover it because no peer PE
-                        // emit covered the same (vd, k). Treat the
-                        // overflow as absent instead: the diag enters
-                        // the B/A queue, and any genuine cross-
-                        // iteration duplicates of the same (w, i+1)
-                        // collapse via m23's same-vd max-k merge
-                        // since they all generate the same (vd=w,
-                        // k=i+1-ol, w_off=ol).
-                        absent = 1;
-                    }
 
                     // Character match (mvi2_ld inlined). q_bp2 / q_phys
                     // and gs_pos / gs_bp2 / gs_phys are block-local

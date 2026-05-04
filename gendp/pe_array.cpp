@@ -2443,7 +2443,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // === Section 7: Counter sync ===
             gwfa_sync_counters(gr[24], (uint32_t)gr[25],
                 (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
-            gwfa_set_ha_n_dirty((uint32_t)gr[31]);
+            // gwfa_set_ha_n_dirty REMOVED: m19 now uses gwfa_ha_put
+            // which maintains s_ha_n_dirty in-place; sim's gr[31]
+            // would have overwritten that with a stale per-PE count.
+            // Mirror the count in gr[31] so downstream consumers
+            // still see a coherent value.
+            gr[31] = (int)gwfa_get_ha_n_dirty();
         } else if (magic_id == 20) {
             // Magic 20: FIN0 subsequent batch load (15a-only).
             // Resumes multi-pass state from s1c, loads next batch.
@@ -2599,75 +2604,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             m18_b_done:
                 (void)0;
             }
-            // --- Phase 4: HA writeback SPM → MM (conditional dirty) ---
-            {
-                gr[5] = 0;                                // si: max_nHA
-                for (int pe = 0; pe < 4; pe++) {
-                    gr[7] = s1c[8 + pe];                  // mv: n_HA
-                    //NOP
-                    if (gr[7] <= gr[5]) goto m18_ha_max_skip; // bge: skip mv
-                    gr[5] = gr[7];                        // mv: max
-                m18_ha_max_skip:
-                    (void)0;
-                }
-                gr[11] = 0;                               // si: i
-                //NOP
-            m18_ha_outer:
-                if (gr[11] >= gr[5]) goto m18_ha_done;    // bge
-                //NOP
-                for (int pe = 0; pe < 4; pe++) {
-                    gr[10] = s1c[8 + pe];                 // mv: n_HA[pe]
-                    //NOP
-                    if (gr[11] >= gr[10]) goto m18_ha_skip;// bge: skip
-                    gr[7] = s1c[12 + pe];                 // mv: pe_spm
-                    gr[8] = gr[11] + gr[11];              // add: 2*i
-                    //NOP
-                    gr[9] = spm[gr[7] + FIN0_OUT_HA + gr[8]];     // mv: arc_idx
-                    gr[1] = spm[gr[7] + FIN0_OUT_HA + gr[8] + 1]; // mv: b_raw
-                    //NOP                                  // SPM lat 1/3
-                    //NOP                                  // SPM lat 2/3
-                    //NOP                                  // SPM lat 3/3
-                    gr[3] = gr[1] & 0xFFFFF;              // andi: bucket idx
-                    gr[4] = gr[1] & (1 << 20);            // andi: new_bucket
-                    // HA SPM addr: pe_spm + FIN0_HA + 4*arc_idx
-                    gr[8] = gr[9] + gr[9];                // add: 2*arc_idx
-                    gr[8] = gr[8] + gr[8];                // add: 4*arc_idx
-                    //NOP
-                    gr[8] = gr[7] + FIN0_HA + gr[8];      // add: ha_spm
-                    // MM dest: ha_off + b*4
-                    gr[9] = gr[3] + gr[3];                // add: 2*b
-                    gr[9] = gr[9] + gr[9];                // add: 4*b
-                    //NOP
-                    gr[9] = gr[9] + ha_off;               // add: mm_dst
-                    //NOP
-                    mm[gr[9]]   = spm[gr[8]];             // mvd: bucket → MM
-                    mm[gr[9]+1] = spm[gr[8]+1];
-                    mm[gr[9]+2] = spm[gr[8]+2];
-                    mm[gr[9]+3] = spm[gr[8]+3];
-                    if (gr[4] == 0) goto m18_ha_skip;      // beq: skip dirty
-                    // Bound check on the FIN0 HA dirty list — mirror
-                    // kernel/Gwfa/gwfa.c's ha_put guard at line 203.
-                    // The sim previously walked past the MM dirty
-                    // region under heavy hash collision; treat any
-                    // overflow as a hard failure rather than allowing
-                    // silent MM corruption that masks downstream bugs.
-                    if ((uint32_t)gr[31] >= (uint32_t)(HA_CAP_18 / 4)) {
-                        fprintf(stderr,
-                            "FATAL: m18 ha_dirty overflow "
-                            "(n=%d cap=%d)\n",
-                            gr[31], HA_CAP_18 / 4);
-                        exit(1);
-                    }
-                    mm[ha_dirty_off + gr[31]] = gr[3];    // mv: record bucket
-                    gr[31] = gr[31] + 1;                  // addi: dirty_n++
-                m18_ha_skip:
-                    (void)0;
-                }
-                gr[11] = gr[11] + 1;                      // addi
-                goto m18_ha_outer;
-            m18_ha_done:
-                (void)0;
-            }
+            // --- Phase 4: HA writeback SPM → MM
+            // SKIPPED. m19 now records hash entries via the kernel/Gwfa
+            // gwfa_ha_put helper, which writes directly to s_mm's
+            // global hash table and updates s_ha_n_dirty in-place. The
+            // old per-arc SPM-mirror writeback path was incompatible
+            // with that direct-MM contract and would have overwritten
+            // gwfa_ha_put's writes with stale per-arc SPM data. The
+            // dirty-list bound guard (codex Round 3 P1) now lives in
+            // gwfa_ha_put itself (kernel/Gwfa/gwfa.c:203) which is the
+            // authoritative producer.
+            (void)0;
 
             // --- Phase 5: Clear output metadata ---
             for (int pe = 0; pe < 4; pe++) {
@@ -2682,8 +2629,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // seam-helper-waived (DEC-4)
             gwfa_sync_counters(gr[24], (uint32_t)gr[25],
                 (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
-            // seam-helper-waived (DEC-4)
-            gwfa_set_ha_n_dirty((uint32_t)gr[31]);
+            // gwfa_set_ha_n_dirty REMOVED: gwfa_ha_put now maintains
+            // s_ha_n_dirty in-place, so sim's gr[31] would have
+            // clobbered it. Mirror reference's count back to gr[31]
+            // for any downstream consumer that still reads it.
+            gr[31] = (int)gwfa_get_ha_n_dirty();
         } else if (magic_id == 16) {
             // Sync counters, save state, setup DIAG sort (DIAG-first order).
             auto &gr = main_addressing_register;
