@@ -4442,7 +4442,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[11] = mm[main_gr[4] + 2*main_gr[5]];
                         // waitLSQ
                         //NOP                                    // LSQ settle
-                        if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3])
+                        // <= (not <) so PE-low's interval window also covers
+                        // intervals starting at pivot. Needed when same-vd
+                        // duplicates straddle the diag seam: PE-low's last
+                        // diag has vd == pivot, and the interval starting
+                        // at pivot covers it. With strict <, only PE-high
+                        // saw that interval and dropped its copy; PE-low
+                        // emitted the duplicate uncovered. Symptom:
+                        // q002 dist=7 extra WF 61 4305 0.
+                        if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3])
                             goto m38_b0_h_up_lo;
                         s1c[172] = main_gr[5];                   // h_hi = mid
                         goto m38_b0_skip_h;
@@ -4513,7 +4521,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[11] = mm[main_gr[4] + 2*main_gr[5]];
                         // waitLSQ
                         //NOP
-                        if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3])
+                        // <= (not <) so PE-low's interval window also covers
+                        // intervals starting at pivot. Needed when same-vd
+                        // duplicates straddle the diag seam: PE-low's last
+                        // diag has vd == pivot, and the interval starting
+                        // at pivot covers it. With strict <, only PE-high
+                        // saw that interval and dropped its copy; PE-low
+                        // emitted the duplicate uncovered. Symptom:
+                        // q002 dist=7 extra WF 61 4305 0.
+                        if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3])
                             goto m38_b1_h_up_lo;
                         s1c[173] = main_gr[5];
                         goto m38_b1_skip_h;
@@ -4581,7 +4597,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[11] = mm[main_gr[4] + 2*main_gr[5]];
                         // waitLSQ
                         //NOP
-                        if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3])
+                        // <= (not <) so PE-low's interval window also covers
+                        // intervals starting at pivot. Needed when same-vd
+                        // duplicates straddle the diag seam: PE-low's last
+                        // diag has vd == pivot, and the interval starting
+                        // at pivot covers it. With strict <, only PE-high
+                        // saw that interval and dropped its copy; PE-low
+                        // emitted the duplicate uncovered. Symptom:
+                        // q002 dist=7 extra WF 61 4305 0.
+                        if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3])
                             goto m38_b2_h_up_lo;
                         s1c[174] = main_gr[5];
                         goto m38_b2_skip_h;

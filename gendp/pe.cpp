@@ -2156,7 +2156,15 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             scratch_lo = spm[979];                       // probe_l0
             //NOP
             //NOP
-            if (scratch_lo < 0 && (uint32_t)out_lo >= (uint32_t)bvd_0) spm[979] = gpos;
+            // > (not >=): probe_l_X records the first gpos where intv.vd0
+            // strictly exceeds pivot bvd_X. This is the lower-bound seam
+            // index for PE_X's interval window. Strict > makes intervals
+            // starting AT the pivot (vd0 == pivot) belong to the lower-PE
+            // window so that a PE-low diag at vd == pivot (cross-PE
+            // same-vd duplicate) is dropped by the interval covering it.
+            // Pair with m38 binary-search h-step `<=` change. Symptom of
+            // mis-pairing: q002 dist=7 extra WF 61 4305 0.
+            if (scratch_lo < 0 && (uint32_t)out_lo > (uint32_t)bvd_0) spm[979] = gpos;
             //NOP                                         // SPM port gap
             scratch_lo = spm[977];                       // probe_h1
             //NOP
@@ -2166,7 +2174,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             scratch_lo = spm[980];                       // probe_l1
             //NOP
             //NOP
-            if (scratch_lo < 0 && (uint32_t)out_lo >= (uint32_t)bvd_1) spm[980] = gpos;
+            if (scratch_lo < 0 && (uint32_t)out_lo > (uint32_t)bvd_1) spm[980] = gpos;
             //NOP                                         // SPM port gap
             scratch_lo = spm[978];                       // probe_h2
             //NOP
@@ -2176,7 +2184,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             scratch_lo = spm[981];                       // probe_l2
             //NOP
             //NOP
-            if (scratch_lo < 0 && (uint32_t)out_lo >= (uint32_t)bvd_2) spm[981] = gpos;
+            if (scratch_lo < 0 && (uint32_t)out_lo > (uint32_t)bvd_2) spm[981] = gpos;
             // Post-emit exhaustion check (rare path).
             if (ai >= a_n) goto m22_switch_a;
             if (bi >= b_n) goto m22_switch_b;
@@ -2533,7 +2541,6 @@ m23_B_peek_done:
             clo = (int)0xFFFFFFFF;
             goto m23_B_loop;
 m23_B_done:
-            // Forbidden check: skip diag if inside current intv.
             if (clo != (int)0xFFFFFFFF
                 && (uint32_t)clo <= (uint32_t)pv
                 && (uint32_t)pv  <  (uint32_t)chi)
