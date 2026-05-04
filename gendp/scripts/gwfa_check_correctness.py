@@ -18,9 +18,11 @@ Prereqs:
 
 import sys
 import os
+import queue
 import re
 import subprocess
 import tempfile
+import threading
 import time
 import concurrent.futures
 from pathlib import Path
@@ -160,31 +162,67 @@ def run_single_case_smart(args):
             with open(os.path.join(tmpdir, fname), 'w') as f:
                 f.write(line + '\n')
 
-        # --- Pass 1: normal run, soft-bounded
-        # GWFA_PROGRESS makes the sim emit a 'progress' line every
-        # 100k cycles. Without it, readline() below would block on a
-        # silent long-running query and we'd miss the soft-timeout
-        # by up to the case's full natural runtime.
+        # --- Pass 1: normal run, soft-bounded.
+        # Round 9 P2 fix per Codex review: a blocking readline()
+        # prevents the soft-timeout check from running until the
+        # subprocess prints or exits, so a silent long-running query
+        # could sit far past SMART_SOFT_TIMEOUT. Replace with a reader
+        # thread that pushes lines onto a queue; the main loop polls
+        # the queue with a short timeout so the wall-clock check
+        # always runs at least every 0.5s. GWFA_PROGRESS is no longer
+        # required for the timeout to fire, but keep it on so users
+        # running -k 7 manually still see periodic progress.
         cmd = [str(SIM_PATH), '-k', '7',
                '-i', tmpdir, '-n', '1']
         env = dict(os.environ)
         env['GWFA_PROGRESS'] = '100000'
+        # Round 9 P2 fix per Codex review (companion to the rc!=0
+        # rejection below): also disable LSan's ptrace probe in the
+        # primary smart-mode run so a restricted-ptrace environment
+        # doesn't manufacture rc=1 on otherwise-correct queries (same
+        # rationale as the trace-fallback at line ~266; only suppresses
+        # the leak detector at exit, not the address-sanitizer body).
+        env['ASAN_OPTIONS'] = (env.get('ASAN_OPTIONS', '') +
+                               (':' if env.get('ASAN_OPTIONS') else '')
+                               + 'detect_leaks=0')
         proc = subprocess.Popen(
             cmd, cwd=str(REPO_ROOT),
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True, bufsize=1, env=env)
+
+        # Background reader: push every stdout line onto a queue, then
+        # push a sentinel on EOF. Daemon thread so it dies with the
+        # interpreter even if we forget to join.
+        line_q: "queue.Queue[str | None]" = queue.Queue()
+
+        def _reader(stream, q):
+            try:
+                for line in stream:
+                    q.put(line)
+            finally:
+                q.put(None)
+
+        reader_thread = threading.Thread(
+            target=_reader, args=(proc.stdout, line_q),
+            daemon=True)
+        reader_thread.start()
+
         score = None
         timed_out = False
         start = time.time()
         try:
             while True:
-                if time.time() - start > SMART_SOFT_TIMEOUT:
+                remaining = SMART_SOFT_TIMEOUT - (time.time() - start)
+                if remaining <= 0:
                     timed_out = True
                     break
-                line = proc.stdout.readline()
-                if not line:
-                    break
+                try:
+                    line = line_q.get(timeout=min(remaining, 0.5))
+                except queue.Empty:
+                    continue
+                if line is None:
+                    break  # EOF
                 m = re.match(r'qqq (-?\d+) qqq', line)
                 if m:
                     score = int(m.group(1))
@@ -196,10 +234,22 @@ def run_single_case_smart(args):
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait()
+            else:
+                proc.wait()
             if proc.stdout:
                 proc.stdout.close()
+            reader_thread.join(timeout=1)
 
         if not timed_out:
+            # Round 9 P2 fix per Codex review: surface a nonzero
+            # simulator exit (ASan / assertion / abort after qqq print)
+            # as ERROR rather than silently honoring a parsed score.
+            # `timed_out == False` means we did not send SIGTERM, so
+            # proc.returncode is the simulator's natural exit code.
+            if proc.returncode != 0:
+                return (case_idx, 'ERROR',
+                        f'sim rc={proc.returncode} '
+                        f'(score parsed={score})')
             if score is None:
                 return (case_idx, 'ERROR', 'no score in output')
             if score == golden_score:
@@ -222,13 +272,17 @@ def _smart_fallback_trace(case_idx, tmpdir, golden_score):
     # can't time out; if we got here, the sim is broken — bail.
     golden_path = SMART_GOLDEN_DIR / f"q{case_idx:03d}.txt"
     if not golden_path.exists():
-        # No trace golden (n_vtx == 0). Trace check meaningless.
-        # Fall back to: just verify the simulator emits qqq -1 qqq when
-        # given the empty-graph input (matches reference behavior).
+        # Round 9 P3 fix per Codex review: a soft-timeout on a
+        # golden_score == -1 (empty-graph) query is itself pathological
+        # — the reference returns immediately with `qqq -1 qqq`. If the
+        # simulator hung past SMART_SOFT_TIMEOUT and produced no
+        # validated output, that is an execution failure, not a PASS.
+        # Surface it as ERROR so mode 4's correctness bar isn't
+        # silently weakened by the very fallback meant to catch it.
         if golden_score == -1:
-            return (case_idx, 'PASS',
-                    'trace-skip (empty graph; soft-timeout '
-                    'unexpected but continuing)')
+            return (case_idx, 'ERROR',
+                    'soft-timeout on empty-graph case '
+                    '(golden_score==-1 should finish instantly)')
         return (case_idx, 'FAIL',
                 f'soft-timeout and no trace golden at {golden_path}')
 
