@@ -1320,9 +1320,41 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         m8_trail_emit:
             gr.st(4, reg[9] + 1);                         // prev_vd+1
             gr.st(5, reg[2]);                             // ppk
-            
+
+            // Cross-PE seam: this trail emits the right-boundary INSERT
+            // edit for prev_vd. In the single-thread reference, the
+            // right-side mismatch emit at the LAST diag of a global seq
+            // run uses k = max(pk, ppk+1) — i.e., includes a +1 on the
+            // last diag's post-extend k. When the global seq run spans
+            // multiple PE tiles, the leading PE's trail emits use
+            // k = ppk (the leading PE's last post-extend k), missing
+            // the next-diag's contribution. The reference's max often
+            // exceeds emit_b's `d+k < ql` filter and is dropped. The
+            // leading PE's trail with the lower k may pass the filter
+            // and become a spurious B-queue entry. Mirror the
+            // reference's drop condition: if the next PE's first diag
+            // (= prev_vd+1) has k_input such that the reference's
+            // max(ppk, k_input+1) would fail the filter, skip the
+            // trail. This is conservative — it only suppresses trails
+            // that the reference itself would have dropped.
+            if (id < 3) {
+                int *next_spm = &SPM_unit->buffer[
+                    (id + 1) * SPM_BANK_GROUP_SIZE + buf_base];
+                int next_tile_n = next_spm[META_TILE_N];
+                if (next_tile_n > 0
+                    && next_spm[TILE_A_OFF] == gr.at(4)) {
+                    int next_k_in = next_spm[TILE_A_OFF + 1];
+                    int d_emit = (gr.at(4) & 0xFFFF) - DIAG_BIAS;
+                    // Reference's right-side k = max(ppk, next_k+1).
+                    int ref_k = gr.at(5);
+                    if (next_k_in + 1 > ref_k) ref_k = next_k_in + 1;
+                    if (d_emit + ref_k >= gr.at(14)) goto m8_trail_skip;
+                }
+            }
+
             emit_b(); //call
-            
+
+        m8_trail_skip:
             goto m8_outer_loop;
 
             // === LAST_EMITS ===
@@ -1339,8 +1371,27 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
             gr.st(4, gr.at(8) + 1);                       // prev_vd+1 = vd+1
             gr.st(5, gr.at(9));                            // ppk = k
-            
+
+            // Cross-PE seam — same reasoning as m8_trail_emit. The
+            // (vd+1, k) emit here is the right-boundary INSERT for the
+            // SOLE diag in this tile. Mirror the reference's drop
+            // condition using the next PE's first input k.
+            if (id < 3) {
+                int *next_spm = &SPM_unit->buffer[
+                    (id + 1) * SPM_BANK_GROUP_SIZE + buf_base];
+                int next_tile_n = next_spm[META_TILE_N];
+                if (next_tile_n > 0
+                    && next_spm[TILE_A_OFF] == gr.at(4)) {
+                    int next_k_in = next_spm[TILE_A_OFF + 1];
+                    int d_emit = (gr.at(4) & 0xFFFF) - DIAG_BIAS;
+                    int ref_k = gr.at(5);
+                    if (next_k_in + 1 > ref_k) ref_k = next_k_in + 1;
+                    if (d_emit + ref_k >= gr.at(14)) goto m8_last_emits_done;
+                }
+            }
+
             emit_b();
+        m8_last_emits_done: ;
 
             // === WRITEBACK ===
         m8_writeback:
