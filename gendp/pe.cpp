@@ -442,9 +442,13 @@ void pe::run(int simd) {
     }
     bool cf0 = is_ctrl_flow(ctrl_op[0]), cf1 = is_ctrl_flow(ctrl_op[1]);
 
-    // Both slots took control flow: they must agree on the target.
-    // Mirrors the controller reject at pe_array.cpp ~4623.
-    if (cf0 && cf1 && PC[0] != PC[1]) {
+    // SHARED-mode only: both slots took control flow must agree on the
+    // target. Mirrors the controller reject at pe_array.cpp ~4623.
+    // PC_MODE_DUAL (POA) lets the two slots branch independently —
+    // poa_instruction_generator.py emits same-cycle bge/set_PC pairs
+    // with different targets, which is legal in dual-PC mode.
+    if (pc_mode == PC_MODE_SHARED
+        && cf0 && cf1 && PC[0] != PC[1]) {
         fprintf(stderr,
             "PE[%d] PC=%d diverging branches:"
             " slot0->%d slot1->%d\n",

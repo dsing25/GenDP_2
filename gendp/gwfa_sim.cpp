@@ -376,6 +376,13 @@ void gwfa_simulation(
             pe_instr[i][j][0] = CTRL_NOP_INSTRUCTION;
             pe_instr[i][j][1] = CTRL_NOP_INSTRUCTION;
         }
+    // Round 8 P2 fix per Codex review. Mirror the main_instruction
+    // loader's capacity / odd-line / slot-0-opcode guards so a stale
+    // pre-paired pe_X_instruction.txt, an odd-length file, or an
+    // overlong regeneration fails fast instead of silently mispairing
+    // (or walking past the end of pe_instr).
+    const int kPeMaxLines =
+        CTRL_INSTR_BUFFER_NUM * CTRL_INSTR_BUFFER_GROUP_SIZE;
     for (int i = 0; i < pe_group_size; i++) {
         std::string pe_file = "instructions/gwfa/pe_" + std::to_string(i) + "_instruction.txt";
         std::fstream fp;
@@ -384,10 +391,52 @@ void gwfa_simulation(
             std::string line;
             int read_index = 0;
             while (getline(fp, line)) {
+                if (read_index >= kPeMaxLines) {
+                    fprintf(stderr,
+                        "%s exceeds capacity (%d lines, max %d). "
+                        "Regenerate with the current generator.\n",
+                        pe_file.c_str(),
+                        read_index + 1, kPeMaxLines);
+                    exit(-1);
+                }
                 pe_instr[i][read_index / 2][read_index % 2] = std::stoull(line, 0, 0);
                 read_index++;
             }
             fp.close();
+            if (read_index % 2 != 0) {
+                fprintf(stderr,
+                    "%s has odd line count (%d); paired-slot loader "
+                    "expects two lines per PE PC. Likely a stale "
+                    "single-line-per-PC file from before the "
+                    "paired-slot migration.\n",
+                    pe_file.c_str(), read_index);
+                exit(-1);
+            }
+            // Stale-single-slot detection (mirrors main_instruction's
+            // Round 10/14 check). Even-line-count files can still be
+            // mispaired single-slot traces; branch / jump / set_PC are
+            // slot-1-only in the paired ISA, so any of those at slot 0
+            // signals a stale file. Skip for magic-bit-63 words.
+            for (int pc = 0; pc < read_index / 2; pc++) {
+                unsigned long instr = pe_instr[i][pc][0];
+                if (instr & (1UL << 63)) continue;
+                int op = (int)(instr
+                    & ((1 << CTRL_OPCODE_WIDTH) - 1));
+                if (op == CTRL_BNE || op == CTRL_BEQ
+                    || op == CTRL_BGE || op == CTRL_BLT
+                    || op == CTRL_JUMP
+                    || op == CTRL_SET_PC) {
+                    fprintf(stderr,
+                        "%s: slot-0 of PC %d holds opcode %d "
+                        "(branch/jump/set_PC), which is "
+                        "slot-1-only in the paired ISA. Likely "
+                        "a stale single-slot file misread as "
+                        "paired. Regenerate with the current "
+                        "paired-slot generator.\n",
+                        pe_file.c_str(), pc, op);
+                    exit(-1);
+                }
+            }
         }
     }
 
