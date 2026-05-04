@@ -208,11 +208,13 @@ def run_single_case_smart(args):
             return (case_idx, 'FAIL',
                     f'score sim={score} gld={golden_score}')
 
-        # Soft-timeout: just record the early exit. Trace-fallback
-        # check is deferred until the simulator's per-iteration
-        # state matches the reference (see q0 dedup divergence).
-        return (case_idx, 'TIMEOUT',
-                f'>{SMART_SOFT_TIMEOUT}s, gld={golden_score}')
+        # Soft-timeout: fall back to a bounded s_term=10 trace check
+        # against the per-query golden. The simulator's wfDebug now
+        # matches the reference up to interval ordering (post m16/m39
+        # s1c[150] fix), so this is a real ground-truth check on the
+        # first 10 WF iterations rather than just a "ran out of time"
+        # acknowledgement.
+        return _smart_fallback_trace(case_idx, tmpdir, golden_score)
 
 
 def _smart_fallback_trace(case_idx, tmpdir, golden_score):
@@ -249,16 +251,20 @@ def _smart_fallback_trace(case_idx, tmpdir, golden_score):
         env['GWFA_S_TERM_DBG'] = str(SMART_S_TERM)
         cmd = [str(SIM_PATH), '-k', '7',
                '-i', tmpdir, '-n', '1']
+        # Most cases finish s_term=10 in seconds, but a couple of
+        # pathological queries (e.g. q128) have very large per-iter
+        # work; allow 5min before giving up.
+        FALLBACK_TIMEOUT = 300
         try:
             r = subprocess.run(
                 cmd, cwd=run_cwd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                text=True, timeout=120, env=env)
+                text=True, timeout=FALLBACK_TIMEOUT, env=env)
         except subprocess.TimeoutExpired:
             return (case_idx, 'ERROR',
                     f'soft-timeout fallback also timed out '
-                    f'(>{120}s at s_term={SMART_S_TERM})')
+                    f'(>{FALLBACK_TIMEOUT}s at s_term={SMART_S_TERM})')
         wfd = os.path.join(run_cwd, 'wfDebug.txt')
         if r.returncode != 0 or not os.path.exists(wfd):
             return (case_idx, 'ERROR',
@@ -268,11 +274,33 @@ def _smart_fallback_trace(case_idx, tmpdir, golden_score):
             sim_text = f.read()
     with open(golden_path) as f:
         gld_text = f.read()
-    if sim_text == gld_text:
+
+    # The simulator emits one extra trailing [gfa_ed_step] block past
+    # s_term (post-extend snapshot at dist=s_term+1) that the reference
+    # kernel does not — its loop breaks before the final debug_step
+    # call. Truncate sim to the first len(gld_steps) blocks so the
+    # comparison is a proper subset check rather than failing on an
+    # off-by-one trailing block.
+    def _trim_to_n_steps(text, n):
+        out = []
+        seen = 0
+        for line in text.splitlines(keepends=True):
+            if line.startswith('[gfa_ed_step]'):
+                seen += 1
+                if seen > n:
+                    break
+            out.append(line)
+        return ''.join(out)
+
+    n_gld_steps = sum(1 for l in gld_text.splitlines()
+                      if l.startswith('[gfa_ed_step]'))
+    sim_trim = _trim_to_n_steps(sim_text, n_gld_steps)
+
+    if sim_trim == gld_text:
         return (case_idx, 'PASS',
                 f'soft-timeout: trace[{SMART_S_TERM}]==golden')
     # Help debugging: where do they first diverge?
-    sim_lines = sim_text.splitlines()
+    sim_lines = sim_trim.splitlines()
     gld_lines = gld_text.splitlines()
     first_diff = next(
         (i for i, (a, b) in enumerate(zip(sim_lines, gld_lines))
@@ -316,14 +344,18 @@ def run_smart_parallel(num_threads):
     n_pass = sum(1 for r in results if r and r[0] == 'PASS')
     n_fail = sum(1 for r in results if r and r[0] == 'FAIL')
     n_err  = sum(1 for r in results if r and r[0] == 'ERROR')
-    n_to   = sum(1 for r in results if r and r[0] == 'TIMEOUT')
+    # Cases that hit the soft timeout and went through the s_term=10
+    # trace fallback are tagged with 'soft-timeout' in the detail field
+    # by _smart_fallback_trace.
+    n_traced = sum(1 for r in results
+                   if r and 'soft-timeout' in (r[1] or ''))
 
     fails = [(i, r[1]) for i, r in enumerate(results)
              if r and r[0] == 'FAIL']
     errors = [(i, r[1]) for i, r in enumerate(results)
               if r and r[0] == 'ERROR']
-    timeouts = [i for i, r in enumerate(results)
-                if r and r[0] == 'TIMEOUT']
+    traced = [i for i, r in enumerate(results)
+              if r and 'soft-timeout' in (r[1] or '')]
 
     if fails:
         print()
@@ -335,16 +367,19 @@ def run_smart_parallel(num_threads):
         print(f"ERROR ({len(errors)}):")
         for i, d in errors:
             print(f"  [{i}] {d}")
-    if timeouts:
+    if traced:
         print()
-        print(f"TIMEOUT >{SMART_SOFT_TIMEOUT}s ({len(timeouts)}):")
-        print(f"  {timeouts}")
+        print(f"trace-checked at s_term={SMART_S_TERM} "
+              f"(soft-timeout >{SMART_SOFT_TIMEOUT}s): {len(traced)}")
+        print(f"  {traced}")
 
     print()
     print("=" * 50)
     print(f"Wall: {elapsed:.1f}s")
     print(f"Results: {n_pass} pass, {n_fail} fail, "
-          f"{n_err} error, {n_to} timeout  out of {n}")
+          f"{n_err} error  out of {n}")
+    print(f"  ({n_traced} of those hit soft-timeout and were "
+          f"trace-checked at s_term={SMART_S_TERM})")
     print("=" * 50)
     return n_fail + n_err
 

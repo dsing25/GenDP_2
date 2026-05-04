@@ -2687,7 +2687,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             s1c[145] = gr[24];                       // n_a
             // seam-helper-waived (DEC-4)
             s1c[146] = (int)gwfa_get_intv_n();       // old intv_n
-            s1c[155] = gr[28];                       // next_intv_n
+            // s1c[150] = next_intv_n. CANNOT use s1c[155]: magic 36
+            // overwrites s1c[155..157] with diag-merge split[1..3] indices
+            // (pe_array.cpp m36, "s1c[154 + pe] = gr[5]"). m16 runs before
+            // diag sort+merge, m39 reads next_intv_n after; if stored at
+            // s1c[155], m36 silently clobbers it with split[1] = nape =
+            // (n_a+3)/4. Effect: m39's gr[24] = nape instead of n_intv,
+            // so the intv sort processes only nape entries and ~half the
+            // intervals fall off the end. Symptom: q0 dist=1 = 32 sim
+            // intervals vs 85 reference (sim drops 53).
+            s1c[150] = gr[28];                       // next_intv_n
             s1c[152] = MM_INTV;                      // active_intv_base
             s1c[153] = gr[20];                       // active_diag_base
             // Clamp n_phase1_v to [0, n_a] using branches
@@ -4636,7 +4645,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 constexpr int MM_INTV     = DIAG_CAP_V * 6;
                 constexpr int MM_NEXT_INTV = MM_INTV + INTV_CAP_V * 2;
                 constexpr int MM_SWAP     = MM_NEXT_INTV + INTV_CAP_V * 2;
-                gr[24] = s1c[155];                       // mv s1c -> gr (n_intv)
+                gr[24] = s1c[150];                       // mv s1c -> gr (n_intv) — see m16 note
                 gr[3]  = MM_NEXT_INTV;                   // si (constexpr)
                 //NOP                                     // s1c gap
                 gr[4]  = MM_SWAP;                        // si (constexpr)
