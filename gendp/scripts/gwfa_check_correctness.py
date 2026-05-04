@@ -249,6 +249,23 @@ def _smart_fallback_trace(case_idx, tmpdir, golden_score):
         env = dict(os.environ)
         env['GWFA_DBG'] = '1'
         env['GWFA_S_TERM_DBG'] = str(SMART_S_TERM)
+        # The sim is built with AddressSanitizer by default
+        # (Makefile ADDRESS_SANITIZER=1). LeakSanitizer attaches via
+        # ptrace at process exit; some kernel/security configurations
+        # (e.g. Yama ptrace_scope=2, Docker default seccomp, certain
+        # CI sandboxes) reject the ptrace call, and LSan then prints
+        # "LeakSanitizer has encountered a fatal error ... does not
+        # work under ptrace" and exits the simulator with rc=1
+        # AFTER the wfDebug.txt has been fully written. The fallback
+        # check below treats any nonzero rc as ERROR, which causes
+        # this environment-only signal to fail otherwise-correct
+        # queries. Disable leak detection for the debug rerun: this
+        # does NOT weaken the trace comparator (the comparator only
+        # checks wfDebug.txt content), it only avoids LSan's
+        # unsupported ptrace probe at process exit.
+        env['ASAN_OPTIONS'] = (env.get('ASAN_OPTIONS', '') +
+                               (':' if env.get('ASAN_OPTIONS') else '')
+                               + 'detect_leaks=0')
         cmd = [str(SIM_PATH), '-k', '7',
                '-i', tmpdir, '-n', '1']
         # Most cases finish s_term=10 in seconds, but a couple of
