@@ -2868,8 +2868,24 @@ m23_end:    ;
                     n_HA++;
                 m19_bkt_done: ;
                     if (absent == -1) {
-                        // Bucket full — treat as not-absent
-                        absent = 0;
+                        // Bucket full (all 4 slots hold non-sentinel
+                        // keys, none equal to hkey). The kernel/Gwfa
+                        // reference uses a 4M-slot linearly-probed
+                        // global hash; sim's per-arc 4-slot bucket is
+                        // 6 orders of magnitude smaller and overflows
+                        // on high-vertex / high-arc-degree queries
+                        // (q128: n_vtx=17624, ql=1425). Falling back
+                        // to "treat as not-absent" silently dropped
+                        // the diag — m23's downstream same-vd merge
+                        // could not recover it because no peer PE
+                        // emit covered the same (vd, k). Treat the
+                        // overflow as absent instead: the diag enters
+                        // the B/A queue, and any genuine cross-
+                        // iteration duplicates of the same (w, i+1)
+                        // collapse via m23's same-vd max-k merge
+                        // since they all generate the same (vd=w,
+                        // k=i+1-ol, w_off=ol).
+                        absent = 1;
                     }
 
                     // Character match (mvi2_ld inlined). q_bp2 / q_phys

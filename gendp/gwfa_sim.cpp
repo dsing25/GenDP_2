@@ -483,9 +483,17 @@ void gwfa_simulation(
         if (st_env)
             pa->main_addressing_register[23] = atoi(st_env);
 
-        // Max cycles: scale with edit distance × tiles per step
+        // Max cycles: scale with edit distance × tiles per step.
+        // Per-step work also scales with n_vtx and ql for
+        // pathological inputs (q128: n_vtx=17624, ql=1425), which
+        // fan out the m19 FIN0 arc-expansion + m22/m23 sort/dedup
+        // loop. Add a vertex-count + query-length-aware term so the
+        // per-query budget covers the full s_term-step trace even
+        // for the 295-suite outliers; clamp to a 2M-cycle floor.
         int max_cycles =
             inp.s_term * 500000 + 500000;
+        int extra = (int)inp.n_vtx * 100 + inp.ql * 8000;
+        max_cycles += extra;
         if (max_cycles < 2000000) max_cycles = 2000000;
         pa->run(max_cycles, 0, PE_4_SETTING,
             MAIN_INSTRUCTION_1);
