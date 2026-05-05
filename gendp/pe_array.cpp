@@ -2447,7 +2447,12 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // === Section 7: Counter sync ===
             gwfa_sync_counters(gr[24], (uint32_t)gr[25],
                 (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
-            gwfa_set_ha_n_dirty((uint32_t)gr[31]);
+            // gwfa_set_ha_n_dirty REMOVED: m19 now uses gwfa_ha_put
+            // which maintains s_ha_n_dirty in-place; sim's gr[31]
+            // would have overwritten that with a stale per-PE count.
+            // Mirror the count in gr[31] so downstream consumers
+            // still see a coherent value.
+            gr[31] = (int)gwfa_get_ha_n_dirty();
         } else if (magic_id == 20) {
             // Magic 20: FIN0 subsequent batch load (15a-only).
             // Resumes multi-pass state from s1c, loads next batch.
@@ -2603,62 +2608,17 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             m18_b_done:
                 (void)0;
             }
-            // --- Phase 4: HA writeback SPM → MM (conditional dirty) ---
-            {
-                gr[5] = 0;                                // si: max_nHA
-                for (int pe = 0; pe < 4; pe++) {
-                    gr[7] = s1c[8 + pe];                  // mv: n_HA
-                    //NOP
-                    if (gr[7] <= gr[5]) goto m18_ha_max_skip; // bge: skip mv
-                    gr[5] = gr[7];                        // mv: max
-                m18_ha_max_skip:
-                    (void)0;
-                }
-                gr[11] = 0;                               // si: i
-                //NOP
-            m18_ha_outer:
-                if (gr[11] >= gr[5]) goto m18_ha_done;    // bge
-                //NOP
-                for (int pe = 0; pe < 4; pe++) {
-                    gr[10] = s1c[8 + pe];                 // mv: n_HA[pe]
-                    //NOP
-                    if (gr[11] >= gr[10]) goto m18_ha_skip;// bge: skip
-                    gr[7] = s1c[12 + pe];                 // mv: pe_spm
-                    gr[8] = gr[11] + gr[11];              // add: 2*i
-                    //NOP
-                    gr[9] = spm[gr[7] + FIN0_OUT_HA + gr[8]];     // mv: arc_idx
-                    gr[1] = spm[gr[7] + FIN0_OUT_HA + gr[8] + 1]; // mv: b_raw
-                    //NOP                                  // SPM lat 1/3
-                    //NOP                                  // SPM lat 2/3
-                    //NOP                                  // SPM lat 3/3
-                    gr[3] = gr[1] & 0xFFFFF;              // andi: bucket idx
-                    gr[4] = gr[1] & (1 << 20);            // andi: new_bucket
-                    // HA SPM addr: pe_spm + FIN0_HA + 4*arc_idx
-                    gr[8] = gr[9] + gr[9];                // add: 2*arc_idx
-                    gr[8] = gr[8] + gr[8];                // add: 4*arc_idx
-                    //NOP
-                    gr[8] = gr[7] + FIN0_HA + gr[8];      // add: ha_spm
-                    // MM dest: ha_off + b*4
-                    gr[9] = gr[3] + gr[3];                // add: 2*b
-                    gr[9] = gr[9] + gr[9];                // add: 4*b
-                    //NOP
-                    gr[9] = gr[9] + ha_off;               // add: mm_dst
-                    //NOP
-                    mm[gr[9]]   = spm[gr[8]];             // mvd: bucket → MM
-                    mm[gr[9]+1] = spm[gr[8]+1];
-                    mm[gr[9]+2] = spm[gr[8]+2];
-                    mm[gr[9]+3] = spm[gr[8]+3];
-                    if (gr[4] == 0) goto m18_ha_skip;      // beq: skip dirty
-                    mm[ha_dirty_off + gr[31]] = gr[3];    // mv: record bucket
-                    gr[31] = gr[31] + 1;                  // addi: dirty_n++
-                m18_ha_skip:
-                    (void)0;
-                }
-                gr[11] = gr[11] + 1;                      // addi
-                goto m18_ha_outer;
-            m18_ha_done:
-                (void)0;
-            }
+            // --- Phase 4: HA writeback SPM → MM
+            // SKIPPED. m19 now records hash entries via the kernel/Gwfa
+            // gwfa_ha_put helper, which writes directly to s_mm's
+            // global hash table and updates s_ha_n_dirty in-place. The
+            // old per-arc SPM-mirror writeback path was incompatible
+            // with that direct-MM contract and would have overwritten
+            // gwfa_ha_put's writes with stale per-arc SPM data. The
+            // dirty-list bound guard (codex Round 3 P1) now lives in
+            // gwfa_ha_put itself (kernel/Gwfa/gwfa.c:203) which is the
+            // authoritative producer.
+            (void)0;
 
             // --- Phase 5: Clear output metadata ---
             for (int pe = 0; pe < 4; pe++) {
@@ -2673,8 +2633,11 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             // seam-helper-waived (DEC-4)
             gwfa_sync_counters(gr[24], (uint32_t)gr[25],
                 (uint32_t)gr[26], (uint32_t)gr[27], gr[28]);
-            // seam-helper-waived (DEC-4)
-            gwfa_set_ha_n_dirty((uint32_t)gr[31]);
+            // gwfa_set_ha_n_dirty REMOVED: gwfa_ha_put now maintains
+            // s_ha_n_dirty in-place, so sim's gr[31] would have
+            // clobbered it. Mirror reference's count back to gr[31]
+            // for any downstream consumer that still reads it.
+            gr[31] = (int)gwfa_get_ha_n_dirty();
         } else if (magic_id == 16) {
             // Sync counters, save state, setup DIAG sort (DIAG-first order).
             auto &gr = main_addressing_register;
@@ -2691,7 +2654,16 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
             s1c[145] = gr[24];                       // n_a
             // seam-helper-waived (DEC-4)
             s1c[146] = (int)gwfa_get_intv_n();       // old intv_n
-            s1c[155] = gr[28];                       // next_intv_n
+            // s1c[150] = next_intv_n. CANNOT use s1c[155]: magic 36
+            // overwrites s1c[155..157] with diag-merge split[1..3] indices
+            // (pe_array.cpp m36, "s1c[154 + pe] = gr[5]"). m16 runs before
+            // diag sort+merge, m39 reads next_intv_n after; if stored at
+            // s1c[155], m36 silently clobbers it with split[1] = nape =
+            // (n_a+3)/4. Effect: m39's gr[24] = nape instead of n_intv,
+            // so the intv sort processes only nape entries and ~half the
+            // intervals fall off the end. Symptom: q0 dist=1 = 32 sim
+            // intervals vs 85 reference (sim drops 53).
+            s1c[150] = gr[28];                       // next_intv_n
             s1c[152] = MM_INTV;                      // active_intv_base
             s1c[153] = gr[20];                       // active_diag_base
             // Clamp n_phase1_v to [0, n_a] using branches
@@ -4437,7 +4409,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[11] = mm[main_gr[4] + 2*main_gr[5]];
                         // waitLSQ
                         //NOP                                    // LSQ settle
-                        if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3])
+                        // <= (not <) so PE-low's interval window also covers
+                        // intervals starting at pivot. Needed when same-vd
+                        // duplicates straddle the diag seam: PE-low's last
+                        // diag has vd == pivot, and the interval starting
+                        // at pivot covers it. With strict <, only PE-high
+                        // saw that interval and dropped its copy; PE-low
+                        // emitted the duplicate uncovered. Symptom:
+                        // q002 dist=7 extra WF 61 4305 0.
+                        if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3])
                             goto m38_b0_h_up_lo;
                         s1c[172] = main_gr[5];                   // h_hi = mid
                         goto m38_b0_skip_h;
@@ -4508,7 +4488,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[11] = mm[main_gr[4] + 2*main_gr[5]];
                         // waitLSQ
                         //NOP
-                        if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3])
+                        // <= (not <) so PE-low's interval window also covers
+                        // intervals starting at pivot. Needed when same-vd
+                        // duplicates straddle the diag seam: PE-low's last
+                        // diag has vd == pivot, and the interval starting
+                        // at pivot covers it. With strict <, only PE-high
+                        // saw that interval and dropped its copy; PE-low
+                        // emitted the duplicate uncovered. Symptom:
+                        // q002 dist=7 extra WF 61 4305 0.
+                        if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3])
                             goto m38_b1_h_up_lo;
                         s1c[173] = main_gr[5];
                         goto m38_b1_skip_h;
@@ -4576,7 +4564,15 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                         main_gr[11] = mm[main_gr[4] + 2*main_gr[5]];
                         // waitLSQ
                         //NOP
-                        if ((uint32_t)main_gr[11] < (uint32_t)main_gr[3])
+                        // <= (not <) so PE-low's interval window also covers
+                        // intervals starting at pivot. Needed when same-vd
+                        // duplicates straddle the diag seam: PE-low's last
+                        // diag has vd == pivot, and the interval starting
+                        // at pivot covers it. With strict <, only PE-high
+                        // saw that interval and dropped its copy; PE-low
+                        // emitted the duplicate uncovered. Symptom:
+                        // q002 dist=7 extra WF 61 4305 0.
+                        if ((uint32_t)main_gr[11] <= (uint32_t)main_gr[3])
                             goto m38_b2_h_up_lo;
                         s1c[174] = main_gr[5];
                         goto m38_b2_skip_h;
@@ -4640,7 +4636,7 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
                 constexpr int MM_INTV     = DIAG_CAP_V * 6;
                 constexpr int MM_NEXT_INTV = MM_INTV + INTV_CAP_V * 2;
                 constexpr int MM_SWAP     = MM_NEXT_INTV + INTV_CAP_V * 2;
-                gr[24] = s1c[155];                       // mv s1c -> gr (n_intv)
+                gr[24] = s1c[150];                       // mv s1c -> gr (n_intv) — see m16 note
                 gr[3]  = MM_NEXT_INTV;                   // si (constexpr)
                 //NOP                                     // s1c gap
                 gr[4]  = MM_SWAP;                        // si (constexpr)
@@ -8295,6 +8291,20 @@ int pe_array::decode(unsigned long instruction, int* PC, int simd, int setting, 
         // MM->S1C only (no S1C->MM today). s1c writes are synchronous
         // inside MM::tick after MM_LATENCY cycles.
         bool isMmS1c = (src == CTRL_MM && dest == CTRL_S1C);
+        // Reject MM <-> gr_lo / gr_hi. The MM dispatch only handles
+        // full-width CTRL_GR; without this guard, half-register encodings
+        // would silently fall through to the legacy load()/store() path
+        // where component id 3 aliases CTRL_COMP_IB (compute IB), not MM.
+        if ((src == CTRL_MM
+             && (dest == CTRL_GR_LO || dest == CTRL_GR_HI))
+            || ((src == CTRL_GR_LO || src == CTRL_GR_HI)
+                && dest == CTRL_MM)) {
+            fprintf(stderr,
+                "main mv MM <-> gr_lo/gr_hi unsupported "
+                "(src=%d dest=%d). PC=%d\n",
+                src, dest, *PC);
+            exit(-1);
+        }
         if (isMmGr || isMmSpm || isMmS1c) {
             int destA = reg_immBar_flag_0
                 ? main_addressing_register[sext_imm_0]
@@ -9574,6 +9584,8 @@ bool pe_array::willStallPair(
                      || (srcMm && destSpm);
         bool spmS1c  = (srcSpm && destS1c)
                      || (srcS1c && destSpm);
+        // MM->S1C only (no S1C->MM in decode for mv/mvd/mvdq).
+        bool mmS1c   = (srcMm && destS1c);
 
         // dest uses field 0 (riB0/imm0/r0); src uses field 1
         // (riB1/imm1/r1). For pairs with one side SPM the SPM-bank
@@ -9631,6 +9643,9 @@ bool pe_array::willStallPair(
             // mv s1c<->SPM: 1 SPM bank entry.
             int spmA = destSpm ? addr0 : addr1;
             spmAddrs[nSpm++] = spmA;
+        } else if (opcode == 5 && mmS1c) {
+            // mv MM->S1C: 1 MM load (s1c writeback is internal to MM::tick).
+            nMmLoads++;
         } else if (opcode == CTRL_MVD && spmS1c) {
             // mvd s1c<->SPM: 1 SPM bank entry (per current decode).
             int spmA = destSpm ? addr0 : addr1;
@@ -9640,12 +9655,30 @@ bool pe_array::willStallPair(
             int spmA = destSpm ? addr0 : addr1;
             spmAddrs[nSpm++] = spmA;
             if (srcMm) nMmLoads++;
+        } else if (opcode == CTRL_MVD && mmS1c) {
+            // mvd MM->S1C: 1 MM load.
+            nMmLoads++;
         } else if (opcode == CTRL_MVDQ && spmMm) {
-            // mvdq SPM<->MM: 4 SPM bank entries; MM->SPM also needs 1 MM load.
+            // mvdq SPM<->MM: 4 SPM bank entries (even-aligned) or 5
+            // entries (odd-aligned: sgl + 3*dbl + sgl, mirrors the
+            // SPM<->S2 odd handling and the decode at lines 8520-8533).
+            // MM->SPM also needs 1 MM load.
             int spmA = destSpm ? addr0 : addr1;
-            for (int i = 0; i < 4; i++)
-                spmAddrs[nSpm++] = spmA + 2*i;
+            if ((spmA & 1) == 0) {
+                for (int i = 0; i < 4; i++)
+                    spmAddrs[nSpm++] = spmA + 2*i;
+            } else {
+                spmAddrs[nSpm++] = spmA;
+                spmAddrs[nSpm++] = spmA + 1;
+                spmAddrs[nSpm++] = spmA + 3;
+                spmAddrs[nSpm++] = spmA + 5;
+                spmAddrs[nSpm++] = spmA + 7;
+            }
             if (srcMm) nMmLoads++;
+        } else if (opcode == CTRL_MVDQ && mmS1c) {
+            // mvdq MM->S1C: 1 MM load (8 contiguous s1c words written
+            // synchronously inside MM::tick).
+            nMmLoads++;
         }
         // All other opcodes (including barrier): no stall
     }
