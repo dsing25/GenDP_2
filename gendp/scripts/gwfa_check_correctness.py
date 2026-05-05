@@ -5,8 +5,11 @@ Usage: python3 scripts/gwfa_check_correctness.py <mode> [-t N]
   mode 1: fast  (15 iterations)
   mode 2: full  (all iterations)
   mode 3: debug (single iteration, verbose)
-  mode 4: smart (full; on per-case 30s timeout fall back to s_term=10
-                 wfDebug-trace check against per-query goldens)
+  mode 4: smart (full; ALWAYS run s_term=10 wfDebug-trace check against
+                 per-query goldens, AND best-effort score check with
+                 30s soft-timeout. Trace failure -> FAIL; trace pass +
+                 score timeout -> PASS; trace pass + score mismatch
+                 -> FAIL. Empty-graph queries fall back to score-only.)
   -t N:  run N simulator processes in parallel
 
 Prereqs:
@@ -152,239 +155,250 @@ def run_single_case(args):
 # per-query golden in SMART_GOLDEN_DIR. The second path is much weaker (only
 # verifies the first 10 WF iterations) but bounded in time.
 
+def _trim_to_n_steps(text, n):
+    """Truncate a wfDebug.txt-style trace to the first n
+    [gfa_ed_step] blocks. The simulator emits one extra trailing
+    block past s_term (post-extend snapshot at dist=s_term+1) that
+    the reference kernel does not."""
+    out, seen = [], 0
+    for line in text.splitlines(keepends=True):
+        if line.startswith('[gfa_ed_step]'):
+            seen += 1
+            if seen > n:
+                break
+        out.append(line)
+    return ''.join(out)
+
+
+def _run_trace_check(case_idx, tmpdir):
+    """Run sim with s_term=SMART_S_TERM and compare wfDebug.txt against
+    per-query golden. Returns (status, detail) where status is one of:
+      'PASS'      — sim trace matches golden over the first n_gld blocks.
+      'FAIL'      — trace mismatch (detail includes first-diff line).
+      'ERROR'     — sim crashed / hung / no wfDebug produced.
+      'NO_GOLDEN' — no per-query trace golden exists (typically empty
+                    graph). Caller should fall back to score-only.
+    Uses a *separate* input dir copied from tmpdir with s_term overridden
+    to SMART_S_TERM, so the caller's tmpdir keeps the original s_term
+    for the score check."""
+    golden_path = SMART_GOLDEN_DIR / f"q{case_idx:03d}.txt"
+    if not golden_path.exists():
+        return ('NO_GOLDEN', f'no trace golden at {golden_path}')
+
+    with tempfile.TemporaryDirectory() as trace_input:
+        # Copy all data files; override s_term.txt to SMART_S_TERM.
+        for fname in os.listdir(tmpdir):
+            src = os.path.join(tmpdir, fname)
+            dst = os.path.join(trace_input, fname)
+            with open(src) as fr, open(dst, 'w') as fw:
+                fw.write(fr.read())
+        with open(os.path.join(trace_input, 's_term.txt'), 'w') as f:
+            f.write(f"{SMART_S_TERM}\n")
+
+        # Per-thread cwd so concurrent runs don't fight over wfDebug.txt.
+        # The sim loads instructions/gwfa/* via a hardcoded relative
+        # path (gwfa_sim.cpp:~290), so symlink that subtree into run_cwd.
+        with tempfile.TemporaryDirectory() as run_cwd:
+            os.symlink(REPO_ROOT / 'instructions',
+                       os.path.join(run_cwd, 'instructions'))
+            env = dict(os.environ)
+            env['GWFA_DBG'] = '1'
+            env['GWFA_S_TERM_DBG'] = str(SMART_S_TERM)
+            # Disable LSan's exit-time ptrace probe; some sandboxes
+            # (Yama scope>=1, Docker default seccomp, certain CI
+            # runners) reject the ptrace call and LSan then exits
+            # rc=1 AFTER wfDebug.txt is already written. Suppress
+            # only the leak detector — the AddressSan body stays on.
+            env['ASAN_OPTIONS'] = (env.get('ASAN_OPTIONS', '') +
+                                   (':' if env.get('ASAN_OPTIONS') else '')
+                                   + 'detect_leaks=0')
+            cmd = [str(SIM_PATH), '-k', '7', '-i', trace_input, '-n', '1']
+            # Most cases finish s_term=10 in seconds; q128 etc. have
+            # heavy per-iter work, so 5min hard cap.
+            TRACE_TIMEOUT = 300
+            try:
+                r = subprocess.run(
+                    cmd, cwd=run_cwd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    text=True, timeout=TRACE_TIMEOUT, env=env)
+            except subprocess.TimeoutExpired:
+                return ('ERROR',
+                        f'trace-check sim exceeded {TRACE_TIMEOUT}s '
+                        f'at s_term={SMART_S_TERM}')
+            wfd = os.path.join(run_cwd, 'wfDebug.txt')
+            if r.returncode != 0 or not os.path.exists(wfd):
+                return ('ERROR',
+                        f'trace-check sim rc={r.returncode}, '
+                        f'wfDebug present={os.path.exists(wfd)}')
+            with open(wfd) as f:
+                sim_text = f.read()
+
+    with open(golden_path) as f:
+        gld_text = f.read()
+    n_gld = sum(1 for l in gld_text.splitlines()
+                if l.startswith('[gfa_ed_step]'))
+    sim_trim = _trim_to_n_steps(sim_text, n_gld)
+
+    if sim_trim == gld_text:
+        return ('PASS', f'trace[{SMART_S_TERM}]==golden')
+    sim_lines = sim_trim.splitlines()
+    gld_lines = gld_text.splitlines()
+    first_diff = next(
+        (i for i, (a, b) in enumerate(zip(sim_lines, gld_lines))
+         if a != b), min(len(sim_lines), len(gld_lines)))
+    return ('FAIL',
+            f'trace mismatch at line {first_diff} '
+            f'(sim={len(sim_lines)} gld={len(gld_lines)})')
+
+
+def _run_score_check(tmpdir, golden_score):
+    """Run sim full alignment with SMART_SOFT_TIMEOUT. Returns
+    (status, detail) where status is one of:
+      'PASS'    — score matches golden_score.
+      'FAIL'    — score mismatch.
+      'TIMEOUT' — wall-clock exceeded SMART_SOFT_TIMEOUT (we sent
+                  SIGTERM); caller may treat as PASS if trace was OK.
+      'ERROR'   — sim crashed / nonzero rc / no score parsed.
+    Uses a daemon reader thread + queue so the wall-clock check
+    fires every 0.5s regardless of subprocess output cadence."""
+    cmd = [str(SIM_PATH), '-k', '7', '-i', tmpdir, '-n', '1']
+    env = dict(os.environ)
+    env['GWFA_PROGRESS'] = '100000'
+    env['ASAN_OPTIONS'] = (env.get('ASAN_OPTIONS', '') +
+                           (':' if env.get('ASAN_OPTIONS') else '')
+                           + 'detect_leaks=0')
+    proc = subprocess.Popen(
+        cmd, cwd=str(REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True, bufsize=1, env=env)
+
+    line_q: "queue.Queue[str | None]" = queue.Queue()
+
+    def _reader(stream, q):
+        try:
+            for line in stream:
+                q.put(line)
+        finally:
+            q.put(None)
+
+    reader_thread = threading.Thread(
+        target=_reader, args=(proc.stdout, line_q),
+        daemon=True)
+    reader_thread.start()
+
+    score = None
+    timed_out = False
+    start = time.time()
+    try:
+        while True:
+            remaining = SMART_SOFT_TIMEOUT - (time.time() - start)
+            if remaining <= 0:
+                timed_out = True
+                break
+            try:
+                line = line_q.get(timeout=min(remaining, 0.5))
+            except queue.Empty:
+                continue
+            if line is None:
+                break  # EOF
+            m = re.match(r'qqq (-?\d+) qqq', line)
+            if m:
+                score = int(m.group(1))
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        else:
+            proc.wait()
+        if proc.stdout:
+            proc.stdout.close()
+        reader_thread.join(timeout=1)
+
+    if timed_out:
+        return ('TIMEOUT',
+                f'score run exceeded {SMART_SOFT_TIMEOUT}s')
+    if proc.returncode != 0:
+        return ('ERROR',
+                f'score sim rc={proc.returncode} '
+                f'(score parsed={score})')
+    if score is None:
+        return ('ERROR', 'no score in output')
+    if score == golden_score:
+        return ('PASS', f'score={score}')
+    return ('FAIL', f'score sim={score} gld={golden_score}')
+
+
 def run_single_case_smart(args):
-    """Try a normal score-based check; on soft-timeout fall back to a
-    bounded wfDebug-trace check. Returns (case_idx, status, detail) where
-    status is 'PASS', 'FAIL', or 'ERROR'."""
+    """Mode 4: run TRACE check (always) + SCORE check (best-effort).
+    Returns (case_idx, status, detail) where status is 'PASS', 'FAIL',
+    or 'ERROR'.
+
+    Decision table:
+      trace=PASS,  score=PASS    -> PASS  (full agreement)
+      trace=PASS,  score=FAIL    -> FAIL  (trace OK but final score off)
+      trace=PASS,  score=TIMEOUT -> PASS  (trace alone is sufficient)
+      trace=PASS,  score=ERROR   -> ERROR (something crashed during full run)
+      trace=FAIL                 -> FAIL  (trace mismatch — authoritative)
+      trace=ERROR                -> ERROR (trace-check sim crashed)
+      trace=NO_GOLDEN, score=*   -> reuse score result as the verdict
+                                    (typically empty-graph queries)"""
     case_idx, case_lines, golden_score = args
     with tempfile.TemporaryDirectory() as tmpdir:
         for fname, line in case_lines.items():
             with open(os.path.join(tmpdir, fname), 'w') as f:
                 f.write(line + '\n')
 
-        # --- Pass 1: normal run, soft-bounded.
-        # Round 9 P2 fix per Codex review: a blocking readline()
-        # prevents the soft-timeout check from running until the
-        # subprocess prints or exits, so a silent long-running query
-        # could sit far past SMART_SOFT_TIMEOUT. Replace with a reader
-        # thread that pushes lines onto a queue; the main loop polls
-        # the queue with a short timeout so the wall-clock check
-        # always runs at least every 0.5s. GWFA_PROGRESS is no longer
-        # required for the timeout to fire, but keep it on so users
-        # running -k 7 manually still see periodic progress.
-        cmd = [str(SIM_PATH), '-k', '7',
-               '-i', tmpdir, '-n', '1']
-        env = dict(os.environ)
-        env['GWFA_PROGRESS'] = '100000'
-        # Round 9 P2 fix per Codex review (companion to the rc!=0
-        # rejection below): also disable LSan's ptrace probe in the
-        # primary smart-mode run so a restricted-ptrace environment
-        # doesn't manufacture rc=1 on otherwise-correct queries (same
-        # rationale as the trace-fallback at line ~266; only suppresses
-        # the leak detector at exit, not the address-sanitizer body).
-        env['ASAN_OPTIONS'] = (env.get('ASAN_OPTIONS', '') +
-                               (':' if env.get('ASAN_OPTIONS') else '')
-                               + 'detect_leaks=0')
-        proc = subprocess.Popen(
-            cmd, cwd=str(REPO_ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True, bufsize=1, env=env)
+        # Step 1: trace check (always when a per-query golden exists).
+        t_status, t_detail = _run_trace_check(case_idx, tmpdir)
 
-        # Background reader: push every stdout line onto a queue, then
-        # push a sentinel on EOF. Daemon thread so it dies with the
-        # interpreter even if we forget to join.
-        line_q: "queue.Queue[str | None]" = queue.Queue()
-
-        def _reader(stream, q):
-            try:
-                for line in stream:
-                    q.put(line)
-            finally:
-                q.put(None)
-
-        reader_thread = threading.Thread(
-            target=_reader, args=(proc.stdout, line_q),
-            daemon=True)
-        reader_thread.start()
-
-        score = None
-        timed_out = False
-        start = time.time()
-        try:
-            while True:
-                remaining = SMART_SOFT_TIMEOUT - (time.time() - start)
-                if remaining <= 0:
-                    timed_out = True
-                    break
-                try:
-                    line = line_q.get(timeout=min(remaining, 0.5))
-                except queue.Empty:
-                    continue
-                if line is None:
-                    break  # EOF
-                m = re.match(r'qqq (-?\d+) qqq', line)
-                if m:
-                    score = int(m.group(1))
-        finally:
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-            else:
-                proc.wait()
-            if proc.stdout:
-                proc.stdout.close()
-            reader_thread.join(timeout=1)
-
-        if not timed_out:
-            # Round 9 P2 fix per Codex review: surface a nonzero
-            # simulator exit (ASan / assertion / abort after qqq print)
-            # as ERROR rather than silently honoring a parsed score.
-            # `timed_out == False` means we did not send SIGTERM, so
-            # proc.returncode is the simulator's natural exit code.
-            if proc.returncode != 0:
+        # Empty-graph case: no per-query trace golden, fall back to
+        # score-only. The reference returns `qqq -1 qqq` immediately
+        # for these, so the score check is the only meaningful signal.
+        if t_status == 'NO_GOLDEN':
+            s_status, s_detail = _run_score_check(tmpdir, golden_score)
+            if s_status == 'TIMEOUT':
                 return (case_idx, 'ERROR',
-                        f'sim rc={proc.returncode} '
-                        f'(score parsed={score})')
-            if score is None:
-                return (case_idx, 'ERROR', 'no score in output')
-            if score == golden_score:
-                return (case_idx, 'PASS',
-                        f'score={score}')
+                        f'no trace golden and {s_detail} '
+                        f'(empty-graph should finish instantly)')
+            return (case_idx, s_status,
+                    f'no trace golden; {s_detail}')
+
+        # Authoritative trace verdict short-circuits FAIL/ERROR.
+        if t_status in ('FAIL', 'ERROR'):
+            return (case_idx, t_status, t_detail)
+
+        # Step 2: score check (best-effort).
+        s_status, s_detail = _run_score_check(tmpdir, golden_score)
+        if s_status == 'PASS':
+            return (case_idx, 'PASS',
+                    f'trace+score: {s_detail}')
+        if s_status == 'FAIL':
             return (case_idx, 'FAIL',
-                    f'score sim={score} gld={golden_score}')
-
-        # Soft-timeout: fall back to a bounded s_term=10 trace check
-        # against the per-query golden. The simulator's wfDebug now
-        # matches the reference up to interval ordering (post m16/m39
-        # s1c[150] fix), so this is a real ground-truth check on the
-        # first 10 WF iterations rather than just a "ran out of time"
-        # acknowledgement.
-        return _smart_fallback_trace(case_idx, tmpdir, golden_score)
-
-
-def _smart_fallback_trace(case_idx, tmpdir, golden_score):
-    # Special case: empty graph queries (golden_score == -1, n_vtx==0)
-    # can't time out; if we got here, the sim is broken — bail.
-    golden_path = SMART_GOLDEN_DIR / f"q{case_idx:03d}.txt"
-    if not golden_path.exists():
-        # Round 9 P3 fix per Codex review: a soft-timeout on a
-        # golden_score == -1 (empty-graph) query is itself pathological
-        # — the reference returns immediately with `qqq -1 qqq`. If the
-        # simulator hung past SMART_SOFT_TIMEOUT and produced no
-        # validated output, that is an execution failure, not a PASS.
-        # Surface it as ERROR so mode 4's correctness bar isn't
-        # silently weakened by the very fallback meant to catch it.
-        if golden_score == -1:
-            return (case_idx, 'ERROR',
-                    'soft-timeout on empty-graph case '
-                    '(golden_score==-1 should finish instantly)')
-        return (case_idx, 'FAIL',
-                f'soft-timeout and no trace golden at {golden_path}')
-
-    # Override s_term to SMART_S_TERM and rerun. wfDebug.txt is written
-    # to REPO_ROOT (relative to sim's cwd, see kernel/Gwfa/gwfa.c:25-29).
-    s_term_path = os.path.join(tmpdir, 's_term.txt')
-    with open(s_term_path, 'w') as f:
-        f.write(f"{SMART_S_TERM}\n")
-    sim_dbg_out = REPO_ROOT / f"wfDebug_q{case_idx:03d}.txt"
-    if sim_dbg_out.exists():
-        sim_dbg_out.unlink()
-    # Per-thread cwd so concurrent runs don't fight over wfDebug.txt.
-    # The sim loads instructions/gwfa/* via a hardcoded relative path
-    # (gwfa_sim.cpp:276), so symlink that subtree into the run_cwd.
-    with tempfile.TemporaryDirectory() as run_cwd:
-        os.symlink(REPO_ROOT / 'instructions',
-                   os.path.join(run_cwd, 'instructions'))
-        env = dict(os.environ)
-        env['GWFA_DBG'] = '1'
-        env['GWFA_S_TERM_DBG'] = str(SMART_S_TERM)
-        # The sim is built with AddressSanitizer by default
-        # (Makefile ADDRESS_SANITIZER=1). LeakSanitizer attaches via
-        # ptrace at process exit; some kernel/security configurations
-        # (e.g. Yama ptrace_scope=2, Docker default seccomp, certain
-        # CI sandboxes) reject the ptrace call, and LSan then prints
-        # "LeakSanitizer has encountered a fatal error ... does not
-        # work under ptrace" and exits the simulator with rc=1
-        # AFTER the wfDebug.txt has been fully written. The fallback
-        # check below treats any nonzero rc as ERROR, which causes
-        # this environment-only signal to fail otherwise-correct
-        # queries. Disable leak detection for the debug rerun: this
-        # does NOT weaken the trace comparator (the comparator only
-        # checks wfDebug.txt content), it only avoids LSan's
-        # unsupported ptrace probe at process exit.
-        env['ASAN_OPTIONS'] = (env.get('ASAN_OPTIONS', '') +
-                               (':' if env.get('ASAN_OPTIONS') else '')
-                               + 'detect_leaks=0')
-        cmd = [str(SIM_PATH), '-k', '7',
-               '-i', tmpdir, '-n', '1']
-        # Most cases finish s_term=10 in seconds, but a couple of
-        # pathological queries (e.g. q128) have very large per-iter
-        # work; allow 5min before giving up.
-        FALLBACK_TIMEOUT = 300
-        try:
-            r = subprocess.run(
-                cmd, cwd=run_cwd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                text=True, timeout=FALLBACK_TIMEOUT, env=env)
-        except subprocess.TimeoutExpired:
-            return (case_idx, 'ERROR',
-                    f'soft-timeout fallback also timed out '
-                    f'(>{FALLBACK_TIMEOUT}s at s_term={SMART_S_TERM})')
-        wfd = os.path.join(run_cwd, 'wfDebug.txt')
-        if r.returncode != 0 or not os.path.exists(wfd):
-            return (case_idx, 'ERROR',
-                    f'fallback sim rc={r.returncode}, '
-                    f'wfDebug present={os.path.exists(wfd)}')
-        with open(wfd) as f:
-            sim_text = f.read()
-    with open(golden_path) as f:
-        gld_text = f.read()
-
-    # The simulator emits one extra trailing [gfa_ed_step] block past
-    # s_term (post-extend snapshot at dist=s_term+1) that the reference
-    # kernel does not — its loop breaks before the final debug_step
-    # call. Truncate sim to the first len(gld_steps) blocks so the
-    # comparison is a proper subset check rather than failing on an
-    # off-by-one trailing block.
-    def _trim_to_n_steps(text, n):
-        out = []
-        seen = 0
-        for line in text.splitlines(keepends=True):
-            if line.startswith('[gfa_ed_step]'):
-                seen += 1
-                if seen > n:
-                    break
-            out.append(line)
-        return ''.join(out)
-
-    n_gld_steps = sum(1 for l in gld_text.splitlines()
-                      if l.startswith('[gfa_ed_step]'))
-    sim_trim = _trim_to_n_steps(sim_text, n_gld_steps)
-
-    if sim_trim == gld_text:
-        return (case_idx, 'PASS',
-                f'soft-timeout: trace[{SMART_S_TERM}]==golden')
-    # Help debugging: where do they first diverge?
-    sim_lines = sim_trim.splitlines()
-    gld_lines = gld_text.splitlines()
-    first_diff = next(
-        (i for i, (a, b) in enumerate(zip(sim_lines, gld_lines))
-         if a != b), min(len(sim_lines), len(gld_lines)))
-    return (case_idx, 'FAIL',
-            f'soft-timeout: trace mismatch at line {first_diff} '
-            f'(sim={len(sim_lines)} gld={len(gld_lines)})')
+                    f'trace OK; {s_detail}')
+        if s_status == 'TIMEOUT':
+            return (case_idx, 'PASS',
+                    f'trace OK; score-run TIMEOUT '
+                    f'(>{SMART_SOFT_TIMEOUT}s)')
+        # ERROR
+        return (case_idx, 'ERROR',
+                f'trace OK; {s_detail}')
 
 
 def run_smart_parallel(num_threads):
-    """Mode 4: full sweep with per-case soft timeout. Cases that don't
-    finish within SMART_SOFT_TIMEOUT are reported as TIMEOUT (no
-    judgment); the rest are score-checked."""
+    """Mode 4: full sweep. Every query gets a TRACE check at
+    s_term=SMART_S_TERM (against the per-query golden) AND a
+    best-effort SCORE check with SMART_SOFT_TIMEOUT. The trace check
+    is authoritative; a failed trace is a FAIL even if the score
+    happens to match. A score-run TIMEOUT counts as PASS provided
+    trace passed (the trace at dist 0..SMART_S_TERM is sufficient
+    evidence over those bounded dists). Empty-graph queries (no
+    per-query trace golden) fall back to score-only."""
     print(f"Loading dataset (full)...")
     dataset = load_dataset_lines(DUMP_DIR, -1)
     n = len(dataset[DATA_FILES[0]])
@@ -415,18 +429,18 @@ def run_smart_parallel(num_threads):
     n_pass = sum(1 for r in results if r and r[0] == 'PASS')
     n_fail = sum(1 for r in results if r and r[0] == 'FAIL')
     n_err  = sum(1 for r in results if r and r[0] == 'ERROR')
-    # Cases that hit the soft timeout and went through the s_term=10
-    # trace fallback are tagged with 'soft-timeout' in the detail field
-    # by _smart_fallback_trace.
-    n_traced = sum(1 for r in results
-                   if r and 'soft-timeout' in (r[1] or ''))
+    # Cases whose score-run hit the soft timeout (still passed via
+    # trace check) are tagged 'score-run TIMEOUT' in the detail field
+    # by run_single_case_smart.
+    n_score_timeout = sum(1 for r in results
+                          if r and 'score-run TIMEOUT' in (r[1] or ''))
 
     fails = [(i, r[1]) for i, r in enumerate(results)
              if r and r[0] == 'FAIL']
     errors = [(i, r[1]) for i, r in enumerate(results)
               if r and r[0] == 'ERROR']
-    traced = [i for i, r in enumerate(results)
-              if r and 'soft-timeout' in (r[1] or '')]
+    score_timed_out = [i for i, r in enumerate(results)
+                       if r and 'score-run TIMEOUT' in (r[1] or '')]
 
     if fails:
         print()
@@ -438,19 +452,19 @@ def run_smart_parallel(num_threads):
         print(f"ERROR ({len(errors)}):")
         for i, d in errors:
             print(f"  [{i}] {d}")
-    if traced:
+    if score_timed_out:
         print()
-        print(f"trace-checked at s_term={SMART_S_TERM} "
-              f"(soft-timeout >{SMART_SOFT_TIMEOUT}s): {len(traced)}")
-        print(f"  {traced}")
+        print(f"score-run TIMEOUT (>{SMART_SOFT_TIMEOUT}s) but trace "
+              f"PASS at s_term={SMART_S_TERM}: {len(score_timed_out)}")
+        print(f"  {score_timed_out}")
 
     print()
     print("=" * 50)
     print(f"Wall: {elapsed:.1f}s")
     print(f"Results: {n_pass} pass, {n_fail} fail, "
           f"{n_err} error  out of {n}")
-    print(f"  ({n_traced} of those hit soft-timeout and were "
-          f"trace-checked at s_term={SMART_S_TERM})")
+    print(f"  every query trace-checked at s_term={SMART_S_TERM}; "
+          f"{n_score_timeout} also had a score-run TIMEOUT")
     print("=" * 50)
     return n_fail + n_err
 
