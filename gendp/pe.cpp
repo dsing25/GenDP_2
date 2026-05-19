@@ -1034,6 +1034,13 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             constexpr int META_TB_N     = 1152;
             constexpr int META_TA_N     = 1153;
             constexpr int META_TILE_N   = 1155;
+            // qrz: cross-tile-group seam fixup. META_LAST_VD/K hold
+            // the rightmost (vd, k_post_extend) processed by this PE's
+            // m8 OUTER. Read by the seam fixup at PE 0 i=0 (wrap-around
+            // peek to PE 3 of prev tile group via opposite BUF) and
+            // by R5 at id>0 i=0 (same-tile-group prev PE same BUF).
+            constexpr int META_LAST_VD  = 1156;
+            constexpr int META_LAST_K   = 1157;
             constexpr int META_INTV_N   = 1159;
 
             // Ping-pong: mask bit 0 selects buffer half
@@ -1132,6 +1139,18 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             gr.st(1, 0, CTRL_GR_LO);                     // i = 0
             gr.st(3, 0);                                 // tb_n, ta_n = 0
 
+            // qrz: sentinel meta for tile groups with no PE work.
+            // -1 means "no predecessor seen"; the seam fixup's
+            // adjacency check naturally rejects -1 != cur_vd-1.
+            spm[META_LAST_VD] = -1;
+            spm[META_LAST_K]  = -1;
+
+            // qrz: reset reg[1] (pk hint for SEQ_FIRST) to -1
+            // sentinel. PE 0 i=0 fixup may set it to META_LAST_K
+            // from prev tile group's PE 3, to be consumed by the
+            // NEXT iter's SEQ_FIRST formula.
+            reg[1] = -1;
+
             if (gr.at(1, CTRL_GR_HI) <= 0)
                 goto m8_done;
             gr.st(6, -1);                    // node_idx, prev_v = -1
@@ -1143,6 +1162,12 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
         m8_outer_loop:
             if (gr.at(1, CTRL_GR_LO) >= gr.at(1, CTRL_GR_HI))
                 goto m8_writeback;                        // i >= tile_n
+            // qrz: reset pk-hint reg[1] = -1 at the start of each
+            // outer iter so stale values from prior seq runs in
+            // this m8 invocation don't perturb SEQ_FIRST's max.
+            // PE 0 i=0 fixup (further down) may set reg[1] to
+            // META_LAST_K for the boundary-predecessor seam case.
+            reg[1] = -1;
             gr.st(2, gr.at(1, CTRL_GR_LO) << 1);                  // 2*i
 
             gr.st(8, spm[TILE_A_OFF + gr.at(2)]); gr.st(9, spm[TILE_A_OFF + gr.at(2) + 1]); // vd, k
@@ -1294,6 +1319,64 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                         if (K2 > ref_k) ref_k = K2;
                     }
                     gr.st(5, ref_k);
+                    // qrz: seed reg[1] = K3 (= K_(cur_d-1) =
+                    // prev PE's last iter's post-extend k) so the
+                    // NEXT iter's SEQ_FIRST 3-arg max picks it up
+                    // as pk. Without this, SEQ_FIRST falls back to
+                    // line-431 form which doesn't include K_(d-1)
+                    // properly when sim's seq run started mid-CPU-
+                    // seq-run. Symptom: q234 dist=10 vd=569 sim
+                    // emits k=5 from PE 2 iter 1 line-431; CPU's
+                    // analog line-444 with pk=K_568=12 gives 12,
+                    // filtered. With this seed: sim's iter 1
+                    // formula max(12, K_569+1, K_570+1) = 12,
+                    // filtered. Matches CPU.
+                    reg[1] = K3;
+                }
+            }
+            // qrz: cross-tile-group seam fixup for PE 0 i=0. PE 0
+            // has no in-tile-group prev PE — its "left neighbor"
+            // is PE 3 of the PREVIOUS tile group (via opposite
+            // ping-pong BUF). If PE 3 of prev tile group's last
+            // processed (or last assigned, including peeled
+            // boundary entries) vd matches cur_vd-1, the seq run
+            // continues across the tile-group seam and we apply
+            // the interior-formula override using META_LAST_K as
+            // ppk. The boundary case is exactly q234: prev tile
+            // group's PE 3 had a boundary entry peeled from
+            // TILE_A, so the regular TILE_A peek (R5) wouldn't
+            // find it — META_LAST_VD captures it instead.
+            if (id == 0 && gr.at(1, CTRL_GR_LO) == 0) {
+                // Opposite BUF: if current is BUF0 (mask bit 0
+                // unset), prev tile group used BUF1, and vice
+                // versa.
+                int prev_buf_base = (magic_mask & 1)
+                    ? GWFA_BUF0_BASE : GWFA_BUF1_BASE;
+                int *prev_spm = &SPM_unit->buffer[
+                    3 * SPM_BANK_GROUP_SIZE + prev_buf_base];
+                int prev_last_vd = prev_spm[META_LAST_VD];
+                int prev_last_k  = prev_spm[META_LAST_K];
+                int cur_vd = gr.at(8);
+                if (prev_last_vd == cur_vd - 1
+                    && prev_last_vd != -1) {
+                    int K_local_plus_1 = gr.at(9) + 1;
+                    int ref_k = K_local_plus_1;
+                    if (prev_last_k + 1 > ref_k)
+                        ref_k = prev_last_k + 1;
+                    gr.st(5, ref_k);
+                    // qrz: also seed reg[1] with prev_last_k so the
+                    // NEXT iter's SEQ_FIRST (which is structurally
+                    // CPU's interior i=N+1) can include it in its
+                    // max formula. Without this, SEQ_FIRST's
+                    // `max(reg[2], gr[9]) + 1` misses prev_last_k
+                    // (the boundary predecessor's k that CPU's
+                    // interior formula uses as pk), producing a
+                    // small emit at vd=cur_vd that slips past
+                    // d+k<ql filtering. SEQ_FIRST is modified to
+                    // include reg[1] in its max; sentinel -1
+                    // ensures normal (non-seam) cases are
+                    // unaffected.
+                    reg[1] = prev_last_k;
                 }
             }
             emit_b(); //call
@@ -1344,9 +1427,21 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
                 //COMP
                 {
-                    // emit_k = max(ppk, k) + 1
-                    gr.st(5, std::max((int)reg[2], gr.at(9)) + 1);
+                    // emit_k = max(ppk, k) + 1 (CPU's line-431),
+                    // OR max(pk, ppk+1, k+1) (CPU's line-444 when
+                    // shifted seq-run iter index applies).
+                    // qrz: unified formula `max(reg[1], reg[2]+1,
+                    // gr[9]+1)` collapses correctly: when reg[1]
+                    // = -1 sentinel, max(-1, X+1, Y+1) =
+                    // max(X+1, Y+1) = max(X, Y) + 1 = line-431.
+                    // When reg[1] = META_LAST_K (set by PE 0 i=0
+                    // fixup), the line-444 interior formula
+                    // applies with pk = reg[1].
+                    gr.st(5, std::max({(int)reg[1], (int)reg[2] + 1, gr.at(9) + 1}));
                     gr.st(4, reg[9]);                         // emit_vd=prev_vd
+                    // qrz: consume the hint so subsequent seq runs
+                    // don't reuse stale value.
+                    reg[1] = -1;
                 }
                 emit_b(); //call
                 //NOP
@@ -1430,9 +1525,14 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             // === NON_SEQ ===
         m8_non_seq:
             gr.st(4, reg[9]);                              // prev_vd
-            gr.st(5, reg[2] + 1);                        // ppk+1
+            // qrz: max(reg[1], ppk+1) — line-453 / right-side
+            // analog. reg[1] is -1 in normal cases (no change vs
+            // original ppk+1); when set by R5 / PE 0 fixup, it
+            // carries pk for CPU's interior formula.
+            gr.st(5, std::max((int)reg[1], (int)reg[2] + 1));
 
             emit_b(); //call
+            reg[1] = -1;  // qrz: consume the hint
 
             // === TRAIL_EMIT ===
         m8_trail_emit:
@@ -1484,8 +1584,13 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
                 reg[2] = gr.at(9);
                 reg[9] = gr.at(8);
             }
-            gr.st(5, gr.at(9) + 1);                       // ppk+1 = k+1
+            // qrz: max(reg[1], k+1) for the right-side / line-453
+            // analog. reg[1] is -1 in normal cases (preserves
+            // original k+1 behavior); when set by R5 / PE 0 fixup,
+            // it carries pk for CPU's interior formula.
+            gr.st(5, std::max((int)reg[1], gr.at(9) + 1));   // max(pk, k+1)
             emit_b(); //call
+            reg[1] = -1;  // qrz: consume the hint
 
             gr.st(4, gr.at(8) + 1);                       // prev_vd+1 = vd+1
             gr.st(5, gr.at(9));                            // ppk = k
@@ -1518,6 +1623,19 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
             spm[META_TA_N]   = gr.at(3, CTRL_GR_HI);    // ta_n
             //NOP
             spm[META_INTV_N] = gr.at(13);                // intv_n
+            //NOP
+            // qrz: record the rightmost (vd, k_post_extend) processed
+            // by this PE. reg[9] holds the last iter's vd (updated at
+            // end of each iter via reg[9] = gr.at(8)); reg[2] holds
+            // the last iter's k_post_extend (updated either at
+            // m8_seq_last_swap's `reg[2] = gr.at(9)` or at
+            // m8_last_emits's `reg[2] = gr.at(9)`). Together they
+            // give the seam fixup at the NEXT PE's i=0 enough info
+            // to apply the interior-formula override even when the
+            // boundary predecessor wasn't kept in TILE_A.
+            spm[META_LAST_VD] = reg[9];
+            //NOP
+            spm[META_LAST_K]  = reg[2];
             //NOP
         m8_done: ;
 #endif // reference vs PE implementation
@@ -1790,7 +1908,7 @@ int pe::decode(unsigned long instruction, int* PC, int src_dest[], int* op, int 
 
                 gr.st(4, gr.at(9) + 1);               // emit_k  = k+1
                 gr.st(5, gr.at(5, CTRL_GR_LO) + 1, CTRL_GR_LO); // n_pushed++
-                
+
                 spm[P2_PUSHED_OFF + gr.at(7)] = gr.at(3); spm[P2_PUSHED_OFF + gr.at(7) + 1] = gr.at(4);
                 gr.st(1, gr.at(1, CTRL_GR_LO) + 1, CTRL_GR_LO); // i++
 
